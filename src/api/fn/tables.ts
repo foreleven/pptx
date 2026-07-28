@@ -432,6 +432,9 @@ export const getTableCell = (table: SlideShapeData, row: number, col: number): T
   return c;
 };
 
+/** Returns the table shape that owns an opaque cell handle. */
+export const getTableCellTable = (cell: TableCellData): SlideShapeData => cell[CELL_TABLE];
+
 const commitTableCell = (cell: TableCellData): void => {
   const shape = cell[CELL_TABLE];
   commitSlideData(shape[SHAPE_SLIDE]);

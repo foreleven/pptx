@@ -64,14 +64,22 @@ export const commitSlideData = (slide: SlideData): void => {
 export const refreshSlideData = (slide: SlideData): void => {
   const fresh = readSlidePart(slide[SLIDE_DOCUMENT].root);
   slide[SLIDE_PART] = fresh;
-  const shapes = slide[SLIDE_SHAPES];
-  for (let i = 0; i < shapes.length; i++) {
-    const next = fresh.shapes[i];
-    const existing = shapes[i];
-    if (!next || !existing) continue;
-    existing[SHAPE_ELEMENT] = next.element;
-    existing[SHAPE_SNAPSHOT] = next;
-  }
+  const existingById = new Map(
+    slide[SLIDE_SHAPES].map((shape) => [shape[SHAPE_SNAPSHOT].id, shape] as const),
+  );
+  slide[SLIDE_SHAPES] = fresh.shapes.map((snapshot) => {
+    const existing = existingById.get(snapshot.id);
+    if (existing) {
+      existing[SHAPE_ELEMENT] = snapshot.element;
+      existing[SHAPE_SNAPSHOT] = snapshot;
+      return existing;
+    }
+    return {
+      [SHAPE_SLIDE]: slide,
+      [SHAPE_ELEMENT]: snapshot.element,
+      [SHAPE_SNAPSHOT]: snapshot,
+    };
+  });
 };
 
 // Rebuild shape handles entirely — used when the shape count changes

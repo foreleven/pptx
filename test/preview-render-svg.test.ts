@@ -424,6 +424,21 @@ describe('renderSlideToSvg', () => {
     expect(svg).toContain('href="https://example.com"');
   });
 
+  it('does not emit active links for unsafe authored URL schemes', async () => {
+    const { pres, slide } = await blankSlide();
+    const shape = addSlideTextBox(slide, {
+      x: inches(1),
+      y: inches(1),
+      w: inches(2),
+      h: inches(1),
+      text: 'unsafe link',
+    });
+    setShapeHyperlink(shape, 'javascript:alert(1)');
+    const svg = renderSlideToSvg(pres, slide);
+    expect(svg).not.toContain('href="javascript:');
+    expect(svg).toContain('unsafe link');
+  });
+
   it('shapes carry data-pptx-shape-name for accessibility / DevTools', async () => {
     const { pres, slide } = await blankSlide();
     addSlideShape(slide, {
