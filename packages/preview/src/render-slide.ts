@@ -427,6 +427,16 @@ const escapeXml = (s: string): string =>
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;');
 
+const safeHyperlink = (value: string): string | null => {
+  if (value.startsWith('#')) return value;
+  try {
+    const protocol = new URL(value).protocol.toLowerCase();
+    return ['http:', 'https:', 'mailto:', 'tel:'].includes(protocol) ? value : null;
+  } catch {
+    return null;
+  }
+};
+
 // ---------------------------------------------------------------------------
 // Color resolution.
 
@@ -511,9 +521,8 @@ const resolveColor = (
 // Fill / stroke paint with theme resolution.
 
 // Module-scoped id counter for SVG `<defs>` references (gradients,
-// patterns). Each renderSlideSvg call mints fresh ids; collisions
-// across slides don't matter because each slide's SVG is a separate
-// document. Plain monotonic counter is fine.
+// patterns). renderSlideSvg resets it for deterministic output; collisions
+// across slides don't matter because each slide's SVG is a separate document.
 let nextDefId = 0;
 const mintId = (): string => `pkdef-${(nextDefId++).toString(36)}`;
 
@@ -2276,7 +2285,8 @@ export const buildSvgTextInput = (a: SvgTextArgs): TextBodyInput => {
         continue;
       }
       let fmt = run.fmt;
-      if (run.href) {
+      const safeHref = run.href ? safeHyperlink(run.href) : null;
+      if (safeHref) {
         const hlinkColor = a.theme ? normalizeHex(a.theme.hyperlink) : '#0563C1';
         fmt = {
           ...fmt,
@@ -2953,7 +2963,8 @@ const renderTextBody = (
       // color (with underline) and wrap the span in an <a href> so the
       // preview is clickable.
       let runFmt = run.fmt;
-      if (run.href) {
+      const safeHref = run.href ? safeHyperlink(run.href) : null;
+      if (safeHref) {
         const hlinkColor = theme ? normalizeHex(theme.hyperlink) : '#0563C1';
         runFmt = {
           ...runFmt,
@@ -2970,11 +2981,11 @@ const renderTextBody = (
         run.sizePt * autoFitScale,
         run.fmt?.size === undefined,
       );
-      if (!run.href) return span;
-      const isInPage = run.href.startsWith('#');
+      if (!safeHref) return span;
+      const isInPage = safeHref.startsWith('#');
       const targetAttrs = isInPage ? '' : ' target="_blank" rel="noopener noreferrer"';
       const titleAttr = run.hrefTip ? ` title="${escapeXml(run.hrefTip)}"` : '';
-      return `<a href="${escapeXml(run.href)}"${targetAttrs}${titleAttr} style="color:inherit;text-decoration:inherit">${span}</a>`;
+      return `<a href="${escapeXml(safeHref)}"${targetAttrs}${titleAttr} style="color:inherit;text-decoration:inherit">${span}</a>`;
     });
     // <a:lnSpc> — paragraph line spacing. spcPct multiplies, spcPts
     // sets a fixed point value. CSS line-height accepts both forms;
@@ -6183,8 +6194,9 @@ const renderShape = (
   const custGeomAttr = isCustGeom ? ' data-pptx-fallback="custGeom"' : '';
   const inner = `${p.defs}${fxDefs}<g${nameAttr}${ariaAttr}${custGeomAttr}><g${transform}>${geomSvg}</g>${placedText}</g>`;
   const titleEl = tooltip ? `<title>${escapeXml(tooltip)}</title>` : '';
-  if (url) {
-    return `<a href="${escapeXml(url)}" target="_blank" rel="noopener noreferrer">${titleEl}${inner}</a>`;
+  const safeUrl = url ? safeHyperlink(url) : null;
+  if (safeUrl) {
+    return `<a href="${escapeXml(safeUrl)}" target="_blank" rel="noopener noreferrer">${titleEl}${inner}</a>`;
   }
   // Slide-jump click actions resolve to a hash anchor — the playground
   // gives each <li> an id="slide-N" so the browser jumps in-page.
@@ -6197,10 +6209,11 @@ const renderShape = (
     } else if (action.kind === 'url') {
       href = action.url;
     }
-    if (href !== null) {
-      const isInPage = href.startsWith('#');
+    const safeHref = href === null ? null : safeHyperlink(href);
+    if (safeHref !== null) {
+      const isInPage = safeHref.startsWith('#');
       const targetAttrs = isInPage ? '' : ' target="_blank" rel="noopener noreferrer"';
-      return `<a href="${escapeXml(href)}"${targetAttrs}>${titleEl}${inner}</a>`;
+      return `<a href="${escapeXml(safeHref)}"${targetAttrs}>${titleEl}${inner}</a>`;
     }
   }
   return inner;
@@ -6387,6 +6400,7 @@ export const renderSlideSvg = (
   slide: SlideData,
   opts: RenderSlideOptions = {},
 ): string => {
+  nextDefId = 0;
   const size = getSlideSize(pres) ?? DEFAULT_SIZE;
   const W = size.width as number;
   const H = size.height as number;

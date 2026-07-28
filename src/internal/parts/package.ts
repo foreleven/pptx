@@ -58,17 +58,69 @@ const CONTENT_TYPES_PART = '[Content_Types].xml';
 export class OpcPackage {
   /**
    * Ordered list of parts. The order is the order parts will be written to
-   * the ZIP central directory on `save()`. Direct mutation is allowed for
-   * callers that need to reorder, but `addPart` / `removePart` are the
-   * supported entry points.
+   * the ZIP central directory on `save()`. This is a readonly view: use
+   * `addPart` / `removePart`, and replace a Part's `data` value rather than
+   * mutating its Uint8Array in place, so package observers are notified.
    */
-  readonly parts: Part[];
-  /** Mutable Content_Types map. Direct mutation is allowed. */
+  get parts(): readonly Part[] {
+    return this.orderedParts;
+  }
+  /**
+   * Mutable Content_Types map for package internals. A content-type-only
+   * mutation is not an observable presentation operation; public Core
+   * mutations pair registration changes with an observed part add/update.
+   */
   contentTypes: ContentTypes;
+  private readonly orderedParts: Part[];
+  private readonly changeListeners = new Set<() => void>();
 
   private constructor(parts: Part[], contentTypes: ContentTypes) {
-    this.parts = parts;
+    this.orderedParts = parts;
     this.contentTypes = contentTypes;
+    for (const part of parts) this.observePart(part);
+  }
+
+  /** @internal — presentation observers use this without exposing package state publicly. */
+  onChange(listener: () => void): () => void {
+    this.changeListeners.add(listener);
+    return () => this.changeListeners.delete(listener);
+  }
+
+  private notifyChange(): void {
+    for (const listener of this.changeListeners) listener();
+  }
+
+  private observePart(part: Part): void {
+    let contentType = part.contentType;
+    let data = part.data;
+    Object.defineProperties(part, {
+      contentType: {
+        configurable: true,
+        enumerable: true,
+        get: () => contentType,
+        set: (next: string) => {
+          if (next === contentType) return;
+          contentType = next;
+          this.contentTypes.overrides = this.contentTypes.overrides.filter(
+            (override) => !partNamesEqual(override.partName, part.name),
+          );
+          if (lookupContentType(this.contentTypes, part.name) !== next) {
+            this.contentTypes.overrides.push({ partName: part.name, contentType: next });
+          }
+          this.notifyChange();
+        },
+      },
+      data: {
+        configurable: true,
+        enumerable: true,
+        get: () => data,
+        set: (next: Uint8Array) => {
+          if (next === data) return;
+          data = next;
+          this.notifyChange();
+        },
+      },
+    });
   }
 
   /**
@@ -135,7 +187,7 @@ export class OpcPackage {
       name: CONTENT_TYPES_PART,
       data: encode(serializeContentTypes(this.contentTypes)),
     });
-    for (const part of this.parts) {
+    for (const part of this.orderedParts) {
       entries.push({ name: toZipPath(part.name), data: part.data });
     }
     return writeZip(entries);
@@ -145,7 +197,7 @@ export class OpcPackage {
    * Looks up a part by name (case-insensitive per OPC §9.1.1.7).
    */
   getPart(name: PartName): Part | null {
-    for (const p of this.parts) {
+    for (const p of this.orderedParts) {
       if (partNamesEqual(p.name, name)) return p;
     }
     return null;
@@ -161,7 +213,8 @@ export class OpcPackage {
       throw new Error(`part "${name}" already exists`);
     }
     const part: Part = { name, contentType, data };
-    this.parts.push(part);
+    this.observePart(part);
+    this.orderedParts.push(part);
     // If neither an existing default nor an existing override covers this
     // content type, register an Override so the on-disk Content_Types stays
     // consistent. Callers can replace the override later if they prefer a
@@ -170,6 +223,7 @@ export class OpcPackage {
     if (existing !== contentType) {
       this.contentTypes.overrides.push({ partName: name, contentType });
     }
+    this.notifyChange();
     return part;
   }
 
@@ -180,10 +234,10 @@ export class OpcPackage {
    */
   removePart(name: PartName): boolean {
     let removed = false;
-    for (let i = this.parts.length - 1; i >= 0; i--) {
-      const p = this.parts[i];
+    for (let i = this.orderedParts.length - 1; i >= 0; i--) {
+      const p = this.orderedParts[i];
       if (p && partNamesEqual(p.name, name)) {
-        this.parts.splice(i, 1);
+        this.orderedParts.splice(i, 1);
         removed = true;
       }
     }
@@ -191,6 +245,7 @@ export class OpcPackage {
       this.contentTypes.overrides = this.contentTypes.overrides.filter(
         (o) => !partNamesEqual(o.partName, name),
       );
+      this.notifyChange();
     }
     return removed;
   }
