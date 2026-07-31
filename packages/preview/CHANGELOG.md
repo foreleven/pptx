@@ -1,5 +1,14 @@
 # pptx-kit-preview
 
+## Unreleased
+
+### Patch Changes
+
+- Bundle Noto Sans CJK SC Regular in the deterministic Node renderer and use it
+  for both CJK text measurement and resvg glyph fallback. Server-rendered PNGs
+  now paint real Chinese, Japanese, and Korean glyphs instead of identical
+  missing-glyph boxes when no caller-supplied CJK font is registered.
+
 ## 0.7.0
 
 ### Minor Changes
