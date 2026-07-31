@@ -16,6 +16,7 @@ import {
   inches,
   loadPresentation,
   setShapeFill,
+  setShapeRunFormat,
 } from '../src/api/index.ts';
 import { renderSlideToImage, renderSlideToRgba } from '../packages/preview/src/node.ts';
 
@@ -94,6 +95,36 @@ describe('renderSlideToRgba (Node)', () => {
     const second = renderSlideToRgba(pres, slide, opts).png;
     // Compare via string encoding to get a useful diff on failure.
     expect(Buffer.from(first).toString('hex')).toBe(Buffer.from(second).toString('hex'));
+  });
+
+  it('renders distinct CJK glyphs instead of one missing-glyph box', async () => {
+    /**
+     * Renders one glyph per fresh copy of the same slide so geometry and styling stay
+     * identical. If the Node renderer lacks a CJK font, resvg paints every character
+     * as the same tofu box and all four PNG byte sequences collapse to one value.
+     */
+    const renderGlyph = async (text: string): Promise<string> => {
+      const pres = await loadPresentation(await readFile(fixturePath));
+      const layout = findSlideLayout(pres, 'Blank');
+      if (!layout) throw new Error('Blank layout not found');
+      const slide = addSlide(pres, { layout });
+      const box = addSlideTextBox(slide, {
+        x: inches(1),
+        y: inches(1),
+        w: inches(2),
+        h: inches(1),
+        text,
+      });
+      setShapeRunFormat(box, 0, 0, {
+        font: 'Arial',
+        fontEastAsian: 'Noto Sans CJK SC',
+        size: 48,
+      });
+      return Buffer.from(renderSlideToRgba(pres, slide, { width: 320 }).png).toString('hex');
+    };
+
+    const renders = await Promise.all(['中', '文', '字', '体'].map(renderGlyph));
+    expect(new Set(renders).size).toBe(renders.length);
   });
 });
 
