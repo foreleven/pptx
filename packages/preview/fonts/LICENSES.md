@@ -13,6 +13,7 @@ these very fonts when the proprietary originals are absent).
 | Liberation Sans | Arial / Helvetica | SIL OFL 1.1 | © 2010 Google, © 2012 Red Hat, Inc. |
 | Liberation Serif | Times New Roman | SIL OFL 1.1 | © 2010 Google, © 2012 Red Hat, Inc. |
 | Liberation Mono | Courier New / Consolas | SIL OFL 1.1 | © 2010 Google, © 2012 Red Hat, Inc. |
+| Noto Sans CJK SC | Deterministic Simplified Chinese and CJK fallback | SIL OFL 1.1 | © 2014–2021 Adobe |
 
 Each font also embeds its license in its `name` table (OFL condition 2 is
 satisfied by the binary itself); the texts below are reproduced for

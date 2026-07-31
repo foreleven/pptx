@@ -197,11 +197,11 @@ describe('auditTextLayout — soft wraps (段落ち)', () => {
 describe('buildFontkitMeasurer — registered fonts and glyph fallback', () => {
   const spec = { family: 'Carlito', sizePx: 24, bold: false, italic: false, letterSpacingPx: 0 };
 
-  it('estimates CJK glyphs the bundled Latin fonts lack (1em, approximate)', () => {
+  it('measures CJK glyphs with the bundled Noto fallback', () => {
     const r = measureText('あいう', spec);
-    expect(r.approximate).toBe(true);
+    expect(r.approximate).toBeUndefined();
     expect(r.widthPx).toBeCloseTo(3 * spec.sizePx, 5);
-    // Vertical metrics still come from a real font.
+    // Width and vertical metrics both come from the same real fallback face.
     expect(r.ascentPx).toBeGreaterThan(0);
   });
 

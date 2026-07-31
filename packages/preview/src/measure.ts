@@ -35,11 +35,20 @@ const FAMILY_TO_PREFIX: Record<string, string> = {
 const STYLES = ['Regular', 'Bold', 'Italic', 'BoldItalic'] as const;
 
 const facePath = (prefix: string, style: string): string => `${FONT_DIR}${prefix}-${style}.ttf`;
+const CJK_SANS_FAMILY = 'Noto Sans CJK SC';
+const CJK_SANS_PATH = `${FONT_DIR}NotoSansCJKsc-Regular.otf`;
 
-/** Absolute paths of every bundled face — passed to resvg's `fontFiles`. */
-export const FONT_FILES: string[] = Object.values(FAMILY_TO_PREFIX).flatMap((prefix) =>
-  STYLES.map((s) => facePath(prefix, s)),
-);
+/**
+ * Absolute paths of every bundled face passed to resvg's `fontFiles`.
+ *
+ * Noto Sans CJK SC is deliberately included as a glyph fallback rather than a
+ * system font: the Node renderer disables system fonts so PNG output stays
+ * deterministic across developer machines and CI.
+ */
+export const FONT_FILES: string[] = [
+  ...Object.values(FAMILY_TO_PREFIX).flatMap((prefix) => STYLES.map((s) => facePath(prefix, s))),
+  CJK_SANS_PATH,
+];
 
 // fontkit.create returns Font | FontCollection; our TTFs are single fonts.
 const openFont = (path: string): fontkit.Font => {
@@ -110,6 +119,17 @@ export const buildFontkitMeasurer = (options: FontkitMeasurerOptions = {}): Text
     }
   }
 
+  // Keep measurement and rasterization on the same CJK face. Without this
+  // fallback, width calculations use the 1-em estimate while resvg paints a
+  // missing-glyph box, producing both tofu and unreliable wrapping.
+  if (!existsSync(CJK_SANS_PATH)) throw new Error(`Missing bundled font: ${CJK_SANS_PATH}`);
+  const cjkFallback = openFont(CJK_SANS_PATH);
+  if (cjkFallback.familyName !== CJK_SANS_FAMILY) {
+    throw new Error(
+      `Font family mismatch: ${CJK_SANS_PATH} reports "${cjkFallback.familyName}", expected "${CJK_SANS_FAMILY}".`,
+    );
+  }
+
   // Registered fonts, keyed by lowercased authored family + style. No
   // familyName assertion here: the registration key is the DECK's name for
   // the font, which legitimately differs from the file's internal name.
@@ -121,6 +141,9 @@ export const buildFontkitMeasurer = (options: FontkitMeasurerOptions = {}): Text
     registered.set(`${reg.family.toLowerCase()}-${style}`, font);
     fallbackFonts.push(font);
   }
+  // Caller-supplied brand fonts keep priority; bundled Noto only closes any
+  // remaining CJK coverage gap.
+  fallbackFonts.push(cjkFallback);
 
   const pick = (spec: FontSpec): fontkit.Font => {
     const style = styleSuffix(spec);
