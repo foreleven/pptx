@@ -75,6 +75,20 @@ describe('renderSlideToSvg', () => {
     expect(svg).toMatch(/fill="#[Ff][Ff]0+"/);
   });
 
+  it('preserves RRGGBBAA fill transparency in SVG previews', async () => {
+    const { pres, slide } = await blankSlide();
+    const shape = addSlideShape(slide, {
+      preset: 'rect',
+      x: inches(1),
+      y: inches(1),
+      w: inches(2),
+      h: inches(1),
+    });
+    setShapeFill(shape, '#FFFFFF01');
+    const svg = renderSlideToSvg(pres, slide);
+    expect(svg).toContain('fill="#FFFFFF01"');
+  });
+
   it('gradient fill emits a <linearGradient> def that the shape references', async () => {
     const { pres, slide } = await blankSlide();
     const shape = addSlideShape(slide, {

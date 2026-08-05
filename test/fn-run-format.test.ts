@@ -17,6 +17,7 @@ import {
   loadPresentation,
   savePresentation,
   setShapeRunFormat,
+  setShapeParagraphRuns,
   setShapeRunText,
   setShapeText,
 } from '../src/api/index.ts';
@@ -57,6 +58,25 @@ describe('fn API: per-run text editing', () => {
     // check is that the second `<a:t>two</a:t>` is preceded by a plain
     // <a:r> with no rPr.
     expect(xml).toMatch(/<a:r>\s*<a:t>two<\/a:t>/);
+  });
+
+  it('setShapeParagraphRuns replaces one paragraph with ordered formatted runs', async () => {
+    const pres = await loadPresentation(await readFile(fixture('one-text-slide.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const shape = getSlideShapes(slide)[0]!;
+    setShapeParagraphRuns(shape, 0, [
+      { text: '3,309', format: { font: 'Arial', size: 32, bold: true } },
+      { text: ' 亿港元', format: { fontEastAsian: 'PingFang SC', size: 17, baseline: -0.08 } },
+    ]);
+
+    expect(getShapeRunCount(shape, 0)).toBe(2);
+    expect(getShapeRunText(shape, 0, 0)).toBe('3,309');
+    expect(getShapeRunText(shape, 0, 1)).toBe(' 亿港元');
+    const xml = await slideXml(await savePresentation(pres), 0);
+    expect(xml).toMatch(/<a:rPr[^>]*sz="3200"[^>]*b="1"/);
+    expect(xml).toContain('typeface="PingFang SC"');
+    expect(xml).toContain('baseline="-8000"');
+    expect(xml).toContain('xml:space="preserve"');
   });
 
   it('setShapeRunText replaces visible characters but preserves rPr', async () => {

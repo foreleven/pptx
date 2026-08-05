@@ -65,7 +65,7 @@ export const getShapeStrokeWidth = (shape: SlideShapeData): number | null => {
 };
 
 /**
- * Returns the shape's stroke color resolved to a concrete `#RRGGBB`:
+ * Returns the shape's stroke color resolved to concrete `#RRGGBB[AA]`:
  * scheme tokens are mapped through the deck's color scheme and
  * `<a:lumMod>` / `<a:tint>` / `<a:shade>` / etc. transform children
  * are applied. Returns `null` when the stroke isn't a solid color
@@ -296,7 +296,7 @@ export const getShapeFillColor = (shape: SlideShapeData): string | null => {
 };
 
 /**
- * Returns the shape's solid fill resolved to a concrete `#RRGGBB`:
+ * Returns the shape's solid fill resolved to concrete `#RRGGBB[AA]`:
  * scheme tokens are mapped through the deck's color scheme and
  * `<a:lumMod>` / `<a:tint>` / `<a:shade>` / etc. transform children
  * are applied. Returns `null` when the fill isn't solid (gradient,

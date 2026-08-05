@@ -5359,12 +5359,9 @@ const renderChart = (
   return [
     `<g${transform}>`,
     // Chart-area backdrop honors <c:chartSpace><c:spPr><a:solidFill> /
-    // <a:ln>. plot-area gets its own tinted rect + border when
-    // <c:plotArea><c:spPr> authors them. PowerPoint draws no chart-area
-    // border unless the chartSpace authors an <a:ln>, so the default is
-    // `none` — an invented light-gray frame is the most visible single
-    // divergence from PowerPoint's actual rendering.
-    `<rect x="${px(f.x)}" y="${px(f.y)}" width="${px(f.w)}" height="${px(f.h)}" fill="${spec.chartAreaFill ?? '#FFFFFF'}" stroke="${spec.chartAreaStrokeColor ?? 'none'}" stroke-width="0.6"${spec.roundedCorners ? ' rx="6" ry="6"' : ''}/>`,
+    // <a:ln>. Missing paint stays transparent, matching the authoring default
+    // and allowing the slide surface to remain visible under the chart.
+    `<rect x="${px(f.x)}" y="${px(f.y)}" width="${px(f.w)}" height="${px(f.h)}" fill="${spec.chartAreaFill ?? 'none'}" stroke="${spec.chartAreaStrokeColor ?? 'none'}" stroke-width="0.6"${spec.roundedCorners ? ' rx="6" ry="6"' : ''}/>`,
     spec.plotAreaFill || spec.plotAreaStrokeColor
       ? `<rect x="${px(f.plotX)}" y="${px(f.plotY)}" width="${px(f.plotW)}" height="${px(f.plotH)}" fill="${spec.plotAreaFill ?? 'none'}" stroke="${spec.plotAreaStrokeColor ?? 'none'}" stroke-width="0.6"/>`
       : '',

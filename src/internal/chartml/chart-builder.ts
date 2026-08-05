@@ -95,8 +95,9 @@ const gridlinesElement = (
   return elem(c(local), { children: [elem(c('spPr'), { children: [ln] })] });
 };
 
-// Generic <c:spPr> with optional fill color + line color. Used for the
-// chart-area / plot-area background, where authors set one or both.
+// Generic <c:spPr> for chart-area / plot-area paint. Missing colors are
+// authored as noFill so Office cannot replace an omitted property with its
+// automatic white chart card or an automatic outline.
 const spPrChildren = (fill: string | undefined, stroke: string | undefined): XmlElement => {
   const out: XmlElement[] = [];
   if (fill !== undefined) {
@@ -109,6 +110,8 @@ const spPrChildren = (fill: string | undefined, stroke: string | undefined): Xml
         ],
       }),
     );
+  } else {
+    out.push(elem(a('noFill')));
   }
   if (stroke !== undefined) {
     out.push(
@@ -124,6 +127,8 @@ const spPrChildren = (fill: string | undefined, stroke: string | undefined): Xml
         ],
       }),
     );
+  } else {
+    out.push(elem(a('ln'), { children: [elem(a('noFill'))] }));
   }
   return elem(c('spPr'), { children: out });
 };
@@ -987,9 +992,9 @@ export const buildChartSpaceDoc = (spec: ChartSpec): XmlDocument => {
     rootChildren.push(valNode(c('style'), Math.round(spec.chartStyle)));
   }
   rootChildren.push(chart);
-  if (spec.chartAreaFill !== undefined || spec.chartAreaStrokeColor !== undefined) {
-    rootChildren.push(spPrChildren(spec.chartAreaFill, spec.chartAreaStrokeColor));
-  }
+  // Keep the chart card transparent by default. Omitting c:spPr lets Office
+  // apply its automatic white fill, which hides the slide surface underneath.
+  rootChildren.push(spPrChildren(spec.chartAreaFill, spec.chartAreaStrokeColor));
   rootChildren.push(externalData);
   const root = elem(c('chartSpace'), {
     prefixDecls: new Map([

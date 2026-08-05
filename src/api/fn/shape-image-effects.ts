@@ -1,7 +1,7 @@
 // Picture opacity and cropping.
 import { getSlides } from './slide-query.ts';
 
-import { getPictureEmbedRId } from '../../internal/drawingml/index.ts';
+import { buildColorElement, getPictureEmbedRId } from '../../internal/drawingml/index.ts';
 import {
   type ImageFormat,
   detectImageFormat,
@@ -520,6 +520,79 @@ const requirePictureBlip = (shape: SlideShapeData, fnName: string): XmlElement =
   const blip = firstChildElement(blipFill, qname('a', 'blip', NS.dml));
   if (!blip) throw new Error('picture <p:blipFill> has no <a:blip>');
   return blip;
+};
+
+/** Two DrawingML colors mapped to the dark and light ends of source luminance. */
+export interface ImageDuotone {
+  readonly dark: string;
+  readonly light: string;
+}
+
+/** Replace one named CT_Blip effect while preserving every unrelated transform. */
+const replaceBlipEffect = (
+  blip: XmlElement,
+  localName: string,
+  replacement: XmlElement | null,
+): void => {
+  blip.children = blip.children.filter(
+    (child) =>
+      !(
+        child.kind === 'element' &&
+        child.name.namespaceURI === NS.dml &&
+        child.name.localName === localName
+      ),
+  );
+  if (!replacement) return;
+  const extensionIndex = blip.children.findIndex(
+    (child) =>
+      child.kind === 'element' &&
+      child.name.namespaceURI === NS.dml &&
+      child.name.localName === 'extLst',
+  );
+  blip.children.splice(extensionIndex < 0 ? blip.children.length : extensionIndex, 0, replacement);
+};
+
+/**
+ * Enables or removes DrawingML's native grayscale transform on a picture.
+ * Existing crop, opacity, luminance, and recolor transforms are preserved.
+ */
+export const setShapeImageGrayscale = (shape: SlideShapeData, enabled: boolean): void => {
+  const blip = requirePictureBlip(shape, 'setShapeImageGrayscale');
+  replaceBlipEffect(blip, 'grayscl', enabled ? elem(qname('a', 'grayscl', NS.dml)) : null);
+  commitAndRefresh(shape);
+};
+
+/** Apply a 0..1 black/white threshold to a picture, or clear it with `null`. */
+export const setShapeImageBiLevel = (shape: SlideShapeData, threshold: number | null): void => {
+  const blip = requirePictureBlip(shape, 'setShapeImageBiLevel');
+  if (threshold !== null && (!Number.isFinite(threshold) || threshold < 0 || threshold > 1)) {
+    throw new RangeError(`bi-level threshold must be in [0, 1], got ${threshold}`);
+  }
+  replaceBlipEffect(
+    blip,
+    'biLevel',
+    threshold === null
+      ? null
+      : elem(qname('a', 'biLevel', NS.dml), {
+          attrs: [attr(qname('', 'thresh', ''), String(Math.round(threshold * 100000)))],
+        }),
+  );
+  commitAndRefresh(shape);
+};
+
+/** Apply DrawingML's two-color luminance remap to a picture, or clear it with `null`. */
+export const setShapeImageDuotone = (shape: SlideShapeData, colors: ImageDuotone | null): void => {
+  const blip = requirePictureBlip(shape, 'setShapeImageDuotone');
+  replaceBlipEffect(
+    blip,
+    'duotone',
+    colors === null
+      ? null
+      : elem(qname('a', 'duotone', NS.dml), {
+          children: [buildColorElement(colors.dark), buildColorElement(colors.light)],
+        }),
+  );
+  commitAndRefresh(shape);
 };
 
 const setLumAttr = (blip: XmlElement, local: 'bright' | 'contrast', value: number | null): void => {

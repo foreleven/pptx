@@ -109,6 +109,16 @@ describe('fn API: shape geometry mutation', () => {
 });
 
 describe('fn API: shape fill + stroke', () => {
+  it('writes CSS-order RRGGBBAA as an OOXML alpha transform', async () => {
+    const pres = await loadPresentation(await readFile(fixture('one-text-slide.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const shape = findSlidePlaceholder(slide, 'title') ?? getSlideShapes(slide)[0]!;
+
+    setShapeFill(shape, '#FFFFFF01');
+    const xml = await slideXml(await savePresentation(pres), 0);
+    expect(xml).toContain('<a:srgbClr val="FFFFFF"><a:alpha val="392"/></a:srgbClr>');
+  });
+
   it('setShapeFill / setShapeNoFill / clearShapeFill cycle', async () => {
     const pres = await loadPresentation(await readFile(fixture('one-text-slide.pptx')));
     const slide = getSlides(pres)[0]!;

@@ -18,6 +18,15 @@ describe('fn API: resolveDrawingColor', () => {
     expect(resolveDrawingColor(el, null)).toBe('#FF0000');
   });
 
+  it('preserves alpha transforms as a CSS-order hex suffix', () => {
+    const el = parseColorEl(
+      `<a:srgbClr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" val="FFFFFF">
+         <a:alpha val="392"/>
+       </a:srgbClr>`,
+    );
+    expect(resolveDrawingColor(el, null)).toBe('#FFFFFF01');
+  });
+
   it('darkens via shade', () => {
     // shade=50000 (50%) of pure red. PowerPoint applies shade in LINEAR light,
     // so R = srgb(linear(1)·0.5) = srgb(0.5) ≈ 0.735 → 0xBC, giving #BC0000

@@ -83,6 +83,28 @@ describe('fn API: addSlideChart', () => {
     expect(sheetXml).toContain('<v>10</v>');
   });
 
+  it('uses a transparent chart-area background by default', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    addSlideChart(getSlides(pres)[0]!, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(6),
+      h: inches(4),
+      spec: {
+        kind: 'column',
+        categories: ['A'],
+        series: [{ name: 'S', values: [1] }],
+      },
+    });
+
+    const chartStr = new TextDecoder().decode(
+      (await partBytes(await savePresentation(pres), '/ppt/charts/chart1.xml'))!,
+    );
+    // Explicit noFill keeps the slide surface visible instead of letting Office
+    // apply the chart area's white auto-fill when the caller omitted a background.
+    expect(chartStr).toMatch(/<c:spPr><a:noFill\/><a:ln><a:noFill\/><\/a:ln><\/c:spPr>/);
+  });
+
   it('bar / line / pie / doughnut / area chart kinds all save and reload', async () => {
     for (const kind of ['bar', 'line', 'pie', 'doughnut', 'area'] as const) {
       const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
