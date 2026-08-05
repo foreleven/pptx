@@ -7,9 +7,9 @@
 // Sizes are pt and accept fractions; serialized as hundredths of a point
 // per the schema (`sz="2400"` = 24pt). Colors accept any of:
 //
-//   - `#RRGGBB` / `RRGGBB` for srgb
+//   - `#RRGGBB` / `RRGGBB` or CSS-order `#RRGGBBAA` / `RRGGBBAA` for sRGB
 //   - `'tx1' | 'tx2' | 'bg1' | 'bg2' | 'accent1'…'accent6'` for theme
-//   - `'transparent' | null` to clear
+//   - `null` to clear
 //
 // Mutation strategy: walk the `txBody`, ensure each `a:r` has an `a:rPr`,
 // then set the relevant attributes / child elements. Existing properties
@@ -26,7 +26,7 @@ import {
   qname,
 } from '../xml/index.ts';
 import { fontSizeHundredthPt, textPointSpacing } from '../bounds.ts';
-import { parseColor } from './color.ts';
+import { buildColorElement } from './color.ts';
 
 const NAME_R = qname('a', 'r', NS.dml);
 const NAME_RPR = qname('a', 'rPr', NS.dml);
@@ -34,8 +34,6 @@ const NAME_LATIN = qname('a', 'latin', NS.dml);
 const NAME_EA = qname('a', 'ea', NS.dml);
 const NAME_CS = qname('a', 'cs', NS.dml);
 const NAME_SOLID_FILL = qname('a', 'solidFill', NS.dml);
-const NAME_SRGB_CLR = qname('a', 'srgbClr', NS.dml);
-const NAME_SCHEME_CLR = qname('a', 'schemeClr', NS.dml);
 const ATTR_SZ = qname('', 'sz', '');
 const ATTR_B = qname('', 'b', '');
 const ATTR_I = qname('', 'i', '');
@@ -92,8 +90,8 @@ export interface TextFormat {
   /** Font size in points; fractional values allowed (`12`, `12.5`). */
   size?: number;
   /**
-   * Color. Accepts `#RRGGBB`, `RRGGBB`, an ECMA-376 scheme color token
-   * (`tx1`, `accent1`, ...), or `null` to clear.
+   * Color. Accepts opaque or CSS-order alpha sRGB hex, an ECMA-376 scheme
+   * color token (`tx1`, `accent1`, ...), or `null` to clear.
    */
   color?: string | null;
   bold?: boolean;
@@ -156,13 +154,7 @@ const setSolidFill = (rPr: XmlElement, value: string | null): void => {
       !(c.kind === 'element' && c.name.namespaceURI === NS.dml && c.name.localName === 'solidFill'),
   );
   if (value === null) return;
-  const parsed = parseColor(value);
-  if (parsed === null) throw new Error(`unrecognized color: ${value}`);
-  const inner =
-    parsed.kind === 'srgb'
-      ? elem(NAME_SRGB_CLR, { attrs: [attr(ATTR_VAL, parsed.hex)] })
-      : elem(NAME_SCHEME_CLR, { attrs: [attr(ATTR_VAL, parsed.token)] });
-  const fill = elem(NAME_SOLID_FILL, { children: [inner] });
+  const fill = elem(NAME_SOLID_FILL, { children: [buildColorElement(value)] });
   insertChildByRank(rPr, fill, rprChildRank);
 };
 
@@ -189,13 +181,11 @@ const setHighlight = (rPr: XmlElement, value: string | null): void => {
       !(c.kind === 'element' && c.name.namespaceURI === NS.dml && c.name.localName === 'highlight'),
   );
   if (value === null) return;
-  const parsed = parseColor(value);
-  if (parsed === null) throw new Error(`unrecognized highlight color: ${value}`);
-  const inner =
-    parsed.kind === 'srgb'
-      ? elem(NAME_SRGB_CLR, { attrs: [attr(ATTR_VAL, parsed.hex)] })
-      : elem(NAME_SCHEME_CLR, { attrs: [attr(ATTR_VAL, parsed.token)] });
-  insertChildByRank(rPr, elem(NAME_HIGHLIGHT, { children: [inner] }), rprChildRank);
+  insertChildByRank(
+    rPr,
+    elem(NAME_HIGHLIGHT, { children: [buildColorElement(value)] }),
+    rprChildRank,
+  );
 };
 
 /** Mutates `rPr` in place per `format`. */

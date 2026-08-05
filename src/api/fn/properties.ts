@@ -4,6 +4,7 @@ import { emptyRels, nextRelId, partName } from '../../internal/opc/index.ts';
 import { REL_TYPES } from '../../internal/presentationml/index.ts';
 import {
   type XmlElement,
+  attr,
   elem,
   firstChildElement,
   parseXml,
@@ -20,6 +21,7 @@ import { decode, encode } from './_helpers.ts';
 const NS_CORE_PROPS = 'http://schemas.openxmlformats.org/package/2006/metadata/core-properties';
 const NS_DC = 'http://purl.org/dc/elements/1.1/';
 const NS_DCTERMS = 'http://purl.org/dc/terms/';
+const NS_XSI = 'http://www.w3.org/2001/XMLSchema-instance';
 const CORE_PROPS_PART_NAME = partName('/docProps/core.xml');
 
 /**
@@ -132,6 +134,7 @@ const CORE_PROP_FIELDS: ReadonlyArray<{
   uri: string;
   prefix: string;
   local: string;
+  w3cdtf?: true;
 }> = [
   { key: 'title', uri: NS_DC, prefix: 'dc', local: 'title' },
   { key: 'subject', uri: NS_DC, prefix: 'dc', local: 'subject' },
@@ -140,8 +143,8 @@ const CORE_PROP_FIELDS: ReadonlyArray<{
   { key: 'description', uri: NS_DC, prefix: 'dc', local: 'description' },
   { key: 'lastModifiedBy', uri: NS_CORE_PROPS, prefix: 'cp', local: 'lastModifiedBy' },
   { key: 'revision', uri: NS_CORE_PROPS, prefix: 'cp', local: 'revision' },
-  { key: 'created', uri: NS_DCTERMS, prefix: 'dcterms', local: 'created' },
-  { key: 'modified', uri: NS_DCTERMS, prefix: 'dcterms', local: 'modified' },
+  { key: 'created', uri: NS_DCTERMS, prefix: 'dcterms', local: 'created', w3cdtf: true },
+  { key: 'modified', uri: NS_DCTERMS, prefix: 'dcterms', local: 'modified', w3cdtf: true },
   { key: 'category', uri: NS_CORE_PROPS, prefix: 'cp', local: 'category' },
 ];
 
@@ -150,6 +153,7 @@ const buildEmptyCorePropsRoot = (): XmlElement => {
     ['cp', NS_CORE_PROPS],
     ['dc', NS_DC],
     ['dcterms', NS_DCTERMS],
+    ['xsi', NS_XSI],
   ]);
   return {
     kind: 'element',
@@ -160,17 +164,27 @@ const buildEmptyCorePropsRoot = (): XmlElement => {
   };
 };
 
+/** Mark an OPC date as W3C-DTF, which PowerPoint requires even though the element text is already ISO-8601. */
+const setW3cdtfType = (root: XmlElement, dateElement: XmlElement): void => {
+  root.prefixDecls.set('xsi', NS_XSI);
+  const typeIndex = dateElement.attrs.findIndex(
+    (candidate) => candidate.name.namespaceURI === NS_XSI && candidate.name.localName === 'type',
+  );
+  const type = attr(qname('xsi', 'type', NS_XSI), 'dcterms:W3CDTF');
+  if (typeIndex >= 0) dateElement.attrs[typeIndex] = type;
+  else dateElement.attrs.push(type);
+};
+
 /**
  * Writes selected fields on `/docProps/core.xml`. Unspecified fields
  * are left as-is; pass `null` to clear a field that's currently set.
  * Bootstraps the part (and the `/_rels/.rels` entry + content-type
  * override) if the package didn't have one.
  *
- * Note: setting `created` / `modified` requires an ISO-8601 timestamp
- * string (e.g. `'2026-05-15T12:34:56Z'`). PowerPoint expects the
- * `xsi:type="dcterms:W3CDTF"` attribute on these elements but readers
- * we tested all accept missing-attribute output too; this helper
- * therefore omits the attribute for simplicity.
+ * Setting `created` / `modified` requires an ISO-8601 timestamp string
+ * (e.g. `'2026-05-15T12:34:56Z'`). These fields are serialized with
+ * `xsi:type="dcterms:W3CDTF"`; PowerPoint treats the otherwise-valid
+ * core-properties part as repairable when that required type is absent.
  */
 export const setCoreProperties = (
   pres: PresentationData,
@@ -199,11 +213,15 @@ export const setCoreProperties = (
       }
       continue;
     }
+    let target: XmlElement;
     if (existing) {
       existing.children = [textNode(value)];
+      target = existing;
     } else {
-      root.children.push(elem(name, { children: [textNode(value)] }));
+      target = elem(name, { children: [textNode(value)] });
+      root.children.push(target);
     }
+    if (field.w3cdtf) setW3cdtfType(root, target);
   }
 
   const bytes = encode(serializeXml(doc));

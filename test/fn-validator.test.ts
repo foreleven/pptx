@@ -7,12 +7,14 @@ import {
   _internalPackageOf,
   addSlide,
   addSlideImage,
+  createPresentation,
   findSlideLayout,
   getMediaParts,
   getSlides,
   inches,
   loadPresentation,
   savePresentation,
+  setCoreProperties,
   validatePresentation,
 } from '../src/api/index.ts';
 import { partName } from '../src/internal/opc/index.ts';
@@ -25,6 +27,24 @@ describe('fn API: validatePresentation', () => {
     const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
     const issues = validatePresentation(pres);
     expect(issues).toEqual([]);
+  });
+
+  it('flags core-property dates without the PowerPoint-required W3C-DTF type', async () => {
+    const pres = createPresentation();
+    setCoreProperties(pres, { created: '2026-08-04T00:00:00+08:00' });
+    const pkg = _internalPackageOf(pres);
+    const coreName = partName('/docProps/core.xml');
+    const corePart = pkg.getPart(coreName);
+    if (!corePart) throw new Error('expected core.xml');
+    const xml = new TextDecoder().decode(corePart.data).replace(' xsi:type="dcterms:W3CDTF"', '');
+    corePart.data = new TextEncoder().encode(xml);
+
+    expect(validatePresentation(pres)).toContainEqual({
+      severity: 'error',
+      message:
+        '<dcterms:created> must declare xsi:type="dcterms:W3CDTF" for PowerPoint compatibility',
+      partName: coreName,
+    });
   });
 
   it('reports a missing layout rel as an error', async () => {

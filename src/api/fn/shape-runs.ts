@@ -6,6 +6,7 @@ import {
   type ParagraphAlignment,
   type TextFormat,
   applyBulletToParagraph,
+  applyRunFormat,
 } from '../../internal/drawingml/index.ts';
 import { emptyRels, nextRelId, partName, resolveTarget } from '../../internal/opc/index.ts';
 import { REL_TYPES } from '../../internal/presentationml/index.ts';
@@ -18,6 +19,7 @@ import {
   getAttrValue,
   insertChildByRank,
   qname,
+  text,
 } from '../../internal/xml/index.ts';
 import {
   INTERNAL_PACKAGE,
@@ -46,6 +48,13 @@ const NAME_A_P = qname('a', 'p', NS.dml);
 const NAME_A_R = qname('a', 'r', NS.dml);
 export const NAME_A_RPR = qname('a', 'rPr', NS.dml);
 const NAME_A_T = qname('a', 't', NS.dml);
+const NAME_A_END_PARA_RPR = qname('a', 'endParaRPr', NS.dml);
+const ATTR_XML_SPACE = qname('xml', 'space', NS.xml);
+
+export interface ShapeParagraphRun {
+  text: string;
+  format?: TextFormat;
+}
 
 const paragraphsOf = (txBody: XmlElement): XmlElement[] =>
   txBody.children.filter(
@@ -117,6 +126,36 @@ const writeRunText = (run: XmlElement, value: string): void => {
     run.children.push(tEl);
   }
   tEl.children = [{ kind: 'text', data: value }];
+};
+
+/** Replace one paragraph's inline text with ordered native runs and optional per-run formatting. */
+export const setShapeParagraphRuns = (
+  shape: SlideShapeData,
+  paragraphIndex: number,
+  runs: readonly ShapeParagraphRun[],
+): void => {
+  if (runs.length === 0) throw new RangeError('setShapeParagraphRuns requires at least one run.');
+  const paragraph = requireParagraph(shape, paragraphIndex);
+  const paragraphProperties = firstChildElement(paragraph, NAME_A_PPR);
+  const endProperties = firstChildElement(paragraph, NAME_A_END_PARA_RPR);
+  const authoredRuns = runs.map((value) => {
+    const runProperties = value.format ? elem(NAME_A_RPR) : null;
+    if (runProperties && value.format) applyRunFormat(runProperties, value.format);
+    const preserveSpace = /^\s|\s$/u.test(value.text);
+    const textElement = elem(NAME_A_T, {
+      attrs: preserveSpace ? [attr(ATTR_XML_SPACE, 'preserve')] : [],
+      children: [text(value.text)],
+    });
+    return elem(NAME_A_R, {
+      children: [...(runProperties ? [runProperties] : []), textElement],
+    });
+  });
+  paragraph.children = [
+    ...(paragraphProperties ? [paragraphProperties] : []),
+    ...authoredRuns,
+    ...(endProperties ? [endProperties] : []),
+  ];
+  commitAndRefresh(shape);
 };
 
 /** Number of paragraphs in the shape's text body. Throws for non-text shapes. */

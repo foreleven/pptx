@@ -11,6 +11,7 @@ import {
   inches,
   loadPresentation,
   savePresentation,
+  setShapeEffects,
   setShapeGlow,
   setShapeShadow,
 } from '../src/api/index.ts';
@@ -90,5 +91,41 @@ describe('fn API: shape effects', () => {
     expect(await slideXml(await savePresentation(pres), 0)).toContain('<a:effectLst>');
     clearShapeEffects(shape);
     expect(await slideXml(await savePresentation(pres), 0)).not.toContain('<a:effectLst>');
+  });
+
+  it('setShapeEffects writes one schema-ordered composed effect list', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const shape = addSlideShape(slide, {
+      preset: 'rect',
+      x: inches(0),
+      y: inches(0),
+      w: inches(2),
+      h: inches(2),
+    });
+    setShapeEffects(shape, [
+      { kind: 'softEdge', radiusEmu: 76200 },
+      { kind: 'outerShdw', color: '#112233', blurEmu: 50800, distEmu: 25400 },
+      { kind: 'glow', color: '#445566', radiusEmu: 63500, opacity: 0.5 },
+      { kind: 'blur', radiusEmu: 38100, grow: false },
+      { kind: 'reflection', blurEmu: 25400, distEmu: 101600, startOpacity: 0.7, endOpacity: 0.1 },
+      { kind: 'innerShdw', color: '#778899', blurEmu: 12700, distEmu: 6350 },
+    ]);
+
+    const xml = await slideXml(await savePresentation(pres), 0);
+    const tags = [
+      '<a:blur ',
+      '<a:glow ',
+      '<a:innerShdw ',
+      '<a:outerShdw ',
+      '<a:reflection ',
+      '<a:softEdge ',
+    ];
+    expect(tags.every((tag) => xml.includes(tag))).toBe(true);
+    for (let index = 1; index < tags.length; index++) {
+      expect(xml.indexOf(tags[index]!)).toBeGreaterThan(xml.indexOf(tags[index - 1]!));
+    }
+    expect(xml).toContain('grow="0"');
+    expect(xml).toContain('val="50000"');
   });
 });

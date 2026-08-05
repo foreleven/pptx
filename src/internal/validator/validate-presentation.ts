@@ -36,11 +36,16 @@ import {
 
 const PRES_PART = partName('/ppt/presentation.xml');
 const PRES_RELS = partName('/ppt/_rels/presentation.xml.rels');
+const CORE_PROPS_PART = partName('/docProps/core.xml');
+
+const NS_DCTERMS = 'http://purl.org/dc/terms/';
+const NS_XSI = 'http://www.w3.org/2001/XMLSchema-instance';
 
 const NAME_SLD_ID_LST = qname('p', 'sldIdLst', NS.pml);
 const NAME_SLD_ID = qname('p', 'sldId', NS.pml);
 const ATTR_ID = qname('', 'id', '');
 const ATTR_R_ID = qname('r', 'id', NS.officeDocRels);
+const ATTR_XSI_TYPE = qname('xsi', 'type', NS_XSI);
 
 export type IssueSeverity = 'error' | 'warning';
 
@@ -57,6 +62,34 @@ const decode = (b: Uint8Array): string => decoder.decode(b);
 const targetPartName = (sourcePart: PartName, rel: Relationship): PartName =>
   rel.target.startsWith('/') ? partName(rel.target) : resolveTarget(sourcePart, rel.target);
 
+/** Enforce the W3C-DTF type marker PowerPoint requires on OPC creation and modification dates. */
+const validateCorePropertyDates = (pkg: OpcPackage, issues: ValidationIssue[]): void => {
+  const corePart = pkg.getPart(CORE_PROPS_PART);
+  if (!corePart) return;
+  let root: ReturnType<typeof parseXml>['root'];
+  try {
+    root = parseXml(decode(corePart.data)).root;
+  } catch (error) {
+    issues.push({
+      severity: 'error',
+      message: `core.xml failed to parse: ${(error as Error).message}`,
+      partName: CORE_PROPS_PART,
+    });
+    return;
+  }
+  for (const localName of ['created', 'modified']) {
+    const name = qname('dcterms', localName, NS_DCTERMS);
+    for (const dateElement of allChildElements(root, name)) {
+      if (getAttrValue(dateElement, ATTR_XSI_TYPE) === 'dcterms:W3CDTF') continue;
+      issues.push({
+        severity: 'error',
+        message: `<dcterms:${localName}> must declare xsi:type="dcterms:W3CDTF" for PowerPoint compatibility`,
+        partName: CORE_PROPS_PART,
+      });
+    }
+  }
+};
+
 /**
  * Runs every invariant check in this module against `pkg`. Returns a
  * list of issues; an empty list means the deck passes every check. The
@@ -65,6 +98,7 @@ const targetPartName = (sourcePart: PartName, rel: Relationship): PartName =>
  */
 export const validatePresentationPackage = (pkg: OpcPackage): ValidationIssue[] => {
   const issues: ValidationIssue[] = [];
+  validateCorePropertyDates(pkg, issues);
 
   const presPart = pkg.getPart(PRES_PART);
   if (!presPart) {

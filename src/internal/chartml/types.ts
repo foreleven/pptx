@@ -339,7 +339,7 @@ export interface ChartSpec {
   readonly valueAxis?: ChartAxisScaling;
   /**
    * Plot-area background fill — `<c:plotArea><c:spPr><a:solidFill>
-   * <a:srgbClr val="…"/>`. `null` for no fill / unsupported fill kind.
+   * <a:srgbClr val="…"/>`. `undefined` keeps the plot area transparent.
    */
   readonly plotAreaFill?: string;
   /**
@@ -349,8 +349,7 @@ export interface ChartSpec {
   readonly plotAreaStrokeColor?: string;
   /**
    * Chart-area background fill — `<c:chartSpace><c:spPr><a:solidFill>
-   * <a:srgbClr val="…"/>`. Renderers can use this as the outer card
-   * color instead of the hard-coded white.
+   * <a:srgbClr val="…"/>`. `undefined` keeps the outer chart card transparent.
    */
   readonly chartAreaFill?: string;
   /**

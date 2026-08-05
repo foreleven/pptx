@@ -54,23 +54,24 @@ const numericLabels = (svg: string): number[] =>
   [...svg.matchAll(/<text[^>]*>(\d+)<\/text>/g)].map((m) => Number(m[1]));
 
 describe('chart fidelity vs PowerPoint', () => {
-  it('draws no chart-area border by default', async () => {
+  it('draws a transparent chart area with no border by default', async () => {
     const svg = await renderChart({
       kind: 'column',
       categories: ['A', 'B'],
       series: [{ name: 'S', values: [1, 2] }],
     });
-    // The chart-area backdrop is white-filled with no stroke.
-    expect(svg).toMatch(/<rect[^>]*fill="#FFFFFF"[^>]*stroke="none"/);
+    expect(svg).toMatch(/<rect[^>]*fill="none"[^>]*stroke="none"/);
   });
 
-  it('honors an authored chart-area border', async () => {
+  it('honors an authored chart-area fill and border', async () => {
     const svg = await renderChart({
       kind: 'column',
       categories: ['A', 'B'],
       series: [{ name: 'S', values: [1, 2] }],
+      chartAreaFill: '#00FF00',
       chartAreaStrokeColor: '#FF0000',
     });
+    expect(svg).toContain('fill="#00FF00"');
     expect(svg).toContain('stroke="#FF0000"');
   });
 

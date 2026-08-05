@@ -196,6 +196,27 @@ const applyColorTransforms = (hex: string, transforms: readonly ColorTransformOp
   return rgb01ToHex(r, g, b);
 };
 
+/** Preserve DrawingML alpha transforms as the CSS-order AA suffix used by SVG renderers. */
+const applyAlphaTransforms = (hex: string, transforms: readonly ColorTransformOp[]): string => {
+  let alpha = 1;
+  let authored = false;
+  for (const transform of transforms) {
+    if (transform.kind === 'alpha') {
+      alpha = transform.val;
+      authored = true;
+    } else if (transform.kind === 'alphaMod') {
+      alpha *= transform.val;
+      authored = true;
+    } else if (transform.kind === 'alphaOff') {
+      alpha += transform.val;
+      authored = true;
+    }
+  }
+  if (!authored) return hex;
+  const byte = Math.round(Math.max(0, Math.min(1, alpha)) * 255);
+  return `${hex}${byte.toString(16).padStart(2, '0').toUpperCase()}`;
+};
+
 const SCHEME_TOKEN_TO_THEME_KEY: Record<string, keyof Omit<PresentationTheme, 'name'>> = {
   tx1: 'dark1',
   dk1: 'dark1',
@@ -244,9 +265,9 @@ export const resolveSchemeToken = (
 /**
  * Resolves a DrawingML color element (`<a:srgbClr>` / `<a:schemeClr>` /
  * `<a:sysClr>` / `<a:prstClr>`) with all its `<a:lumMod>` / `<a:tint>` /
- * `<a:shade>` / `<a:satMod>` etc. transform children applied. Returns
- * `null` when the color is a scheme token and no theme is supplied to
- * resolve it.
+ * `<a:shade>` / `<a:satMod>` etc. transform children applied. Alpha is
+ * returned as a CSS-order `AA` suffix. Returns `null` when the color is a
+ * scheme token and no theme is supplied to resolve it.
  *
  * Exposed because both run-format and fill-format code paths need to
  * apply the same transform pipeline; keeping a single implementation
@@ -277,7 +298,8 @@ export const resolveDrawingColor = (
     else if (v === 'white') baseHex = '#FFFFFF';
   }
   if (!baseHex) return null;
-  return applyColorTransforms(baseHex, parseColorTransforms(colorEl));
+  const transforms = parseColorTransforms(colorEl);
+  return applyAlphaTransforms(applyColorTransforms(baseHex, transforms), transforms);
 };
 
 // Reads any element shaped like `CT_TextCharacterProperties` (the schema
@@ -286,7 +308,7 @@ export const resolveDrawingColor = (
 // inheritance-aware `getShapeRunFormatEffective`.
 //
 // When `ctx.theme` is provided, scheme tokens are resolved to concrete
-// `#RRGGBB` and color transforms (`<a:lumMod>` etc.) are applied. Without
+// `#RRGGBB[AA]` and color transforms (`<a:lumMod>` etc.) are applied. Without
 // a theme, transforms are not applied and theme tokens are passed through
 // verbatim — this preserves the legacy `getShapeRunFormat` behavior.
 export const parseRPrLikeElement = (

@@ -5,8 +5,10 @@ import { getShapePlaceholderIdx, getShapePlaceholderType } from './shape-read-ba
 import { getSlideLayout } from './shape-slide-read.ts';
 import {
   type GlowOptions,
+  type ShapeEffectOptions,
   type ShadowOptions,
   clearEffects as clearEffectsImpl,
+  setEffects,
   setGlow,
   setShadow,
 } from '../../internal/drawingml/index.ts';
@@ -197,7 +199,11 @@ const parseEffectLst = (
       }
     }
     const hex = resolveDrawingColor(inner, theme);
-    return { color: hex ?? '', ...(opacity !== undefined ? { opacity } : {}) };
+    // Effects expose opacity as its own field, so do not duplicate the same
+    // alpha transform in the returned color string.
+    const color =
+      opacity !== undefined && /^#[0-9A-F]{8}$/.test(hex ?? '') ? hex!.slice(0, 7) : (hex ?? '');
+    return { color, ...(opacity !== undefined ? { opacity } : {}) };
   };
 
   const out: ShapeEffectAny[] = [];
@@ -377,6 +383,15 @@ export const setShapeShadow = (shape: SlideShapeData, options: ShadowOptions = {
  */
 export const setShapeGlow = (shape: SlideShapeData, options: GlowOptions): void => {
   setGlow(requireSpPr(shape), options);
+  commitAndRefresh(shape);
+};
+
+/** Writes a composed, schema-ordered DrawingML effect list on one shape. */
+export const setShapeEffects = (
+  shape: SlideShapeData,
+  effects: readonly ShapeEffectOptions[],
+): void => {
+  setEffects(requireSpPr(shape), effects);
   commitAndRefresh(shape);
 };
 

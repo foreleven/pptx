@@ -4,8 +4,10 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
+  createPresentation,
   getCoreProperties,
   loadPresentation,
+  readPackagePart,
   savePresentation,
   setCoreProperties,
 } from '../src/api/index.ts';
@@ -41,6 +43,24 @@ describe('fn API: setCoreProperties', () => {
     expect(props.title).toBe('Round-trip');
     expect(props.subject).toBe('Quarterly review');
     expect(props.modified).toBe('2026-05-15T12:00:00Z');
+  });
+
+  it('marks authored dates as W3C-DTF for PowerPoint compatibility', () => {
+    const pres = createPresentation();
+    setCoreProperties(pres, {
+      created: '2026-08-04T00:00:00+08:00',
+      modified: '2026-08-04T00:00:00+08:00',
+    });
+
+    const raw = readPackagePart(pres, '/docProps/core.xml');
+    expect(raw).not.toBeNull();
+    const xml = new TextDecoder().decode(raw!);
+    expect(xml).toContain(
+      '<dcterms:created xsi:type="dcterms:W3CDTF">2026-08-04T00:00:00+08:00</dcterms:created>',
+    );
+    expect(xml).toContain(
+      '<dcterms:modified xsi:type="dcterms:W3CDTF">2026-08-04T00:00:00+08:00</dcterms:modified>',
+    );
   });
 
   it('clears a field when passed null', async () => {

@@ -43,9 +43,10 @@ export type {
 } from '../internal/chartml/index.ts';
 export type { SlideChartData } from './fn.ts';
 export type { ShapeClickAction } from './fn.ts';
+export type { ShapeParagraphRun } from './fn.ts';
 export type { IssueSeverity, ValidationIssue } from './fn.ts';
 export type { AnimationEffect, AnimationOptions } from './fn.ts';
-export type { ImageCrop } from './fn.ts';
+export type { ImageCrop, ImageDuotone } from './fn.ts';
 export type { ImageFit } from './fn.ts';
 export type {
   ArrowOptions,
@@ -57,6 +58,7 @@ export type {
   LineEndType,
   PatternFillOptions,
   PatternPreset,
+  ShapeEffectOptions,
   ShadowOptions,
 } from '../internal/drawingml/index.ts';
 export type {
@@ -462,16 +464,20 @@ export {
   setShapeBullets,
   setShapeFill,
   setShapeFlip,
+  setShapeEffects,
   setShapeGlow,
   setShapeGradientFill,
   setShapeHidden,
   setShapeShadow,
   setShapeHyperlink,
   setShapeImage,
+  setShapeImageBiLevel,
   setShapeImageBrightness,
   setShapeImageContrast,
   setShapeImageCrop,
+  setShapeImageDuotone,
   setShapeImageFill,
+  setShapeImageGrayscale,
   setShapeImageOpacity,
   setShapeClickAction,
   setShapeDescription,
@@ -487,6 +493,7 @@ export {
   setShapeRotation,
   setShapeRunFormat,
   setShapeRunHyperlink,
+  setShapeParagraphRuns,
   setShapeRunText,
   setShapeSize,
   setShapeStroke,

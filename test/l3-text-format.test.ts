@@ -77,6 +77,13 @@ describe('L3: setShapeTextFormat', () => {
     expect(xml).toContain('<a:schemeClr val="accent1"/>');
   });
 
+  it('accepts CSS-order RRGGBBAA text colors', async () => {
+    const { pres, box } = await newBox('Transparent text');
+    setShapeTextFormat(box, { color: '#3366CC80' });
+    const xml = getSlideXmlString(getSlides(pres).at(-1)!);
+    expect(xml).toContain('<a:srgbClr val="3366CC"><a:alpha val="50196"/></a:srgbClr>');
+  });
+
   it('rejects unrecognized color values', async () => {
     const { box } = await newBox('t');
     expect(() => setShapeTextFormat(box, { color: 'pumpkin spice' })).toThrow(/color/);
