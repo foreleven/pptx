@@ -50,6 +50,34 @@ interface IssueBase {
   readonly approximate: boolean;
 }
 
+export interface TextLayoutMeasurement extends IssueBase {
+  readonly box: {
+    readonly widthPx: number;
+    readonly heightPx: number;
+    readonly innerWidthPx: number;
+    readonly innerHeightPx: number;
+  };
+  readonly layout: {
+    /** The authored shape dimension that controls the text flow extent. */
+    readonly axis: 'height' | 'width';
+    readonly requiredInnerExtentPx: number;
+    readonly requiredShapeExtentPx: number;
+    readonly lineCount: number;
+    readonly paragraphLineCounts: ReadonlyArray<number>;
+    readonly softWrapCount: number;
+    readonly softWraps: ReadonlyArray<{
+      readonly paragraphIndex: number;
+      readonly extraLines: number;
+    }>;
+    /** Ink coordinates relative to the inner layout frame's leading edge. */
+    readonly inkTopPx: number;
+    readonly inkBottomPx: number;
+    readonly inkHeightPx: number;
+    readonly overflowXPx: number;
+    readonly overflowYPx: number;
+  };
+}
+
 export type TextAuditIssue =
   | (IssueBase & {
       readonly kind: 'overflow-x' | 'overflow-y';
@@ -78,6 +106,11 @@ export interface AuditTextLayoutOptions {
   readonly reportSoftWraps?: boolean;
 }
 
+export interface MeasureTextLayoutOptions {
+  /** Uses the same injected measurer contract as SVG rendering and the audit API. */
+  readonly measureText?: TextMeasurer;
+}
+
 const DEFAULT_TOLERANCE_PX = 1;
 
 const round2 = (n: number): number => Math.round(n * 100) / 100;
@@ -100,20 +133,18 @@ function* walkShapes(shapes: ReadonlyArray<SlideShapeData>): Generator<SlideShap
 // then falls back to the same substitution map.
 const passthroughFamily = (family: string | null): string => family ?? SANS;
 
-const auditShape = (
+/** Measure one native text body with the exact model and layout core used by SVG rendering. */
+const measureShape = (
   pres: PresentationData,
   theme: PresentationTheme | null,
   shape: SlideShapeData,
   slideIndex: number,
   measure: TextMeasurer,
-  tolerancePx: number,
-  reportSoftWraps: boolean,
-  issues: TextAuditIssue[],
-): void => {
+): TextLayoutMeasurement | null => {
   const kind = getShapeKind(shape);
-  if (kind !== 'shape' && kind !== 'graphicFrame') return;
+  if (kind !== 'shape' && kind !== 'graphicFrame') return null;
   const bounds = getShapeBoundsResolved(pres, shape);
-  if (!bounds) return;
+  if (!bounds) return null;
   const model = resolveTextBodyModel(
     pres,
     shape,
@@ -123,7 +154,7 @@ const auditShape = (
     measure,
     '#000000', // colors don't affect metrics
   );
-  if (model === null) return;
+  if (model === null) return null;
 
   const vert = verticalLayoutOf(model.effectiveBody.vert ?? getShapeTextDirection(shape));
   const cols = getShapeTextColumns(shape);
@@ -135,7 +166,7 @@ const auditShape = (
         }
       : null;
   const rect = model.svgTextRect(vert);
-  if (rect.w <= 0 || rect.h <= 0) return;
+  if (rect.w <= 0 || rect.h <= 0) return null;
 
   // SVG semantics (see the render path's `svgScale`): only an authored
   // autofit shrinks; the heuristic factor is foreignObject-only.
@@ -206,35 +237,57 @@ const auditShape = (
     inkTop = Math.min(inkTop, p.baselineY - p.line.ascent);
     inkBottom = Math.max(inkBottom, p.baselineY + p.line.descent);
   }
-  if (!anyInk) return;
+  if (!anyInk) return null;
 
   const approximate = detectApproximate(input.paragraphs, measure);
-  const slideRef = { slideIndex, shapeName: getShapeName(shape), approximate };
-
-  if (overflowX > tolerancePx) {
-    issues.push({ ...slideRef, kind: 'overflow-x', overflowPx: round2(overflowX) });
-  }
   const overflowY = Math.max(frame.y - inkTop, inkBottom - (frame.y + frame.h));
-  if (overflowY > tolerancePx) {
-    issues.push({ ...slideRef, kind: 'overflow-y', overflowPx: round2(overflowY) });
+  const lineCounts = new Map<number, number>();
+  for (const placement of core.placements) {
+    lineCounts.set(placement.line.paraIndex, (lineCounts.get(placement.line.paraIndex) ?? 0) + 1);
   }
-
-  // 段落ち — a paragraph occupying more lines than 1 + its explicit <a:br>
-  // count wrapped on its own. Meaningless for `upright` (one glyph per line
-  // by construction), so horizontal text only.
-  if (reportSoftWraps && vert === 'none') {
-    const lineCounts = new Map<number, number>();
-    for (const p of core.placements) {
-      lineCounts.set(p.line.paraIndex, (lineCounts.get(p.line.paraIndex) ?? 0) + 1);
-    }
-    input.paragraphs.forEach((para, pi) => {
-      const breaks = para.pieces.reduce((n, pc) => n + (pc.isBreak ? 1 : 0), 0);
-      const extraLines = (lineCounts.get(pi) ?? 0) - 1 - breaks;
-      if (extraLines > 0) {
-        issues.push({ ...slideRef, kind: 'soft-wrap', paragraphIndex: pi, extraLines });
-      }
-    });
-  }
+  const paragraphLineCounts = input.paragraphs.map(
+    (_paragraph, index) => lineCounts.get(index) ?? 0,
+  );
+  // A soft wrap is measured even when the audit caller does not request a warning,
+  // because the build artifact needs to expose title/label wrap pressure after rendering.
+  const softWraps =
+    vert === 'none'
+      ? input.paragraphs.flatMap((paragraph, paragraphIndex) => {
+          const explicitBreaks = paragraph.pieces.reduce(
+            (count, piece) => count + (piece.isBreak ? 1 : 0),
+            0,
+          );
+          const extraLines = (lineCounts.get(paragraphIndex) ?? 0) - 1 - explicitBreaks;
+          return extraLines > 0 ? [{ paragraphIndex, extraLines }] : [];
+        })
+      : [];
+  const shapeExtentPx = Number(rotated ? bounds.w : bounds.h) / EMU_PER_PX;
+  const requiredShapeExtentPx = shapeExtentPx + core.requiredH - frame.h;
+  return {
+    slideIndex,
+    shapeName: getShapeName(shape),
+    approximate,
+    box: {
+      widthPx: round2(Number(bounds.w) / EMU_PER_PX),
+      heightPx: round2(Number(bounds.h) / EMU_PER_PX),
+      innerWidthPx: round2(input.boxWpx),
+      innerHeightPx: round2(input.boxHpx),
+    },
+    layout: {
+      axis: rotated ? 'width' : 'height',
+      requiredInnerExtentPx: round2(core.requiredH),
+      requiredShapeExtentPx: round2(Math.max(0, requiredShapeExtentPx)),
+      lineCount: core.placements.length,
+      paragraphLineCounts,
+      softWrapCount: softWraps.reduce((count, wrap) => count + wrap.extraLines, 0),
+      softWraps,
+      inkTopPx: round2(inkTop - frame.y),
+      inkBottomPx: round2(inkBottom - frame.y),
+      inkHeightPx: round2(inkBottom - inkTop),
+      overflowXPx: round2(Math.max(0, overflowX)),
+      overflowYPx: round2(Math.max(0, overflowY)),
+    },
+  };
 };
 
 // A shape's verdict is approximate when any of its runs was measured by
@@ -266,26 +319,54 @@ const detectApproximate = (
 };
 
 /**
- * Measures every text body in the deck and reports text that escapes its box
- * (`overflow-x` / `overflow-y`) and, opt-in, paragraphs that soft-wrap
- * (`soft-wrap`, 段落ち).
- *
- * Table cell text is not audited (v1 covers shape text bodies, including
- * placeholders and shapes inside groups).
+ * Measure every shape text body with the SVG layout engine, including required
+ * extent, ink bounds, line counts, and soft wraps. Table cells are not included.
  */
+export const measureTextLayout = (
+  pres: PresentationData,
+  options: MeasureTextLayoutOptions = {},
+): ReadonlyArray<TextLayoutMeasurement> => {
+  const measure = options.measureText ?? defaultMeasurer;
+  const theme = getPresentationTheme(pres);
+  const measurements: TextLayoutMeasurement[] = [];
+  const slides = getSlides(pres);
+  for (let slideIndex = 0; slideIndex < slides.length; slideIndex++) {
+    for (const shape of walkShapes(getSlideShapes(slides[slideIndex]!))) {
+      const measurement = measureShape(pres, theme, shape, slideIndex, measure);
+      if (measurement) measurements.push(measurement);
+    }
+  }
+  return measurements;
+};
+
+/** Report measured overflow and, when requested, paragraph soft wraps. */
 export const auditTextLayout = (
   pres: PresentationData,
   options: AuditTextLayoutOptions = {},
 ): ReadonlyArray<TextAuditIssue> => {
-  const measure = options.measureText ?? defaultMeasurer;
   const tolerancePx = options.tolerancePx ?? DEFAULT_TOLERANCE_PX;
   const reportSoftWraps = options.reportSoftWraps ?? false;
-  const theme = getPresentationTheme(pres);
   const issues: TextAuditIssue[] = [];
-  const slides = getSlides(pres);
-  for (let slideIndex = 0; slideIndex < slides.length; slideIndex++) {
-    for (const shape of walkShapes(getSlideShapes(slides[slideIndex]!))) {
-      auditShape(pres, theme, shape, slideIndex, measure, tolerancePx, reportSoftWraps, issues);
+  const measurements = measureTextLayout(
+    pres,
+    options.measureText ? { measureText: options.measureText } : {},
+  );
+  for (const measurement of measurements) {
+    const issueBase = {
+      slideIndex: measurement.slideIndex,
+      shapeName: measurement.shapeName,
+      approximate: measurement.approximate,
+    };
+    if (measurement.layout.overflowXPx > tolerancePx) {
+      issues.push({ ...issueBase, kind: 'overflow-x', overflowPx: measurement.layout.overflowXPx });
+    }
+    if (measurement.layout.overflowYPx > tolerancePx) {
+      issues.push({ ...issueBase, kind: 'overflow-y', overflowPx: measurement.layout.overflowYPx });
+    }
+    if (reportSoftWraps) {
+      for (const wrap of measurement.layout.softWraps) {
+        issues.push({ ...issueBase, kind: 'soft-wrap', ...wrap });
+      }
     }
   }
   return issues;

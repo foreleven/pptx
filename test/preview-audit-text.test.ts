@@ -18,7 +18,11 @@ import {
   setShapeTextAutoFit,
   setShapeTextWrap,
 } from '../src/api/index.ts';
-import { auditTextLayout, type TextAuditIssue } from '../packages/preview/src/index.ts';
+import {
+  auditTextLayout,
+  measureTextLayout,
+  type TextAuditIssue,
+} from '../packages/preview/src/index.ts';
 import { buildFontkitMeasurer, FONT_DIR } from '../packages/preview/src/node.ts';
 
 const fixturePath = fileURLToPath(new URL('./fixtures/minimal/blank.pptx', import.meta.url));
@@ -191,6 +195,36 @@ describe('auditTextLayout — soft wraps (段落ち)', () => {
     expect(
       ofShape(auditTextLayout(pres, { measureText, reportSoftWraps: true }), 'authored-breaks'),
     ).toEqual([]);
+  });
+});
+
+describe('measureTextLayout — build feedback', () => {
+  it('returns the required SVG extent, ink bounds, lines, and wraps for each text shape', async () => {
+    const { pres, slide } = await blankSlide();
+    addSlideTextBox(slide, {
+      x: inches(1),
+      y: inches(1),
+      w: inches(2),
+      h: inches(0.5),
+      text: LONG_PARAGRAPH,
+      name: 'measured',
+    });
+
+    const measurement = measureTextLayout(pres, { measureText }).find(
+      (candidate) => candidate.shapeName === 'measured',
+    );
+    expect(measurement).toMatchObject({
+      approximate: false,
+      box: { heightPx: 48 },
+      layout: { axis: 'height' },
+    });
+    expect(measurement!.layout.requiredShapeExtentPx).toBeGreaterThan(measurement!.box.heightPx);
+    expect(measurement!.layout.requiredInnerExtentPx).toBeGreaterThan(
+      measurement!.box.innerHeightPx,
+    );
+    expect(measurement!.layout.inkBottomPx).toBeGreaterThan(measurement!.layout.inkTopPx);
+    expect(measurement!.layout.lineCount).toBeGreaterThan(1);
+    expect(measurement!.layout.softWrapCount).toBeGreaterThan(0);
   });
 });
 
