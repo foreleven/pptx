@@ -3,10 +3,14 @@
 import { resolveDrawingColor } from './shape-color.ts';
 import {
   type ArrowOptions,
+  buildImageSourceRectangle,
+  coverImageCrop,
   type GradientFillOptions,
   type LineDash,
   type PatternFillOptions,
   type StrokeOptions,
+  type ImageCrop,
+  readSize,
   clearFill as clearFillImpl,
   clearStroke as clearStrokeImpl,
   setAdjustValues as writeAdjustValues,
@@ -35,6 +39,7 @@ import {
   type ImageFormat,
   nextRelId,
   partName,
+  readImagePixelSize,
 } from '../../internal/opc/index.ts';
 import { REL_TYPES } from '../../internal/presentationml/index.ts';
 import {
@@ -191,9 +196,13 @@ export const getShapePatternFill = (
  * Sets a picture fill on the shape, embedding `bytes` as a new media
  * part and replacing any prior fill choice on the shape's `<p:spPr>`.
  *
- * The image stretches to fill the shape (`<a:stretch><a:fillRect/>`).
- * Format is detected from magic bytes; pass `options.format` to
- * override (useful for SVG or unusual extensions).
+ * The image stretches to fill the shape (`<a:stretch><a:fillRect/>`). Pass
+ * `options.fit: 'cover'` to compute a centered source crop from the image and
+ * shape aspect ratios after applying `options.crop`; this preserves the fixed
+ * crop → fit order. If the natural image size is unavailable, cover keeps only
+ * the explicit crop. Format is
+ * detected from magic bytes; pass `options.format` to override (useful for SVG
+ * or unusual extensions).
  *
  * Throws if the format can't be detected and isn't provided explicitly,
  * or if the shape kind doesn't carry a `<p:spPr>` (e.g. groups).
@@ -201,7 +210,7 @@ export const getShapePatternFill = (
 export const setShapeImageFill = (
   shape: SlideShapeData,
   bytes: Uint8Array,
-  options: { format?: ImageFormat } = {},
+  options: { format?: ImageFormat; fit?: 'fill' | 'cover'; crop?: ImageCrop | null } = {},
 ): void => {
   const format = options.format ?? detectImageFormat(bytes);
   if (format === null) {
@@ -264,7 +273,19 @@ export const setShapeImageFill = (
   const blipFillName = qname('a', 'blipFill', NS.dml);
   const blip = elem(blipName, { attrs: [attr(qname('r', 'embed', NS.officeDocRels), newRId)] });
   const stretch = elem(stretchName, { children: [elem(fillRectName)] });
-  const blipFill = elem(blipFillName, { children: [blip, stretch] });
+  const naturalSize = readImagePixelSize(bytes);
+  const shapeSize = readSize(shape[SHAPE_ELEMENT], shape[SHAPE_SNAPSHOT].kind);
+  const crop =
+    options.fit === 'cover' && naturalSize !== null && shapeSize !== null
+      ? coverImageCrop(
+          { width: shapeSize.w, height: shapeSize.h },
+          naturalSize,
+          options.crop ?? null,
+        )
+      : (options.crop ?? null);
+  const blipFill = elem(blipFillName, {
+    children: [blip, ...(crop ? [buildImageSourceRectangle(crop)] : []), stretch],
+  });
   // <a:blipFill> takes the same slot as <a:solidFill>; insert at the
   // current insertion index. We use the same heuristic as setSolidFill —
   // before <a:ln> / effectLst / scene3d / extLst.

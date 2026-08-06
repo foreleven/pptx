@@ -22,6 +22,7 @@
 // a relationship on the slide's `.rels` part pointing at a media part.
 
 import { emuCoordinate, emuExtent } from '../bounds.ts';
+import { buildImageSourceRectangle, type ImageCrop } from '../drawingml/index.ts';
 import { type XmlElement, NS, attr, elem, qname } from '../xml/index.ts';
 
 const NAME_PIC = qname('p', 'pic', NS.pml);
@@ -58,6 +59,8 @@ export interface PictureOptions {
   y: number;
   w: number;
   h: number;
+  /** Optional source-image crop, written before `<a:stretch>` in schema order. */
+  crop?: ImageCrop;
   /** When true, emits `<a:picLocks noChangeAspect="1"/>`. PowerPoint sets
    * this for pictures inserted via "Insert > Picture" but not for ones
    * dropped onto the canvas; default true to mirror the common case. */
@@ -81,7 +84,9 @@ export const buildPicture = (opts: PictureOptions): XmlElement => {
 
   const blip = elem(NAME_BLIP, { attrs: [attr(ATTR_R_EMBED, opts.rEmbed)] });
   const stretch = elem(NAME_STRETCH, { children: [elem(NAME_FILL_RECT)] });
-  const blipFill = elem(NAME_BLIP_FILL, { children: [blip, stretch] });
+  const blipFill = elem(NAME_BLIP_FILL, {
+    children: [blip, ...(opts.crop ? [buildImageSourceRectangle(opts.crop)] : []), stretch],
+  });
 
   // Round to whole EMU — `fit: 'contain'` scaling produces fractional offsets
   // (`as Emu` cast), and fractional ST_Coordinate values corrupt the file.

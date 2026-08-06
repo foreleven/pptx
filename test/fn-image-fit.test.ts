@@ -1,7 +1,7 @@
 // addSlideImage / setShapeImage `fit` option — 'contain' scales the image
 // to fit inside the target box preserving aspect ratio (centered), 'fill'
 // (the default) stretches to the exact box as before. Natural size comes
-// from the PNG / JPEG header; unmeasurable formats fall back to 'fill'.
+// from each supported image header; malformed bytes fall back to 'fill'.
 
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -55,6 +55,45 @@ const GIF_HEADER = new Uint8Array([
   0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0x3b,
 ]);
 
+/** Build the minimal BMP header bytes needed by the size reader. */
+const bmpWithSize = (width: number, height: number): Uint8Array => {
+  const bytes = new Uint8Array(26);
+  bytes[0] = 0x42;
+  bytes[1] = 0x4d;
+  const view = new DataView(bytes.buffer);
+  view.setUint32(14, 40, true);
+  view.setInt32(18, width, true);
+  view.setInt32(22, height, true);
+  return bytes;
+};
+
+/** Build a little-endian TIFF IFD with scalar width and height tags. */
+const tiffWithSize = (width: number, height: number): Uint8Array => {
+  const bytes = new Uint8Array(38);
+  bytes.set([0x49, 0x49, 0x2a, 0x00]);
+  const view = new DataView(bytes.buffer);
+  view.setUint32(4, 8, true);
+  view.setUint16(8, 2, true);
+  for (const [offset, tag, value] of [
+    [10, 256, width],
+    [22, 257, height],
+  ] as const) {
+    view.setUint16(offset, tag, true);
+    view.setUint16(offset + 2, 4, true);
+    view.setUint32(offset + 4, 1, true);
+    view.setUint32(offset + 8, value, true);
+  }
+  return bytes;
+};
+
+// Minimal extended WebP header; VP8X stores width/height minus one as uint24.
+// prettier-ignore
+const WEBP_VP8X_2X1 = new Uint8Array([
+  0x52, 0x49, 0x46, 0x46, 0x16, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50,
+  0x56, 0x50, 0x38, 0x58, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
+]);
+
 describe('internal: readImagePixelSize', () => {
   it('reads PNG dimensions from the IHDR header', () => {
     expect(readImagePixelSize(pngWithSize(200, 100))).toEqual({ width: 200, height: 100 });
@@ -65,8 +104,20 @@ describe('internal: readImagePixelSize', () => {
     expect(readImagePixelSize(JPEG_64X32)).toEqual({ width: 64, height: 32 });
   });
 
-  it('returns null for formats without a cheap header (GIF) and truncated bytes', () => {
-    expect(readImagePixelSize(GIF_HEADER)).toBeNull();
+  it('reads GIF, BMP, TIFF, WebP, and SVG dimensions', () => {
+    expect(readImagePixelSize(GIF_HEADER)).toEqual({ width: 2, height: 1 });
+    expect(readImagePixelSize(bmpWithSize(20, -10))).toEqual({ width: 20, height: 10 });
+    expect(readImagePixelSize(tiffWithSize(64, 32))).toEqual({ width: 64, height: 32 });
+    expect(readImagePixelSize(WEBP_VP8X_2X1)).toEqual({ width: 2, height: 1 });
+    expect(
+      readImagePixelSize(new TextEncoder().encode('<svg viewBox="0 0 640 320"></svg>')),
+    ).toEqual({
+      width: 640,
+      height: 320,
+    });
+  });
+
+  it('returns null for truncated or malformed bytes', () => {
     expect(readImagePixelSize(PNG_1X1.subarray(0, 20))).toBeNull();
     expect(readImagePixelSize(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]))).toBeNull();
   });
@@ -114,11 +165,11 @@ describe('fn API: addSlideImage fit option', () => {
     expect(b.h).toBe(inches(1));
   });
 
-  it("'contain' falls back to 'fill' for unmeasurable formats (GIF) without erroring", async () => {
+  it("'contain' honors a GIF's logical-screen dimensions", async () => {
     const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
     const slide = getSlides(pres)[0]!;
     const pic = addSlideImage(slide, GIF_HEADER, { ...box, fit: 'contain' });
-    expect(getShapeBounds(pic)).toEqual({ x: box.x, y: box.y, w: box.w, h: box.h });
+    expect(getShapeBounds(pic)).toEqual({ x: box.x, y: inches(1.5), w: box.w, h: inches(1) });
   });
 
   it("'contain' geometry survives save → load", async () => {
@@ -155,11 +206,11 @@ describe('fn API: setShapeImage fit option', () => {
     expect(b.y).toBe(inches(1.5));
   });
 
-  it("'contain' with an unmeasurable replacement leaves the box unchanged", async () => {
+  it("'contain' re-fits a GIF replacement from its logical-screen dimensions", async () => {
     const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
     const slide = getSlides(pres)[0]!;
     const pic = addSlideImage(slide, PNG_1X1, box);
     setShapeImage(pic, GIF_HEADER, { fit: 'contain' });
-    expect(getShapeBounds(pic)).toEqual({ x: box.x, y: box.y, w: box.w, h: box.h });
+    expect(getShapeBounds(pic)).toEqual({ x: box.x, y: inches(1.5), w: box.w, h: inches(1) });
   });
 });

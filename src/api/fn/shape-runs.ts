@@ -34,6 +34,7 @@ import { commitAndRefresh, requireTxBody } from './_helpers.ts';
 import { getPresentationTheme } from './theme.ts';
 import { getSlides } from './slide-query.ts';
 import { findCNvPr, NAME_HLINK_CLICK_FN, type ShapeClickAction } from './embedded.ts';
+import { emuCoordinate32, emuPositiveCoordinate32 } from '../../internal/bounds.ts';
 
 const NAME_TX_BODY = qname('p', 'txBody', NS.pml);
 
@@ -682,6 +683,41 @@ export const getParagraphIndent = (
     rightEmu: read('marR'),
     firstLineEmu: read('indent'),
   };
+};
+
+/**
+ * Sets paragraph left/right margins and first-line indentation in EMU.
+ * Omitted sides are preserved; `null` removes one authored attribute so it
+ * inherits again. Left/right margins are non-negative while first-line
+ * indentation may be negative for hanging-indent layouts.
+ */
+export const setParagraphIndent = (
+  shape: SlideShapeData,
+  paragraphIndex: number,
+  indent: {
+    readonly leftEmu?: number | null;
+    readonly rightEmu?: number | null;
+    readonly firstLineEmu?: number | null;
+  },
+): void => {
+  const paragraph = requireParagraph(shape, paragraphIndex);
+  const pPr = ensurePPr(paragraph);
+  const write = (
+    name: 'marL' | 'marR' | 'indent',
+    value: number | null | undefined,
+    normalize: (value: number, field: string) => number,
+  ): void => {
+    if (value === undefined) return;
+    pPr.attrs = pPr.attrs.filter(
+      (candidate) => !(candidate.name.namespaceURI === '' && candidate.name.localName === name),
+    );
+    if (value !== null)
+      pPr.attrs.push(attr(qname('', name, ''), String(normalize(value, `paragraph ${name}`))));
+  };
+  write('marL', indent.leftEmu, emuPositiveCoordinate32);
+  write('marR', indent.rightEmu, emuPositiveCoordinate32);
+  write('indent', indent.firstLineEmu, emuCoordinate32);
+  commitAndRefresh(shape);
 };
 
 /**

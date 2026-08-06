@@ -13,6 +13,7 @@ import {
   savePresentation,
   setShapeImageFill,
 } from '../src/api/index.ts';
+import { buildPng } from './lib/build-png.ts';
 
 const fixture = (name: string): string =>
   fileURLToPath(new URL(`./fixtures/minimal/${name}`, import.meta.url));
@@ -72,5 +73,39 @@ describe('fn API: setShapeImageFill', () => {
     // shape itself shouldn't carry two.
     const occurrences = xml.match(/<a:blipFill>/g)?.length ?? 0;
     expect(occurrences).toBeLessThanOrEqual(2); // depending on multiple shapes in spTree
+  });
+
+  it('supports deterministic cover and explicit crop semantics', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const shape = addSlideShape(slide, {
+      preset: 'roundRect',
+      x: inches(0.5),
+      y: inches(0.5),
+      w: inches(2),
+      h: inches(2),
+    });
+
+    setShapeImageFill(shape, buildPng(400, 200, [40, 90, 180]), {
+      format: 'png',
+      fit: 'cover',
+    });
+    let xml = await slideXml(await savePresentation(pres), 0);
+    expect(xml).toMatch(/<a:blipFill>.*?<a:srcRect l="25000" r="25000"\/>.*?<a:stretch>/s);
+
+    setShapeImageFill(shape, buildPng(400, 200, [40, 90, 180]), {
+      format: 'png',
+      crop: { left: 0.1, top: 0.2 },
+    });
+    xml = await slideXml(await savePresentation(pres), 0);
+    expect(xml).toMatch(/<a:blipFill>.*?<a:srcRect l="10000" t="20000"\/>.*?<a:stretch>/s);
+
+    setShapeImageFill(shape, buildPng(400, 200, [40, 90, 180]), {
+      format: 'png',
+      fit: 'cover',
+      crop: { left: 0.1 },
+    });
+    xml = await slideXml(await savePresentation(pres), 0);
+    expect(xml).toMatch(/<a:blipFill>.*?<a:srcRect l="30000" r="20000"\/>.*?<a:stretch>/s);
   });
 });

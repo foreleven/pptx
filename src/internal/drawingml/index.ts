@@ -55,6 +55,8 @@ export type {
 export { parseCustomGeometry } from './custom-geometry.ts';
 export { applyHyperlinkToAllRuns } from './hyperlink.ts';
 export { getPictureEmbedRId } from './picture-mutation.ts';
+export type { ImageCrop } from './image-crop.ts';
+export { buildImageSourceRectangle, coverImageCrop, croppedImageSize } from './image-crop.ts';
 export type { Position, ShapeKindForGeometry, Size } from './geometry.ts';
 export { readFlip, readPosition, readRotation, readSize } from './geometry.ts';
 export {
