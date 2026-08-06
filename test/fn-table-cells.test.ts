@@ -10,6 +10,7 @@ import {
   getSlides,
   getTableCell,
   getTableCellPosition,
+  getTableCellParagraphs,
   getTableCellText,
   getTableCells,
   inches,
@@ -19,6 +20,7 @@ import {
   setTableCellFill,
   setTableCellText,
   setTableCellTextFormat,
+  setTableCellParagraphs,
 } from '../src/api/index.ts';
 
 const fixture = (name: string): string =>
@@ -91,6 +93,42 @@ describe('fn API: table cell access', () => {
     setTableCellAlignment(getTableCell(table, 0, 0), 'center');
     const xml = await slideXml(await savePresentation(pres), 0);
     expect(xml).toMatch(/<a:pPr[^>]*algn="ctr"/);
+  });
+
+  it('setTableCellParagraphs authors ordered native runs, paragraph properties, and links', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const table = addDemoTable(slide);
+    const cell = getTableCell(table, 0, 0);
+
+    setTableCellParagraphs(cell, [
+      {
+        alignment: 'center',
+        beforePts: 4,
+        indent: { leftEmu: 12700, firstLineEmu: -6350 },
+        runs: [
+          { text: 'Revenue ', format: { bold: true, font: 'Aptos' } },
+          {
+            text: '42',
+            format: { color: '#3659E3', fontEastAsian: 'PingFang SC' },
+            hyperlink: { url: 'https://example.com', tooltip: 'Details' },
+          },
+        ],
+      },
+    ]);
+
+    expect(getTableCellText(cell)).toBe('Revenue 42');
+    expect(getTableCellParagraphs(cell)[0]).toMatchObject({
+      align: 'center',
+      elements: [
+        { kind: 'r', text: 'Revenue ', format: { bold: true, font: 'Aptos' } },
+        { kind: 'r', text: '42', format: { color: '#3659E3', fontEastAsian: 'PingFang SC' } },
+      ],
+    });
+    const xml = await slideXml(await savePresentation(pres), 0);
+    expect(xml).toMatch(/<a:pPr[^>]*algn="ctr"[^>]*marL="12700"[^>]*indent="-6350"/);
+    expect(xml).toContain('<a:spcBef><a:spcPts val="400"/></a:spcBef>');
+    expect(xml).toMatch(/<a:hlinkClick[^>]*r:id="rId\d+"[^>]*tooltip="Details"/);
   });
 
   it('clearTableCellFill removes a previously-set fill', async () => {

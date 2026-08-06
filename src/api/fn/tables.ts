@@ -3,16 +3,20 @@
 import { resolveChartPartName } from './charts.ts';
 import {
   applyAlignmentToAllParagraphs,
+  applyBulletToParagraph,
   applyFormatToAllRuns,
+  applyRunFormat,
   buildColorElement,
   clearFill as clearFillImpl,
   setSolidFill,
   setTextBody,
+  type BulletStyle,
   type TextFormat,
   type ParagraphAlignment,
 } from '../../internal/drawingml/index.ts';
 import type { Emu } from '../units.ts';
-import { buildTableCell, buildTableRow } from '../../internal/presentationml/index.ts';
+import { REL_TYPES, buildTableCell, buildTableRow } from '../../internal/presentationml/index.ts';
+import { emptyRels, nextRelId } from '../../internal/opc/index.ts';
 import {
   NS,
   type XmlElement,
@@ -30,16 +34,24 @@ import {
   CELL_ELEMENT,
   CELL_ROW,
   CELL_TABLE,
+  INTERNAL_PACKAGE,
   type PresentationData,
   SHAPE_ELEMENT,
   SHAPE_SLIDE,
   SHAPE_SNAPSHOT,
+  SLIDE_PART_NAME,
   SLIDE_SHAPES,
   type SlideData,
   type SlideShapeData,
   type TableCellData,
 } from '../_internal-symbols.ts';
-import { emuCoordinate32, emuExtent, lineWidthEmu, normalizeGuid } from '../../internal/bounds.ts';
+import {
+  emuCoordinate32,
+  emuExtent,
+  emuPositiveCoordinate32,
+  lineWidthEmu,
+  normalizeGuid,
+} from '../../internal/bounds.ts';
 import { commitSlideData, refreshSlideData } from './_helpers.ts';
 import { type ShapeParagraphElement, readParagraphElements } from './shape-runs.ts';
 import { ALIGN_TOKEN_MAP } from './shape-paragraph.ts';
@@ -62,6 +74,12 @@ const NAME_A_GRAPHIC_DATA_TBL = qname('a', 'graphicData', NS.dml);
 const NAME_A_TBL = qname('a', 'tbl', NS.dml);
 const NAME_A_TC_PR = qname('a', 'tcPr', NS.dml);
 const NAME_A_TX_BODY_TBL = qname('a', 'txBody', NS.dml);
+const NAME_A_P_TBL = qname('a', 'p', NS.dml);
+const NAME_A_PPR_TBL = qname('a', 'pPr', NS.dml);
+const NAME_A_R_TBL = qname('a', 'r', NS.dml);
+const NAME_A_RPR_TBL = qname('a', 'rPr', NS.dml);
+const NAME_A_T_TBL = qname('a', 't', NS.dml);
+const ATTR_XML_SPACE_TBL = qname('xml', 'space', NS.xml);
 
 const findTblElement = (shape: SlideShapeData): XmlElement | null => {
   if (shape[SHAPE_SNAPSHOT].kind !== 'graphicFrame') return null;
@@ -474,6 +492,206 @@ const ensureCellTcPr = (cell: TableCellData): XmlElement => {
 export const setTableCellText = (cell: TableCellData, text: string): void => {
   const txBody = ensureCellTxBody(cell);
   setTextBody(txBody, text);
+  commitTableCell(cell);
+};
+
+/** One authored run inside a table-cell paragraph. */
+export interface TableCellRunInput {
+  readonly text: string;
+  readonly format?: TextFormat;
+  readonly hyperlink?: string | { readonly url: string; readonly tooltip?: string };
+}
+
+/** Native paragraph properties supported by the table-cell rich-text writer. */
+export interface TableCellParagraphInput {
+  readonly runs: ReadonlyArray<TableCellRunInput>;
+  readonly alignment?: ParagraphAlignment;
+  readonly bullet?: BulletStyle;
+  readonly level?: number;
+  readonly lineSpacing?:
+    | { readonly kind: 'pct'; readonly value: number }
+    | { readonly kind: 'pts'; readonly value: number };
+  readonly beforePts?: number;
+  readonly afterPts?: number;
+  readonly indent?: {
+    readonly leftEmu?: number;
+    readonly rightEmu?: number;
+    readonly firstLineEmu?: number;
+  };
+}
+
+/** Translate public paragraph-alignment aliases into DrawingML tokens. */
+const tableParagraphAlignmentToken = (alignment: ParagraphAlignment): string => {
+  if (alignment === 'left') return 'l';
+  if (alignment === 'center') return 'ctr';
+  if (alignment === 'right') return 'r';
+  if (alignment === 'justify') return 'just';
+  if (alignment === 'distribute') return 'dist';
+  return alignment;
+};
+
+/** Allocate or reuse the slide relationship required by a table-cell run link. */
+const tableRunHyperlinkElement = (
+  cell: TableCellData,
+  hyperlink: string | { readonly url: string; readonly tooltip?: string },
+): XmlElement => {
+  const value = typeof hyperlink === 'string' ? { url: hyperlink } : hyperlink;
+  if (value.url.length === 0) throw new RangeError('table-cell hyperlink URL must not be empty');
+  const slide = cell[CELL_TABLE][SHAPE_SLIDE];
+  const pkg = slide[INTERNAL_PACKAGE];
+  const rels = pkg.getRels(slide[SLIDE_PART_NAME]) ?? emptyRels();
+  const existing = rels.items.find(
+    (candidate) =>
+      candidate.type === REL_TYPES.hyperlink &&
+      candidate.target === value.url &&
+      candidate.targetMode === 'External',
+  );
+  const rId = existing?.id ?? nextRelId(rels.items.map((candidate) => candidate.id));
+  if (!existing) {
+    rels.items.push({
+      id: rId,
+      type: REL_TYPES.hyperlink,
+      target: value.url,
+      targetMode: 'External',
+    });
+    pkg.setRels(slide[SLIDE_PART_NAME], rels);
+  }
+  return elem(qname('a', 'hlinkClick', NS.dml), {
+    attrs: [
+      attr(qname('r', 'id', NS.officeDocRels), rId),
+      ...(value.tooltip === undefined ? [] : [attr(qname('', 'tooltip', ''), value.tooltip)]),
+    ],
+  });
+};
+
+/** Build one schema-ordered paragraph-properties element for a table cell. */
+const buildTableParagraphProperties = (input: TableCellParagraphInput): XmlElement | null => {
+  const attrs: Array<ReturnType<typeof attr>> = [];
+  if (input.alignment !== undefined) {
+    attrs.push(attr(qname('', 'algn', ''), tableParagraphAlignmentToken(input.alignment)));
+  }
+  if (input.level !== undefined) {
+    if (!Number.isInteger(input.level) || input.level < 0 || input.level > 8) {
+      throw new RangeError(
+        `table-cell paragraph level must be an integer in [0, 8], got ${input.level}`,
+      );
+    }
+    if (input.level > 0) attrs.push(attr(qname('', 'lvl', ''), String(input.level)));
+  }
+  if (input.indent?.leftEmu !== undefined) {
+    attrs.push(
+      attr(
+        qname('', 'marL', ''),
+        String(emuPositiveCoordinate32(input.indent.leftEmu, 'table paragraph marL')),
+      ),
+    );
+  }
+  if (input.indent?.rightEmu !== undefined) {
+    attrs.push(
+      attr(
+        qname('', 'marR', ''),
+        String(emuPositiveCoordinate32(input.indent.rightEmu, 'table paragraph marR')),
+      ),
+    );
+  }
+  if (input.indent?.firstLineEmu !== undefined) {
+    attrs.push(
+      attr(
+        qname('', 'indent', ''),
+        String(emuCoordinate32(input.indent.firstLineEmu, 'table paragraph indent')),
+      ),
+    );
+  }
+  const children: XmlElement[] = [];
+  if (input.lineSpacing !== undefined) {
+    if (!Number.isFinite(input.lineSpacing.value) || input.lineSpacing.value < 0) {
+      throw new RangeError(
+        `table-cell line spacing must be non-negative, got ${input.lineSpacing.value}`,
+      );
+    }
+    const spacing =
+      input.lineSpacing.kind === 'pct'
+        ? elem(qname('a', 'spcPct', NS.dml), {
+            attrs: [
+              attr(qname('', 'val', ''), String(Math.round(input.lineSpacing.value * 100000))),
+            ],
+          })
+        : elem(qname('a', 'spcPts', NS.dml), {
+            attrs: [attr(qname('', 'val', ''), String(Math.round(input.lineSpacing.value * 100)))],
+          });
+    children.push(elem(qname('a', 'lnSpc', NS.dml), { children: [spacing] }));
+  }
+  for (const [name, value] of [
+    ['spcBef', input.beforePts],
+    ['spcAft', input.afterPts],
+  ] as const) {
+    if (value === undefined) continue;
+    if (!Number.isFinite(value) || value < 0) {
+      throw new RangeError(`table-cell ${name} must be non-negative, got ${value}`);
+    }
+    children.push(
+      elem(qname('a', name, NS.dml), {
+        children: [
+          elem(qname('a', 'spcPts', NS.dml), {
+            attrs: [attr(qname('', 'val', ''), String(Math.round(value * 100)))],
+          }),
+        ],
+      }),
+    );
+  }
+  return attrs.length > 0 || children.length > 0 || input.bullet !== undefined
+    ? elem(NAME_A_PPR_TBL, { attrs, children })
+    : null;
+};
+
+/**
+ * Replace a table cell's text with editable DrawingML paragraphs and runs.
+ * The cell body/margins remain intact; authored paragraph/run formatting and
+ * external hyperlinks are materialized directly in the cell's `<a:txBody>`.
+ */
+export const setTableCellParagraphs = (
+  cell: TableCellData,
+  paragraphs: ReadonlyArray<TableCellParagraphInput>,
+): void => {
+  if (paragraphs.length === 0)
+    throw new RangeError('setTableCellParagraphs requires at least one paragraph');
+  const txBody = ensureCellTxBody(cell);
+  const authored = paragraphs.map((input) => {
+    if (input.runs.length === 0)
+      throw new RangeError('each table-cell paragraph requires at least one run');
+    const pPr = buildTableParagraphProperties(input);
+    const runs = input.runs.map((inputRun) => {
+      let rPr: XmlElement | null =
+        inputRun.format || inputRun.hyperlink ? elem(NAME_A_RPR_TBL) : null;
+      if (rPr && inputRun.format) applyRunFormat(rPr, inputRun.format);
+      if (inputRun.hyperlink) {
+        rPr ??= elem(NAME_A_RPR_TBL);
+        rPr.children.push(tableRunHyperlinkElement(cell, inputRun.hyperlink));
+      }
+      const preserveSpace = /^\s|\s$/u.test(inputRun.text);
+      return elem(NAME_A_R_TBL, {
+        children: [
+          ...(rPr ? [rPr] : []),
+          elem(NAME_A_T_TBL, {
+            attrs: preserveSpace ? [attr(ATTR_XML_SPACE_TBL, 'preserve')] : [],
+            children: [text(inputRun.text)],
+          }),
+        ],
+      });
+    });
+    const paragraph = elem(NAME_A_P_TBL, { children: [...(pPr ? [pPr] : []), ...runs] });
+    if (input.bullet !== undefined) applyBulletToParagraph(paragraph, input.bullet);
+    return paragraph;
+  });
+  txBody.children = txBody.children.filter(
+    (child) =>
+      !(
+        child.kind === 'element' &&
+        child.name.namespaceURI === NS.dml &&
+        child.name.localName === 'p'
+      ),
+  );
+  txBody.children.push(...authored);
   commitTableCell(cell);
 };
 

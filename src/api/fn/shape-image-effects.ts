@@ -1,7 +1,12 @@
 // Picture opacity and cropping.
 import { getSlides } from './slide-query.ts';
 
-import { buildColorElement, getPictureEmbedRId } from '../../internal/drawingml/index.ts';
+import {
+  buildColorElement,
+  buildImageSourceRectangle,
+  getPictureEmbedRId,
+  type ImageCrop,
+} from '../../internal/drawingml/index.ts';
 import {
   type ImageFormat,
   detectImageFormat,
@@ -51,13 +56,6 @@ import { getSlideSize } from './features.ts';
 const NAME_ALPHA_MOD_FIX_FN = qname('a', 'alphaModFix', NS.dml);
 const ATTR_AMT_FN = qname('', 'amt', '');
 
-/**
- * Sets the picture's opacity (0–1 fraction; `1` is fully opaque, `0`
- * fully transparent). Pass `null` to remove an existing opacity
- * override and restore PowerPoint's default behavior.
- *
- * Throws for non-picture shapes and on opacities outside `[0, 1]`.
- */
 /**
  * Returns the embedded image bytes for a picture shape, or `null`
  * when the shape isn't a picture or has no `r:embed` reference
@@ -684,6 +682,13 @@ export const getShapeImageContrast = (shape: SlideShapeData): number | null =>
 export const getShapeImageBrightness = (shape: SlideShapeData): number | null =>
   getLumAttr(shape, 'bright');
 
+/**
+ * Sets the picture's opacity (0–1 fraction; `1` is fully opaque, `0`
+ * fully transparent). Pass `null` to remove an existing opacity
+ * override and restore PowerPoint's default behavior.
+ *
+ * Throws for non-picture shapes and on opacities outside `[0, 1]`.
+ */
 export const setShapeImageOpacity = (shape: SlideShapeData, opacity: number | null): void => {
   if (shape[SHAPE_SNAPSHOT].kind !== 'picture') {
     throw new Error(
@@ -720,42 +725,23 @@ export const setShapeImageOpacity = (shape: SlideShapeData, opacity: number | nu
 // ---------------------------------------------------------------------------
 // Picture cropping — `<a:srcRect>` inside the picture's `<p:blipFill>`.
 //
-// Percentages are 0-1 fractions per side, converted to ECMA-376's
-// `ST_Percentage` units (1/1000 of a percent, so 0.25 → "25000"). Pass
-// `null` to remove an existing crop.
+// Values are fractions per side, converted to ECMA-376's `ST_Percentage`
+// units (1/1000 of a percent, so 0.25 → "25000"). Positive values crop
+// inward; negative values add outset. Pass `null` to remove a crop.
 
-/** Crop a picture by fraction of each side. Omitted sides default to 0. */
-export interface ImageCrop {
-  readonly left?: number;
-  readonly top?: number;
-  readonly right?: number;
-  readonly bottom?: number;
-}
+export type { ImageCrop } from '../../internal/drawingml/index.ts';
 
 const NAME_BLIP_FILL_FN = qname('p', 'blipFill', NS.pml);
-const NAME_SRC_RECT_FN = qname('a', 'srcRect', NS.dml);
 const NAME_BLIP_FN = qname('a', 'blip', NS.dml);
-const ATTR_CROP_L = qname('', 'l', '');
-const ATTR_CROP_T = qname('', 't', '');
-const ATTR_CROP_R = qname('', 'r', '');
-const ATTR_CROP_B = qname('', 'b', '');
-
-const fractionToST = (n: number | undefined): string | null => {
-  if (n === undefined || n === 0) return null;
-  if (!Number.isFinite(n) || n < 0 || n >= 1) {
-    throw new RangeError(`crop fraction must be in [0, 1), got ${n}`);
-  }
-  return String(Math.round(n * 100000));
-};
-
 /**
  * Sets (or clears) a `<a:srcRect>` on a picture shape, cropping the
  * embedded image by the given fraction on each side. Pass `null` to
  * remove an existing crop.
  *
- * Fractions are in `[0, 1)` per side. `{ left: 0.25 }` clips 25% off
- * the left edge; the visible image stretches to fill the original
- * frame. The shape's geometry (`<a:xfrm>`) is unchanged.
+ * `{ left: 0.25 }` clips 25% off the left edge; `{ left: -0.1 }`
+ * expands 10% beyond it. Opposite sides must sum to less than 1 so the
+ * source rectangle remains non-degenerate. The resulting image stretches
+ * to fill the original frame; the shape geometry is unchanged.
  */
 export const setShapeImageCrop = (shape: SlideShapeData, crop: ImageCrop | null): void => {
   if (shape[SHAPE_SNAPSHOT].kind !== 'picture') {
@@ -778,18 +764,8 @@ export const setShapeImageCrop = (shape: SlideShapeData, crop: ImageCrop | null)
     return;
   }
 
-  const attrs: Array<ReturnType<typeof attr>> = [];
-  const l = fractionToST(crop.left);
-  const t = fractionToST(crop.top);
-  const r = fractionToST(crop.right);
-  const b = fractionToST(crop.bottom);
-  if (l !== null) attrs.push(attr(ATTR_CROP_L, l));
-  if (t !== null) attrs.push(attr(ATTR_CROP_T, t));
-  if (r !== null) attrs.push(attr(ATTR_CROP_R, r));
-  if (b !== null) attrs.push(attr(ATTR_CROP_B, b));
-
   // <a:srcRect> sits between <a:blip> and <a:stretch> per the schema.
-  const srcRect = elem(NAME_SRC_RECT_FN, { attrs });
+  const srcRect = buildImageSourceRectangle(crop);
   const blipIdx = blipFill.children.findIndex(
     (c) => c.kind === 'element' && c.name.namespaceURI === NS.dml && c.name.localName === 'blip',
   );

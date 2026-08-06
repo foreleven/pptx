@@ -1,6 +1,6 @@
 // Shape image replacement.
 
-import { getPictureEmbedRId } from '../../internal/drawingml/index.ts';
+import { coverImageCrop, getPictureEmbedRId } from '../../internal/drawingml/index.ts';
 import { readPosition, readSize, setPosition, setSize } from '../../internal/drawingml/index.ts';
 import {
   type ImageFormat,
@@ -21,6 +21,7 @@ import {
   type SlideShapeData,
 } from '../_internal-symbols.ts';
 import { commitSlideData, refreshSlideData } from './_helpers.ts';
+import { setShapeImageCrop } from './shape-image-effects.ts';
 // ---------------------------------------------------------------------------
 
 /**
@@ -30,15 +31,18 @@ import { commitSlideData, refreshSlideData } from './_helpers.ts';
  *     (the historical behavior, and the default for back-compat).
  *   - `'contain'` — scale to fit inside the box preserving aspect ratio,
  *     then center the result. The box's empty margins stay transparent.
+ *   - `'cover'` — keep the target box and center-crop the image to cover it
+ *     without distortion. When the image size is unknown, this falls back to
+ *     the same uncropped geometry as `'fill'`.
  */
-export type ImageFit = 'fill' | 'contain';
+export type ImageFit = 'fill' | 'contain' | 'cover';
 
 /**
  * Computes the placed rectangle for an image inside a `(x, y, w, h)` box.
  *
  * For `'contain'` the image is scaled by the smaller of the two axis
  * ratios so it fits entirely, then centered in the leftover space. When
- * the natural size is unknown (non-PNG/JPEG, or an unreadable header)
+ * the natural size is unknown because the supported image header is malformed
  * `naturalSize` is `null` and we fall back to `'fill'` — callers pass the
  * raw bytes; measuring is best-effort, not a hard requirement.
  */
@@ -47,7 +51,7 @@ export const fitImageRect = (
   fit: ImageFit,
   naturalSize: { width: number; height: number } | null,
 ): { x: Emu; y: Emu; w: Emu; h: Emu } => {
-  if (fit === 'fill' || naturalSize === null) return box;
+  if (fit !== 'contain' || naturalSize === null) return box;
   const scale = Math.min(box.w / naturalSize.width, box.h / naturalSize.height);
   const w = Math.round(naturalSize.width * scale);
   const h = Math.round(naturalSize.height * scale);
@@ -59,13 +63,15 @@ export const fitImageRect = (
 /**
  * Replaces a picture's media with `bytes`. Same-format replacements
  * write in place; cross-format replacements allocate a new media part
- * and repoint the rel. The geometry — crop, transform — is preserved.
+ * and repoint the rel. The geometry and transform are preserved by default.
  *
  * Pass `options.fit: 'contain'` to re-fit the picture's extent to the
  * replacement image's aspect ratio, inscribed and centered in the shape's
  * current `(off, ext)` box. The default `'fill'` leaves the extent as-is
  * (the historical behavior). When the new image's natural size can't be
- * measured (non-PNG/JPEG), `'contain'` is a no-op rather than an error.
+ * measured from its header, `'contain'` is a no-op rather than an error.
+ * Pass `'cover'` to keep the current extent and replace any existing crop with
+ * a centered crop computed from the new image; unknown natural size clears it.
  */
 export const setShapeImage = (
   shape: SlideShapeData,
@@ -148,5 +154,13 @@ export const setShapeImage = (
       commitSlideData(slide);
       refreshSlideData(slide);
     }
+  } else if (options.fit === 'cover') {
+    const size = readSize(shape[SHAPE_ELEMENT], 'picture');
+    const natural = readImagePixelSize(bytes);
+    const crop =
+      size !== null && natural !== null
+        ? coverImageCrop({ width: size.w, height: size.h }, natural)
+        : null;
+    setShapeImageCrop(shape, crop);
   }
 };

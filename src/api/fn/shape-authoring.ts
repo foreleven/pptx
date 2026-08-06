@@ -2,6 +2,11 @@
 
 import type { Emu } from '../units.ts';
 import {
+  coverImageCrop,
+  croppedImageSize,
+  type ImageCrop,
+} from '../../internal/drawingml/index.ts';
+import {
   contentTypeForFormat,
   detectImageFormat,
   emptyRels,
@@ -170,14 +175,26 @@ export const addSlideTable = (
  * `opts.fit` controls how the image fills the `w × h` box. `'fill'` (the
  * default) stretches to the exact box, ignoring aspect ratio. `'contain'`
  * scales the image to fit inside the box preserving its aspect ratio and
- * centers it — measured from the PNG / JPEG header. For other formats (or
- * an unreadable header) `'contain'` falls back to `'fill'` rather than
- * erroring, since the natural size is unknown.
+ * centers it using the supported image header. For malformed headers,
+ * `'contain'` falls back to `'fill'` rather than erroring. `'cover'` preserves the box
+ * and center-crops a measurable image to fill it without distortion; unknown
+ * natural size falls back to the uncropped `'fill'` geometry.
+ * `opts.crop` is applied to the source first, including negative outset values;
+ * contain/cover then fit that remaining source region into the authored box.
  */
 export const addSlideImage = (
   slide: SlideData,
   bytes: Uint8Array,
-  opts: { x: Emu; y: Emu; w: Emu; h: Emu; format?: ImageFormat; name?: string; fit?: ImageFit },
+  opts: {
+    x: Emu;
+    y: Emu;
+    w: Emu;
+    h: Emu;
+    format?: ImageFormat;
+    name?: string;
+    fit?: ImageFit;
+    crop?: ImageCrop | null;
+  },
 ): SlideShapeData => {
   const pkg = slide[INTERNAL_PACKAGE];
   const format = opts.format ?? detectImageFormat(bytes);
@@ -216,11 +233,17 @@ export const addSlideImage = (
   });
   pkg.setRels(slide[SLIDE_PART_NAME], rels);
 
+  const naturalSize = readImagePixelSize(bytes);
+  const fittedNaturalSize = naturalSize ? croppedImageSize(naturalSize, opts.crop ?? null) : null;
   const rect = fitImageRect(
     { x: opts.x, y: opts.y, w: opts.w, h: opts.h },
     opts.fit ?? 'fill',
-    readImagePixelSize(bytes),
+    fittedNaturalSize,
   );
+  const crop =
+    opts.fit === 'cover' && naturalSize !== null
+      ? coverImageCrop({ width: opts.w, height: opts.h }, naturalSize, opts.crop ?? null)
+      : (opts.crop ?? null);
   const pic = buildPicture({
     id: nextShapeId(slide),
     ...(opts.name !== undefined ? { name: opts.name } : {}),
@@ -229,6 +252,7 @@ export const addSlideImage = (
     y: rect.y,
     w: rect.w,
     h: rect.h,
+    ...(crop ? { crop } : {}),
   });
   return appendAndReturnNewShape(slide, pic);
 };

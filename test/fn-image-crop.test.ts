@@ -68,11 +68,12 @@ describe('fn API: setShapeImageCrop', () => {
     expect(() => setShapeImageCrop(textShape, { left: 0.1 })).toThrow(/picture/);
   });
 
-  it('rejects out-of-range fractions', async () => {
+  it('accepts negative outset and rejects a degenerate source rectangle', async () => {
     const pres = await loadPresentation(await readFile(fixture('one-image-slide.pptx')));
     const slide = getSlides(pres)[0]!;
     const picture = getSlideShapes(slide).find((s) => getShapeKind(s) === 'picture')!;
     expect(() => setShapeImageCrop(picture, { left: 1.5 })).toThrow();
-    expect(() => setShapeImageCrop(picture, { top: -0.1 })).toThrow();
+    setShapeImageCrop(picture, { top: -0.1 });
+    expect(await slideXml(await savePresentation(pres), 0)).toContain('t="-10000"');
   });
 });
