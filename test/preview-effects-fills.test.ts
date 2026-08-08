@@ -25,6 +25,7 @@ import {
 } from '@office-kit/pptx';
 import { type ZipEntry, readZip, writeZip } from '../src/internal/opc/index.ts';
 import { renderSlideToSvg } from '../packages/preview/src/index.ts';
+import { renderSlideToRgba } from '../packages/preview/src/node.ts';
 
 const fixturePath = fileURLToPath(new URL('./fixtures/minimal/blank.pptx', import.meta.url));
 
@@ -50,13 +51,29 @@ const slideEntryName = (entries: readonly ZipEntry[]): string => {
   return e.name;
 };
 
+const groupContentByAttribute = (svg: string, attribute: string): string => {
+  const attributeIndex = svg.indexOf(attribute);
+  if (attributeIndex < 0) return '';
+  const groupStart = svg.lastIndexOf('<g', attributeIndex);
+  const bodyStart = svg.indexOf('>', attributeIndex) + 1;
+  if (groupStart < 0 || bodyStart === 0) return '';
+  const tag = /<g\b[^>]*>|<\/g>/g;
+  tag.lastIndex = bodyStart;
+  let depth = 1;
+  for (let match = tag.exec(svg); match; match = tag.exec(svg)) {
+    depth += match[0].startsWith('</') ? -1 : 1;
+    if (depth === 0) return svg.slice(bodyStart, match.index);
+  }
+  return '';
+};
+
 describe('renderSlideToSvg: reflection effect', () => {
   // A standard PowerPoint "tight reflection": 50% near alpha, ~0% far alpha,
   // a full-height mirror (sy = -100%), pushed down by `dist`.
   const REFLECTION =
     '<a:effectLst><a:reflection blurRad="6350" stA="50000" stPos="0" endA="300" endPos="55000" dist="50800" dir="5400000" sy="-100000" algn="bl" rotWithShape="0"/></a:effectLst>';
 
-  const renderWithReflection = async (): Promise<string> => {
+  const buildReflectionFixture = async () => {
     const pres = await loadPresentation(await readFile(fixturePath));
     const layout = findSlideLayout(pres, 'Blank');
     if (!layout) throw new Error('Blank layout missing');
@@ -67,6 +84,7 @@ describe('renderSlideToSvg: reflection effect', () => {
       y: inches(1),
       w: inches(2),
       h: inches(2),
+      text: 'Reflect me',
     });
     setShapeFill(rect, '#3366CC');
     const { entries } = readZip(await savePresentation(pres));
@@ -78,7 +96,12 @@ describe('renderSlideToSvg: reflection effect', () => {
       ),
     );
     const reloaded = await loadPresentation(writeZip(modified));
-    return renderSlideToSvg(reloaded, getSlides(reloaded).at(-1)!, { textLayout: 'svg' });
+    return { pres: reloaded, slide: getSlides(reloaded).at(-1)! };
+  };
+
+  const renderWithReflection = async (): Promise<string> => {
+    const { pres, slide } = await buildReflectionFixture();
+    return renderSlideToSvg(pres, slide, { textLayout: 'svg' });
   };
 
   it('emits a vertically flipped, masked copy of the shape geometry', async () => {
@@ -97,8 +120,39 @@ describe('renderSlideToSvg: reflection effect', () => {
     // stA 50000 → 0.5 at the contact edge; endA 300 → ~0 at the far edge.
     expect(grad).toContain('stop-opacity="0.500"');
     expect(grad).toContain('stop-opacity="0.003"');
-    // The contact-edge stop is the more opaque one (offset 0).
-    expect(grad).toMatch(/offset="0"[^>]*stop-opacity="0\.500"/);
+    // The reflection group's negative Y scale flips its local mask axis, so
+    // the contact-edge alpha is stored at offset 1 and renders at the top.
+    expect(grad).toMatch(/offset="1"[^>]*stop-opacity="0\.500"/);
+  });
+
+  it('applies the authored blur radius to the reflected copy', async () => {
+    const svg = await renderWithReflection();
+    expect(svg).toContain('<feGaussianBlur stdDeviation="0.33"/>');
+    expect(svg).toMatch(/filter="url\(#[^)]+\)"[^>]*data-pptx-reflection="1"/);
+  });
+
+  it('mirrors the shape text together with its geometry', async () => {
+    const svg = await renderWithReflection();
+    const reflectedContent = groupContentByAttribute(svg, 'data-pptx-reflection="1"');
+    expect(reflectedContent).toContain('Reflect me');
+  });
+
+  it('renders the reflected fill darker at the top than at the bottom', async () => {
+    const { pres, slide } = await buildReflectionFixture();
+    const { image } = renderSlideToRgba(pres, slide, { width: 960 });
+    // The 10-inch-wide fixture renders at 96 px/in. Sample away from the
+    // mirrored text and rounded/blurred edges: the reflection starts just
+    // below y=288 and runs to about y=485.
+    const blueStrengthAt = (x: number, y: number): number => {
+      const offset = (y * image.width + x) * 4;
+      const r = image.data[offset] ?? 255;
+      const g = image.data[offset + 1] ?? 255;
+      const b = image.data[offset + 2] ?? 255;
+      return 255 - r + (255 - g) + (255 - b);
+    };
+    const nearEdgeStrength = blueStrengthAt(110, 315);
+    const farEdgeStrength = blueStrengthAt(110, 455);
+    expect(nearEdgeStrength).toBeGreaterThan(farEdgeStrength * 2);
   });
 });
 

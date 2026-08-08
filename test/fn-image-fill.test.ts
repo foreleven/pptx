@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   addSlideShape,
   getMediaParts,
+  getShapeImageCrop,
   getSlideXmlString,
   getSlides,
   inches,
@@ -97,6 +98,7 @@ describe('fn API: setShapeImageFill', () => {
       format: 'png',
       crop: { left: 0.1, top: 0.2 },
     });
+    expect(getShapeImageCrop(shape)).toEqual({ left: 0.1, top: 0.2, right: 0, bottom: 0 });
     xml = await slideXml(await savePresentation(pres), 0);
     expect(xml).toMatch(/<a:blipFill>.*?<a:srcRect l="10000" t="20000"\/>.*?<a:stretch>/s);
 

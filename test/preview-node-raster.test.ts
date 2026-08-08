@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   addSlide,
+  addSlideImage,
   addSlideShape,
   addSlideTextBox,
   findSlideLayout,
@@ -16,9 +17,13 @@ import {
   inches,
   loadPresentation,
   setShapeFill,
+  setShapeImageBiLevel,
+  setShapeImageFill,
   setShapeRunFormat,
+  setShapeStroke,
 } from '../src/api/index.ts';
 import { renderSlideToImage, renderSlideToRgba } from '../packages/preview/src/node.ts';
+import { buildPng } from './lib/build-png.ts';
 
 const fixturePath = fileURLToPath(new URL('./fixtures/minimal/blank.pptx', import.meta.url));
 
@@ -86,6 +91,50 @@ describe('renderSlideToRgba (Node)', () => {
       }
     }
     expect(nonWhite).toBeGreaterThan(0);
+  });
+
+  it('paints an image-filled roundRect inside its geometry', async () => {
+    const pres = await loadPresentation(await readFile(fixturePath));
+    const layout = findSlideLayout(pres, 'Blank');
+    if (!layout) throw new Error('Blank layout not found');
+    const slide = addSlide(pres, { layout });
+    const shape = addSlideShape(slide, {
+      preset: 'roundRect',
+      x: inches(1),
+      y: inches(1),
+      w: inches(2),
+      h: inches(1),
+    });
+    setShapeImageFill(shape, buildPng(8, 4, [38, 52, 82]), { format: 'png' });
+    setShapeStroke(shape, { color: '#35B9C6', widthEmu: 19_050 });
+
+    const { image } = renderSlideToRgba(pres, slide, { width: 320 });
+    const centerX = 64;
+    const centerY = 48;
+    const offset = (centerY * image.width + centerX) * 4;
+    expect([...image.data.slice(offset, offset + 4)]).toEqual([38, 52, 82, 255]);
+  });
+
+  it('applies bi-level threshold to luminance instead of individual RGB channels', async () => {
+    const pres = await loadPresentation(await readFile(fixturePath));
+    const layout = findSlideLayout(pres, 'Blank');
+    if (!layout) throw new Error('Blank layout not found');
+    const slide = addSlide(pres, { layout });
+    const picture = addSlideImage(slide, buildPng(8, 4, [242, 107, 91]), {
+      x: inches(1),
+      y: inches(1),
+      w: inches(2),
+      h: inches(1),
+      format: 'png',
+    });
+    setShapeImageBiLevel(picture, 0.65);
+
+    const { image } = renderSlideToRgba(pres, slide, { width: 320 });
+    const offset = (48 * image.width + 64) * 4;
+    const pixel = [...image.data.slice(offset, offset + 4)];
+    // Coral has luminance below 65%, so DrawingML biLevel maps it to black.
+    // Per-channel thresholding would incorrectly preserve it as bright red.
+    expect(pixel).toEqual([0, 0, 0, 255]);
   });
 
   it('render is byte-identical when called twice (determinism)', async () => {
