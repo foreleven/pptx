@@ -316,7 +316,7 @@ const seriesElement = (spec: ChartSpec, seriesIdx: number, sheet: string): XmlEl
   for (const dPt of dPtElements(series.pointColors, series.pointExplosions)) {
     children.push(dPt);
   }
-  const serDLbls = buildDLblsFromLabels(series.dataLabels);
+  const serDLbls = buildDLblsFromLabels(series.dataLabels, spec.kind);
   if (serDLbls !== null) children.push(serDLbls);
   // <c:trendline> exists on CT_BarSer/LineSer/AreaSer/ScatterSer/BubbleSer but
   // NOT on CT_PieSer (pie/doughnut) or CT_RadarSer — emitting it there is
@@ -523,7 +523,10 @@ const valAxis = (spec: ChartSpec): XmlElement => {
 // showSerName / showPercent toggles plus optional numFmt, position,
 // separator). Returns `null` when no dataLabels were authored so
 // callers know to skip the element entirely.
-const buildDLblsFromLabels = (dl: ChartSpec['dataLabels'] | undefined): XmlElement | null => {
+const buildDLblsFromLabels = (
+  dl: ChartSpec['dataLabels'] | undefined,
+  kind: ChartSpec['kind'],
+): XmlElement | null => {
   if (!dl) return null;
   const children: XmlElement[] = [];
   if (dl.numberFormat !== undefined) {
@@ -542,7 +545,12 @@ const buildDLblsFromLabels = (dl: ChartSpec['dataLabels'] | undefined): XmlEleme
     const txPr = axisTxPrElement(dl.textStyle, undefined);
     if (txPr !== null) children.push(txPr);
   }
-  if (dl.position !== undefined) children.push(valNode(c('dLblPos'), dl.position));
+  // PowerPoint repairs doughnut charts that carry <c:dLblPos>, even though
+  // CT_DLbls permits the shared element and the XML passes ECMA-376 XSD
+  // validation. Let PowerPoint choose its native doughnut label placement.
+  if (dl.position !== undefined && kind !== 'doughnut') {
+    children.push(valNode(c('dLblPos'), dl.position));
+  }
   children.push(
     valNode(c('showLegendKey'), '0'),
     valNode(c('showVal'), dl.showValue ? '1' : '0'),
@@ -557,7 +565,8 @@ const buildDLblsFromLabels = (dl: ChartSpec['dataLabels'] | undefined): XmlEleme
   return elem(c('dLbls'), { children });
 };
 
-const dLblsElement = (spec: ChartSpec): XmlElement | null => buildDLblsFromLabels(spec.dataLabels);
+const dLblsElement = (spec: ChartSpec): XmlElement | null =>
+  buildDLblsFromLabels(spec.dataLabels, spec.kind);
 
 const buildBarChart = (spec: ChartSpec, sheet: string, direction: 'col' | 'bar'): XmlElement => {
   const ser = spec.series.map((_, i) => seriesElement(spec, i, sheet));

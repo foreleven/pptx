@@ -154,6 +154,39 @@ describe('fn API: addSlideChart', () => {
     expect(chartStr).toContain('<c:holeSize');
   });
 
+  it('omits data-label positions for doughnut charts but keeps them for pie charts', async () => {
+    const chartXmlFor = async (kind: 'pie' | 'doughnut'): Promise<string> => {
+      const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+      addSlideChart(getSlides(pres)[0]!, {
+        x: inches(0),
+        y: inches(0),
+        w: inches(5),
+        h: inches(3),
+        spec: {
+          kind,
+          categories: ['A', 'B', 'C'],
+          series: [
+            {
+              name: 'Share',
+              values: [50, 30, 20],
+              dataLabels: { showValue: true, position: 'bestFit' },
+            },
+          ],
+          dataLabels: { showPercent: true, position: 'bestFit' },
+        },
+      });
+      const chartBytes = await partBytes(await savePresentation(pres), '/ppt/charts/chart1.xml');
+      return new TextDecoder().decode(chartBytes!);
+    };
+
+    const pieXml = await chartXmlFor('pie');
+    expect(pieXml.match(/<c:dLblPos val="bestFit"\/>/g)).toHaveLength(2);
+
+    const doughnutXml = await chartXmlFor('doughnut');
+    expect(doughnutXml).toContain('<c:dLbls>');
+    expect(doughnutXml).not.toContain('<c:dLblPos');
+  });
+
   it('area chart uses areaChart element with axes', async () => {
     const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
     const slide = getSlides(pres)[0]!;
