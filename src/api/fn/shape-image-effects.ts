@@ -475,13 +475,19 @@ export const getShapeImageOpacity = (shape: SlideShapeData): number | null => {
 };
 
 /**
- * Reads the picture's crop fractions. Returns `null` when no
- * `<a:srcRect>` is present; otherwise returns a fully-populated object
- * with every side filled in (0 for omitted sides on disk).
+ * Reads the crop fractions for a picture or a regular shape's image fill.
+ * Returns `null` when no `<a:srcRect>` is present; otherwise returns a
+ * fully-populated object with every side filled in (0 for omitted sides on
+ * disk).
  */
 export const getShapeImageCrop = (shape: SlideShapeData): ImageCrop | null => {
-  if (shape[SHAPE_SNAPSHOT].kind !== 'picture') return null;
-  const blipFill = firstChildElement(shape[SHAPE_ELEMENT], qname('p', 'blipFill', NS.pml));
+  let blipFill: XmlElement | null = null;
+  if (shape[SHAPE_SNAPSHOT].kind === 'picture') {
+    blipFill = firstChildElement(shape[SHAPE_ELEMENT], qname('p', 'blipFill', NS.pml));
+  } else {
+    const spPr = firstChildElement(shape[SHAPE_ELEMENT], qname('p', 'spPr', NS.pml));
+    if (spPr) blipFill = firstChildElement(spPr, qname('a', 'blipFill', NS.dml));
+  }
   if (!blipFill) return null;
   const srcRect = firstChildElement(blipFill, qname('a', 'srcRect', NS.dml));
   if (!srcRect) return null;

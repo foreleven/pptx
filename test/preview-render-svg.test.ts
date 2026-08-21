@@ -27,9 +27,12 @@ import {
   setShapeFlip,
   setShapeGradientFill,
   setShapeHyperlink,
+  setShapeImageContrast,
+  setShapeImageFill,
   setShapePatternFill,
   setShapeRotation,
   setShapeRunFormat,
+  setShapeStroke,
   setShapeStrokeArrow,
   setShapeText,
 } from '../src/api/index.ts';
@@ -249,6 +252,56 @@ describe('renderSlideToSvg', () => {
       (a['href'] ?? a['xlink:href'] ?? '').startsWith('data:'),
     );
     expect(hasDataUrl).toBe(true);
+  });
+
+  it('picture contrast uses the OOXML delta around the normal 1.0 slope', async () => {
+    const { pres, slide } = await blankSlide();
+    const picture = addSlideImage(slide, buildPng(4, 4, [242, 107, 91]), {
+      x: inches(1),
+      y: inches(1),
+      w: inches(2),
+      h: inches(2),
+    });
+    setShapeImageContrast(picture, 0.08);
+
+    const svg = renderSlideToSvg(pres, slide);
+    expect(svg).toContain('color-interpolation-filters="sRGB"');
+    expect(svg).toContain('slope="1.08" intercept="-0.04"');
+    expect(svg).not.toContain('slope="0.08"');
+  });
+
+  it('image-filled roundRect clips to its geometry, keeps crop, and paints its stroke', async () => {
+    const { pres, slide } = await blankSlide();
+    const shape = addSlideShape(slide, {
+      preset: 'roundRect',
+      x: inches(1),
+      y: inches(1),
+      w: inches(2),
+      h: inches(1),
+    });
+    setShapeImageFill(shape, buildPng(8, 4, [38, 52, 82]), {
+      format: 'png',
+      crop: { left: 0.1, right: 0.1 },
+    });
+    setShapeStroke(shape, { color: '#35B9C6', widthEmu: 19_050 });
+
+    const svg = renderSlideToSvg(pres, slide);
+    expect(attrsOf(svg, 'pattern')).toHaveLength(0);
+    expect(attrsOf(svg, 'clipPath')).toHaveLength(2);
+    const filledImage = attrsOf(svg, 'image').find((attrs) => attrs.x === '72.00');
+    expect(filledImage).toMatchObject({
+      y: '96.00',
+      width: '240.00',
+      height: '96.00',
+    });
+    const roundedGeometry = attrsOf(svg, 'rect').find(
+      (attrs) => attrs.rx !== undefined && attrs.stroke === '#35B9C6',
+    );
+    expect(roundedGeometry).toMatchObject({
+      fill: 'none',
+      stroke: '#35B9C6',
+      'stroke-width': '2.00',
+    });
   });
 
   it('addSlideTable: emits cell rects for every cell in the grid', async () => {

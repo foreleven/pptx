@@ -316,7 +316,9 @@ const renderPicture = (
       clipAttr = ` clip-path="url(#${clipId})"`;
     }
     const brightness = getShapeImageBrightness(shape) ?? 0;
-    const contrast = getShapeImageContrast(shape) ?? 1;
+    // OOXML stores contrast as a delta from normal in [-1, 1], where 0 is
+    // identity. SVG feComponentTransfer expects the absolute linear slope.
+    const contrast = getShapeImageContrast(shape) ?? 0;
     const opacity = getShapeImageOpacity(shape) ?? 1;
     const grayscale = isShapeImageGrayscale(shape);
     const biLevel = getShapeImageBiLevelThreshold(shape);
@@ -324,7 +326,7 @@ const renderPicture = (
     let filterAttr = '';
     if (
       brightness !== 0 ||
-      contrast !== 1 ||
+      contrast !== 0 ||
       grayscale ||
       biLevel !== null ||
       (duotone && (duotone.firstColor || duotone.secondColor))
@@ -334,9 +336,13 @@ const renderPicture = (
       // (discrete table that snaps each channel to 0 or 1 at thresh).
       const fid = mintId();
       const prims: string[] = [];
-      if (brightness !== 0 || contrast !== 1) {
+      if (brightness !== 0 || contrast !== 0) {
+        // Expand/compress around the channel midpoint, then apply the additive
+        // brightness offset: 0.5 + (v - 0.5) * (1 + contrast) + brightness.
+        const slope = 1 + contrast;
+        const intercept = brightness - contrast / 2;
         prims.push(
-          `<feComponentTransfer><feFuncR type="linear" slope="${contrast}" intercept="${brightness}"/><feFuncG type="linear" slope="${contrast}" intercept="${brightness}"/><feFuncB type="linear" slope="${contrast}" intercept="${brightness}"/></feComponentTransfer>`,
+          `<feComponentTransfer><feFuncR type="linear" slope="${slope}" intercept="${intercept}"/><feFuncG type="linear" slope="${slope}" intercept="${intercept}"/><feFuncB type="linear" slope="${slope}" intercept="${intercept}"/></feComponentTransfer>`,
         );
       }
       if (grayscale) {
@@ -369,8 +375,12 @@ const renderPicture = (
       }
       if (biLevel !== null) {
         const t = biLevel / 100;
-        // discrete tables snap channels to 0 below `t` and to 1 at/above.
-        const table = `0 1`;
+        // DrawingML biLevel thresholds the image luminance, producing only
+        // achromatic black or white. Thresholding R/G/B independently would
+        // incorrectly preserve saturated source colors (for example red).
+        prims.push(
+          `<feColorMatrix type="matrix" values="0.2126 0.7152 0.0722 0 0  0.2126 0.7152 0.0722 0 0  0.2126 0.7152 0.0722 0 0  0 0 0 1 0"/>`,
+        );
         // Use a step function: tableValues with 2 entries split at thresh.
         // feFuncR/G/B with type=discrete + 2-entry table snaps at the midpoint;
         // for an arbitrary threshold we shift via tableValues with more samples.
@@ -379,13 +389,14 @@ const renderPicture = (
         for (let i = 0; i < steps; i++) {
           vals.push(i / (steps - 1) >= t ? '1' : '0');
         }
-        void table;
         const tableStr = vals.join(' ');
         prims.push(
           `<feComponentTransfer><feFuncR type="discrete" tableValues="${tableStr}"/><feFuncG type="discrete" tableValues="${tableStr}"/><feFuncB type="discrete" tableValues="${tableStr}"/></feComponentTransfer>`,
         );
       }
-      clipDef += `<defs><filter id="${fid}">${prims.join('')}</filter></defs>`;
+      // PowerPoint applies the correction to encoded sRGB channels. SVG
+      // filters default to linearRGB, which visibly shifts saturated colors.
+      clipDef += `<defs><filter id="${fid}" color-interpolation-filters="sRGB">${prims.join('')}</filter></defs>`;
       filterAttr = ` filter="url(#${fid})"`;
     }
     const opacityAttr = opacity !== 1 ? ` opacity="${opacity.toFixed(3)}"` : '';
@@ -5872,25 +5883,6 @@ const renderShape = (
     );
   }
 
-  // Shapes with an image fill (`<p:sp>` + `<a:blipFill>` instead of a
-  // solid / gradient / pattern). PowerPoint's "Insert Picture from
-  // File" and several third-party tools emit pictures this way rather
-  // than as top-level `<p:pic>`.
-  if (kind === 'shape' && fill.kind === 'image') {
-    return renderPicture(
-      shape,
-      pres,
-      x,
-      y,
-      w,
-      h,
-      transform,
-      textOverlay,
-      getShapeImageFillBytes(shape),
-      getShapeImageFormat(shape),
-    );
-  }
-
   if (kind === 'connector') {
     const p = paint(shape, fill, stroke, theme, false, pres);
     const sw = p.strokeWidth || 19_050;
@@ -6035,7 +6027,9 @@ const renderShape = (
     return `<g${groupTransform}>${childrenSvg}</g>`;
   }
 
-  const p = paint(shape, fill, stroke, theme, phType !== null, pres);
+  let p = paint(shape, fill, stroke, theme, phType !== null, pres);
+  const hasImageFill = kind === 'shape' && fill.kind === 'image';
+  if (hasImageFill) p = { ...p, fill: 'none' };
 
   if (kind === 'graphicFrame') {
     // Charts and tables get real renders. SmartArt and the
@@ -6077,56 +6071,96 @@ const renderShape = (
   // Custom geometry (<a:custGeom>) overrides the preset path entirely.
   // getShapePreset returns null for it, so only the no-preset case probes.
   const customGeom = rawPreset === null ? getShapeCustomGeometry(shape) : null;
-  let geomSvg =
-    customGeom !== null
-      ? customGeometryToSvg(customGeom, x, y, w, h, p.fill, p.stroke, p.strokeWidth, sa, ma)
-      : '';
-  // No preset and no rendered custom geometry means either a custGeom that
-  // failed to evaluate (a true fallback — marked) or no geometry at all
-  // (placeholders inherit theirs from the layout, which is almost always a
-  // rect — correct, not marked). The string probe distinguishes the two
-  // because getShapeCustomGeometry returns null for both malformed custGeom
-  // and absent custGeom.
-  const isCustGeom =
-    geomSvg === '' && rawPreset === null && getShapeXmlString(shape).includes('custGeom');
-
-  if (geomSvg !== '') {
-    // geomSvg already holds the rendered custom geometry.
-  } else if (preset === 'rect') {
-    geomSvg = `<rect x="${E(x)}" y="${E(y)}" width="${E(w)}" height="${E(h)}" fill="${p.fill}" stroke="${p.stroke}" stroke-width="${E(p.strokeWidth)}"${sa}${ma}/>`;
-  } else if (preset === 'roundRect') {
-    // A6 — adjust-handle aware corner radius. <a:gd name="adj"
-    // fmla="val N"/> in [0, 50000] = ratio of corner-radius to
-    // min(w,h)/2 × 100. Defaults to ~16.6% when no adj is authored.
-    const adjusts = getShapeAdjustValues(shape);
-    const adjVal = adjusts.adj ?? 16667;
-    const ratio = Math.max(0, Math.min(0.5, adjVal / 100_000));
-    const r = E(Math.min(w, h) * ratio);
-    geomSvg = `<rect x="${E(x)}" y="${E(y)}" width="${E(w)}" height="${E(h)}" rx="${r}" ry="${r}" fill="${p.fill}" stroke="${p.stroke}" stroke-width="${E(p.strokeWidth)}"${sa}${ma}/>`;
-  } else if (preset === 'ellipse' || preset === 'oval') {
-    geomSvg = `<ellipse cx="${E(cx)}" cy="${E(cy)}" rx="${E(w / 2)}" ry="${E(h / 2)}" fill="${p.fill}" stroke="${p.stroke}" stroke-width="${E(p.strokeWidth)}"${sa}${ma}/>`;
-  } else {
+  const renderGeometry = (
+    geometryFill: string,
+    geometryStroke: string,
+    geometryStrokeWidth: number,
+    geometryStrokeAttrs: string,
+    geometryMarkerAttrs: string,
+  ): string => {
+    if (customGeom !== null) {
+      return customGeometryToSvg(
+        customGeom,
+        x,
+        y,
+        w,
+        h,
+        geometryFill,
+        geometryStroke,
+        geometryStrokeWidth,
+        geometryStrokeAttrs,
+        geometryMarkerAttrs,
+      );
+    }
+    if (preset === 'rect') {
+      return `<rect x="${E(x)}" y="${E(y)}" width="${E(w)}" height="${E(h)}" fill="${geometryFill}" stroke="${geometryStroke}" stroke-width="${E(geometryStrokeWidth)}"${geometryStrokeAttrs}${geometryMarkerAttrs}/>`;
+    }
+    if (preset === 'roundRect') {
+      // A6 — adjust-handle aware corner radius. <a:gd name="adj"
+      // fmla="val N"/> in [0, 50000] = ratio of corner-radius to
+      // min(w,h)/2 × 100. Defaults to ~16.6% when no adj is authored.
+      const adjusts = getShapeAdjustValues(shape);
+      const adjVal = adjusts.adj ?? 16667;
+      const ratio = Math.max(0, Math.min(0.5, adjVal / 100_000));
+      const r = E(Math.min(w, h) * ratio);
+      return `<rect x="${E(x)}" y="${E(y)}" width="${E(w)}" height="${E(h)}" rx="${r}" ry="${r}" fill="${geometryFill}" stroke="${geometryStroke}" stroke-width="${E(geometryStrokeWidth)}"${geometryStrokeAttrs}${geometryMarkerAttrs}/>`;
+    }
+    if (preset === 'ellipse' || preset === 'oval') {
+      return `<ellipse cx="${E(cx)}" cy="${E(cy)}" rx="${E(w / 2)}" ry="${E(h / 2)}" fill="${geometryFill}" stroke="${geometryStroke}" stroke-width="${E(geometryStrokeWidth)}"${geometryStrokeAttrs}${geometryMarkerAttrs}/>`;
+    }
     const pathFn = PRESET_PATHS[preset];
     if (pathFn) {
       // The path generators output CSS-px coords directly (post-E).
       const d = pathFn(x / EMU_PER_PX, y / EMU_PER_PX, w / EMU_PER_PX, h / EMU_PER_PX);
-      geomSvg = `<path d="${d}" fill="${p.fill}" stroke="${p.stroke}" stroke-width="${E(p.strokeWidth)}" fill-rule="evenodd"${sa}${ma}/>`;
-    } else {
-      const pointsFn = PRESET_POINTS[preset];
-      if (pointsFn) {
-        const points = pointsFn(w / EMU_PER_PX, h / EMU_PER_PX)
-          .map(([nx, ny]) => `${E(x + nx * w)},${E(y + ny * h)}`)
-          .join(' ');
-        geomSvg = `<polygon points="${points}" fill="${p.fill}" stroke="${p.stroke}" stroke-width="${E(p.strokeWidth)}"${sa}${ma}/>`;
-      } else {
-        // Unrecognised preset — fall back to a rectangle, but tag it
-        // with the preset name so users (and future-us) can see which
-        // shape needs a renderer. The `<title>` shows on hover; the
-        // `data-pptx-preset` attribute is for DevTools inspection.
-        geomSvg = `<rect x="${E(x)}" y="${E(y)}" width="${E(w)}" height="${E(h)}" fill="${p.fill}" stroke="${p.stroke}" stroke-width="${E(p.strokeWidth)}"${sa}${ma} data-pptx-preset="${escapeXml(preset)}"><title>${escapeXml(`preset: ${preset}`)}</title></rect>`;
-      }
+      return `<path d="${d}" fill="${geometryFill}" stroke="${geometryStroke}" stroke-width="${E(geometryStrokeWidth)}" fill-rule="evenodd"${geometryStrokeAttrs}${geometryMarkerAttrs}/>`;
     }
+    const pointsFn = PRESET_POINTS[preset];
+    if (pointsFn) {
+      const points = pointsFn(w / EMU_PER_PX, h / EMU_PER_PX)
+        .map(([nx, ny]) => `${E(x + nx * w)},${E(y + ny * h)}`)
+        .join(' ');
+      return `<polygon points="${points}" fill="${geometryFill}" stroke="${geometryStroke}" stroke-width="${E(geometryStrokeWidth)}"${geometryStrokeAttrs}${geometryMarkerAttrs}/>`;
+    }
+    // Unrecognised preset — fall back to a rectangle, but tag it
+    // with the preset name so users (and future-us) can see which
+    // shape needs a renderer. The `<title>` shows on hover; the
+    // `data-pptx-preset` attribute is for DevTools inspection.
+    return `<rect x="${E(x)}" y="${E(y)}" width="${E(w)}" height="${E(h)}" fill="${geometryFill}" stroke="${geometryStroke}" stroke-width="${E(geometryStrokeWidth)}"${geometryStrokeAttrs}${geometryMarkerAttrs} data-pptx-preset="${escapeXml(preset)}"><title>${escapeXml(`preset: ${preset}`)}</title></rect>`;
+  };
+
+  let geomSvg = renderGeometry(p.fill, p.stroke, p.strokeWidth, sa, ma);
+  // getShapeCustomGeometry returns null for both malformed and absent custom
+  // geometry. The OOXML probe distinguishes a malformed custGeom fallback
+  // from an ordinary shape that simply inherits/defaults to rect geometry.
+  const isCustGeom =
+    customGeom === null && rawPreset === null && getShapeXmlString(shape).includes('custGeom');
+
+  if (hasImageFill) {
+    // Resvg does not paint a data-URL image nested inside an SVG <pattern>.
+    // Clip the normal picture markup to the actual preset/custom geometry
+    // instead. This preserves crop/effects while keeping the outline and text
+    // as native shape layers.
+    const clipId = mintId();
+    const clipGeometry = renderGeometry('#FFFFFF', 'none', 0, '', '');
+    const imageMarkup = renderPicture(
+      shape,
+      pres,
+      x,
+      y,
+      w,
+      h,
+      '',
+      '',
+      getShapeImageFillBytes(shape),
+      getShapeImageFormat(shape),
+    );
+    geomSvg = `<defs><clipPath id="${clipId}">${clipGeometry}</clipPath></defs><g clip-path="url(#${clipId})">${imageMarkup}</g>${geomSvg}`;
   }
+
+  // Geometry carries rotation + flips; text carries rotation only so it stays
+  // upright when the shape is flipped (matching PowerPoint).
+  const placedText = textOverlay ? `<g${textTransform}>${textOverlay}</g>` : '';
+  const rawShapeContent = `<g${transform}>${geomSvg}</g>${placedText}`;
 
   // Effects (`<a:effectLst>`): outerShdw / innerShdw / glow / softEdge
   // / reflection / blur. Build a single SVG <filter> chain so multiple
@@ -6135,19 +6169,15 @@ const renderShape = (
   const filterAttr = fx ? ` filter="url(#${fx.id})"` : '';
   let fxDefs = fx ? fx.defs : '';
   // Reflection can't live in the `<filter>` chain (SVG has no flip-and-fade
-  // primitive), so it's a duplicated, vertically mirrored copy of the raw
-  // geometry masked by an opacity gradient — built from the un-filtered
-  // geometry markup before the filter wraps it.
-  const reflection = buildReflection(pres, shape, geomSvg, { x, y, w, h });
+  // primitive), so duplicate the complete raw shape — geometry and text —
+  // before the geometry-only effects filter wraps the original.
+  const reflection = buildReflection(pres, shape, rawShapeContent, { x, y, w, h });
   // Apply the filter to the geometry only — text overlays use foreignObject
   // and react badly to feGaussianBlur (DOM gets rasterized).
   geomSvg = `<g${filterAttr}>${geomSvg}</g>`;
-  if (reflection) {
-    // Paint the reflection behind the shape; it sits below the bottom edge
-    // so they don't overlap, but keeping it first matches PowerPoint's z-order.
-    geomSvg = reflection.svg + geomSvg;
-    fxDefs += reflection.defs;
-  }
+  if (reflection) fxDefs += reflection.defs;
+  const originalShapeContent = `<g${transform}>${geomSvg}</g>${placedText}`;
+  const reflectedShapeContent = reflection?.svg ?? '';
 
   // B6 — Shape-level hyperlinks + slide-jump click actions. Wrap the
   // rendered shape in an SVG <a href> so the playground preview is
@@ -6185,11 +6215,8 @@ const renderShape = (
   const a11yLabel = altTitle ?? altDesc ?? null;
   const nameAttr = shapeName ? ` data-pptx-shape-name="${escapeXml(shapeName)}"` : '';
   const ariaAttr = a11yLabel ? ` role="img" aria-label="${escapeXml(a11yLabel)}"` : '';
-  // Geometry carries rotation + flips; text carries rotation only so it stays
-  // upright when the shape is flipped (matching PowerPoint).
-  const placedText = textOverlay ? `<g${textTransform}>${textOverlay}</g>` : '';
   const custGeomAttr = isCustGeom ? ' data-pptx-fallback="custGeom"' : '';
-  const inner = `${p.defs}${fxDefs}<g${nameAttr}${ariaAttr}${custGeomAttr}><g${transform}>${geomSvg}</g>${placedText}</g>`;
+  const inner = `${p.defs}${fxDefs}<g${nameAttr}${ariaAttr}${custGeomAttr}>${reflectedShapeContent}${originalShapeContent}</g>`;
   const titleEl = tooltip ? `<title>${escapeXml(tooltip)}</title>` : '';
   const safeUrl = url ? safeHyperlink(url) : null;
   if (safeUrl) {
@@ -6230,13 +6257,13 @@ interface ReflectionResult {
 }
 
 // Builds the reflection: a vertically mirrored copy of the shape's raw
-// geometry placed below its bottom edge, faded by a vertical opacity mask.
+// geometry and text placed below its bottom edge, faded by an opacity mask.
 // PowerPoint encodes the mirror as a negative `sy`; `stA`/`endA` give the
 // alpha at the near (contact) and far edges, `dist` the gap below the shape.
 const buildReflection = (
   pres: PresentationData,
   shape: SlideShapeData,
-  geomRaw: string,
+  shapeRaw: string,
   box: { x: number; y: number; w: number; h: number },
 ): ReflectionResult | null => {
   let effects: readonly ReturnType<typeof getShapeEffects>[number][];
@@ -6263,16 +6290,25 @@ const buildReflection = (
 
   const maskId = mintId();
   const gradId = mintId();
-  // objectBoundingBox: y=0 is the contact edge (top of the mirrored copy),
-  // y=1 the far edge. White luminance × stop-opacity becomes the alpha.
+  const blurPx = refl.blurEmu / EMU_PER_PX / 2;
+  const filterId = blurPx > 0 ? mintId() : null;
+  // The mask lives on the negatively scaled reflection group, so its local
+  // objectBoundingBox Y axis is visually inverted with the shape. Put endA at
+  // local y=0 and startA at y=1 so the rendered contact edge is the darker one.
+  // White luminance × stop-opacity becomes the reflected alpha.
   const defs =
     `<defs><linearGradient id="${gradId}" x1="0" y1="0" x2="0" y2="1">` +
-    `<stop offset="0" stop-color="#fff" stop-opacity="${startA.toFixed(3)}"/>` +
-    `<stop offset="1" stop-color="#fff" stop-opacity="${endA.toFixed(3)}"/>` +
+    `<stop offset="0" stop-color="#fff" stop-opacity="${endA.toFixed(3)}"/>` +
+    `<stop offset="1" stop-color="#fff" stop-opacity="${startA.toFixed(3)}"/>` +
     `</linearGradient>` +
     `<mask id="${maskId}" maskContentUnits="objectBoundingBox">` +
-    `<rect width="1" height="1" fill="url(#${gradId})"/></mask></defs>`;
-  const svg = `<g transform="${transform}" mask="url(#${maskId})" data-pptx-reflection="1">${geomRaw}</g>`;
+    `<rect width="1" height="1" fill="url(#${gradId})"/></mask>` +
+    (filterId
+      ? `<filter id="${filterId}" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="${blurPx.toFixed(2)}"/></filter>`
+      : '') +
+    `</defs>`;
+  const filterAttr = filterId ? ` filter="url(#${filterId})"` : '';
+  const svg = `<g transform="${transform}" mask="url(#${maskId})"${filterAttr} data-pptx-reflection="1">${shapeRaw}</g>`;
   return { svg, defs };
 };
 
