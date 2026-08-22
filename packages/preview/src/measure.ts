@@ -10,6 +10,8 @@ import { fileURLToPath } from 'node:url';
 import {
   ARIAL,
   AVG_GLYPH_W_RATIO,
+  IBM_PLEX_SANS,
+  IBM_PLEX_SANS_SC,
   isCjk,
   MONO,
   SANS,
@@ -30,9 +32,16 @@ const FAMILY_TO_PREFIX: Record<string, string> = {
   [ARIAL]: 'LiberationSans',
   [TIMES]: 'LiberationSerif',
   [MONO]: 'LiberationMono',
+  [IBM_PLEX_SANS]: 'IBMPlexSans',
+  [IBM_PLEX_SANS_SC]: 'IBMPlexSansSC',
 };
 
 const STYLES = ['Regular', 'Bold', 'Italic', 'BoldItalic'] as const;
+const FAMILY_STYLES: Readonly<Record<string, readonly (typeof STYLES)[number][]>> = {
+  [IBM_PLEX_SANS_SC]: ['Regular', 'Bold'],
+};
+const stylesFor = (family: string): readonly (typeof STYLES)[number][] =>
+  FAMILY_STYLES[family] ?? STYLES;
 
 const facePath = (prefix: string, style: string): string => `${FONT_DIR}${prefix}-${style}.ttf`;
 const CJK_SANS_FAMILY = 'Noto Sans CJK SC';
@@ -41,12 +50,14 @@ const CJK_SANS_PATH = `${FONT_DIR}NotoSansCJKsc-Regular.otf`;
 /**
  * Absolute paths of every bundled face passed to resvg's `fontFiles`.
  *
- * Noto Sans CJK SC is deliberately included as a glyph fallback rather than a
- * system font: the Node renderer disables system fonts so PNG output stays
- * deterministic across developer machines and CI.
+ * IBM Plex is the portable mixed-script default. Noto Sans CJK SC remains a
+ * broad glyph fallback. The Node renderer disables system fonts so PNG output
+ * stays deterministic across developer machines and CI.
  */
 export const FONT_FILES: string[] = [
-  ...Object.values(FAMILY_TO_PREFIX).flatMap((prefix) => STYLES.map((s) => facePath(prefix, s))),
+  ...Object.entries(FAMILY_TO_PREFIX).flatMap(([family, prefix]) =>
+    stylesFor(family).map((s) => facePath(prefix, s)),
+  ),
   CJK_SANS_PATH,
 ];
 
@@ -105,7 +116,7 @@ export const buildFontkitMeasurer = (options: FontkitMeasurerOptions = {}): Text
   // emit-side family === resvg match === the face we measure, which is the load-
   // bearing invariant for "x= is where glyphs land".
   for (const [family, prefix] of Object.entries(FAMILY_TO_PREFIX)) {
-    for (const style of STYLES) {
+    for (const style of stylesFor(family)) {
       const path = facePath(prefix, style);
       if (!existsSync(path)) throw new Error(`Missing bundled font: ${path}`);
       const font = openFont(path);
@@ -129,21 +140,19 @@ export const buildFontkitMeasurer = (options: FontkitMeasurerOptions = {}): Text
       `Font family mismatch: ${CJK_SANS_PATH} reports "${cjkFallback.familyName}", expected "${CJK_SANS_FAMILY}".`,
     );
   }
+  const plexCjkFallback = cache.get('IBMPlexSansSC-Regular')!;
 
   // Registered fonts, keyed by lowercased authored family + style. No
   // familyName assertion here: the registration key is the DECK's name for
   // the font, which legitimately differs from the file's internal name.
   const registered = new Map<string, fontkit.Font>();
-  const fallbackFonts: fontkit.Font[] = [];
+  const registeredFallbackFonts: fontkit.Font[] = [];
   for (const reg of options.fonts ?? []) {
     const font = openFontSource(reg.source);
     const style = styleSuffix({ bold: reg.bold ?? false, italic: reg.italic ?? false });
     registered.set(`${reg.family.toLowerCase()}-${style}`, font);
-    fallbackFonts.push(font);
+    registeredFallbackFonts.push(font);
   }
-  // Caller-supplied brand fonts keep priority; bundled Noto only closes any
-  // remaining CJK coverage gap.
-  fallbackFonts.push(cjkFallback);
 
   const pick = (spec: FontSpec): fontkit.Font => {
     const style = styleSuffix(spec);
@@ -170,7 +179,16 @@ export const buildFontkitMeasurer = (options: FontkitMeasurerOptions = {}): Text
     spec: FontSpec,
     primary: fontkit.Font,
   ): MeasureResult => {
-    const chain = [primary, ...fallbackFonts.filter((f) => f !== primary)];
+    const styledPlexCjkFallback =
+      cache.get(`IBMPlexSansSC-${spec.bold ? 'Bold' : 'Regular'}`) ?? plexCjkFallback;
+    // Caller-supplied brand fonts keep priority. IBM Plex SC supplies the
+    // matching real CJK weight, then Noto closes any remaining glyph gap.
+    const chain = [
+      primary,
+      ...registeredFallbackFonts.filter((font) => font !== primary),
+      styledPlexCjkFallback,
+      cjkFallback,
+    ].filter((font, index, fonts) => fonts.indexOf(font) === index);
     let widthPx = 0;
     let approximate = false;
     let metricsFont: fontkit.Font | null = null;

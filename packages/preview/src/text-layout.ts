@@ -66,6 +66,8 @@ export const SERIF = 'Caladea'; // Cambria substitute
 export const ARIAL = 'Liberation Sans';
 export const TIMES = 'Liberation Serif';
 export const MONO = 'Liberation Mono';
+export const IBM_PLEX_SANS = 'IBM Plex Sans';
+export const IBM_PLEX_SANS_SC = 'IBM Plex Sans SC';
 
 export const substituteFamily = (family: string | null | undefined): string => {
   if (!family) return SANS;
@@ -77,6 +79,9 @@ export const substituteFamily = (family: string | null | undefined): string => {
   if (f === 'times new roman' || f === 'times' || f.startsWith('times ')) return TIMES;
   if (f === 'courier new' || f === 'courier' || f === 'consolas' || f.startsWith('courier '))
     return MONO;
+  if (f === 'ibm plex sans') return IBM_PLEX_SANS;
+  if (f === 'ibm plex sans sc') return IBM_PLEX_SANS_SC;
+  if (f === 'noto sans cjk sc') return 'Noto Sans CJK SC';
   // Unknown family → generic sans substitute, matching DEFAULT_FONT's Calibri
   // lead and LibreOffice's behavior when the named face is unavailable.
   return SANS;
