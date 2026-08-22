@@ -6,12 +6,6 @@
 // `test/tree-shake.test.ts` for the CI guard.
 
 export { type Emu, cm, emu, inches, mm, pt } from './units.ts';
-export {
-  PresentationObserver,
-  applyPresentationMutationRecords,
-  type PresentationMutationRecord,
-  type PresentationObserverCallback,
-} from './observer.ts';
 
 // Tree-shakeable free-function API.
 export type {
