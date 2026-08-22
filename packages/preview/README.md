@@ -61,7 +61,8 @@ const { image, png: png2 } = renderSlideToRgba(pres, slide, { width: 1280 });
 
 The Node path lays text out as pure `<text>` and measures it with a fontkit
 measurer over **bundled** fonts: Carlito ≈ Calibri, Caladea ≈ Cambria,
-Liberation ≈ Arial/Times/Courier, plus Noto Sans CJK SC as the deterministic
+Liberation ≈ Arial/Times/Courier, IBM Plex Sans + IBM Plex Sans SC as the
+portable mixed-script default, plus Noto Sans CJK SC as the deterministic
 Simplified Chinese and CJK fallback (OFL / Apache-2.0, see
 `fonts/LICENSES.md`). The measurer, resvg's font set, and the SVG family names
 all reference the same fonts, so wrap/positioning math agrees with the painted
@@ -111,8 +112,9 @@ Options:
 
 Accuracy: the bundled Latin fonts are metric-compatible with the Office
 defaults, so verdicts for Calibri / Cambria / Arial / Times / Courier decks
-match real glyph widths. Noto Sans CJK SC provides real CJK glyphs and metrics
-when the authored font is unavailable; for a custom brand or language-specific
+match real glyph widths. IBM Plex Sans and IBM Plex Sans SC provide the default
+mixed-script glyphs and metrics; Noto Sans CJK SC covers remaining CJK glyphs
+when the authored font is unavailable. For a custom brand or language-specific
 face, register the real files via `buildFontkitMeasurer({ fonts })` — a
 registered font is used both for runs that name it and as a glyph fallback.
 Line-break positions can differ from PowerPoint by a few characters in edge

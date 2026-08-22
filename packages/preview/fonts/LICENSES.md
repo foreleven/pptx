@@ -13,6 +13,8 @@ these very fonts when the proprietary originals are absent).
 | Liberation Sans | Arial / Helvetica | SIL OFL 1.1 | © 2010 Google, © 2012 Red Hat, Inc. |
 | Liberation Serif | Times New Roman | SIL OFL 1.1 | © 2010 Google, © 2012 Red Hat, Inc. |
 | Liberation Mono | Courier New / Consolas | SIL OFL 1.1 | © 2010 Google, © 2012 Red Hat, Inc. |
+| IBM Plex Sans | Default portable Latin face | SIL OFL 1.1 | © 2017 IBM Corp. with Reserved Font Name "Plex" |
+| IBM Plex Sans SC | Default portable Simplified Chinese face | SIL OFL 1.1 | © 2017 IBM Corp. with Reserved Font Name "Plex" |
 | Noto Sans CJK SC | Deterministic Simplified Chinese and CJK fallback | SIL OFL 1.1 | © 2014–2021 Adobe |
 
 Each font also embeds its license in its `name` table (OFL condition 2 is
@@ -25,7 +27,7 @@ They are not shipped in the browser bundle and are not part of the published
 
 ---
 
-## SIL Open Font License, Version 1.1 (Carlito, Liberation)
+## SIL Open Font License, Version 1.1 (Carlito, Liberation, IBM Plex, Noto Sans CJK SC)
 
 http://scripts.sil.org/OFL
 
