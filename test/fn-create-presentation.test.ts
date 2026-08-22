@@ -47,12 +47,13 @@ describe('fn API: createPresentation', () => {
     expect(layouts.length).toBeGreaterThan(0);
 
     const names = layouts.map((l) => getSlideLayoutName(l)).sort();
-    expect(names).toEqual(['Blank', 'Title Slide', 'Title and Content']);
+    expect(names).toEqual(['Blank', 'Section Header', 'Title Slide', 'Title and Content']);
 
     // The spec-token lookups the deck helpers rely on must resolve.
     expect(findSlideLayoutByType(pres, 'blank')).not.toBeNull();
     expect(findSlideLayoutByType(pres, 'title')).not.toBeNull();
     expect(findSlideLayoutByType(pres, 'obj')).not.toBeNull();
+    expect(findSlideLayoutByType(pres, 'secHead')).not.toBeNull();
   });
 
   it("defaults the slide size to 16:9 (PowerPoint's modern default)", () => {
@@ -120,7 +121,7 @@ describe('fn API: createPresentation', () => {
 
     const slides = getSlides(reloaded);
     expect(slides.length).toBe(3);
-    expect(getSlideLayouts(reloaded).length).toBe(3);
+    expect(getSlideLayouts(reloaded).length).toBe(4);
 
     expect(getSlideText(slides[0]!)).toContain('@office-kit/pptx from scratch');
     expect(getSlideText(slides[1]!)).toContain('Agenda');
@@ -145,7 +146,7 @@ describe('fn API: createPresentation', () => {
       // Each new slide must at least carry the slide-root group.
       expect(getSlideShapes(slide).length).toBeGreaterThanOrEqual(0);
     }
-    expect(getSlides(pres).length).toBe(3);
+    expect(getSlides(pres).length).toBe(4);
     expect(validatePresentation(pres)).toEqual([]);
   });
 
@@ -167,6 +168,7 @@ describe('fn API: createPresentation', () => {
       validate('/ppt/slideLayouts/slideLayout1.xml', 'pml');
       validate('/ppt/slideLayouts/slideLayout2.xml', 'pml');
       validate('/ppt/slideLayouts/slideLayout3.xml', 'pml');
+      validate('/ppt/slideLayouts/slideLayout4.xml', 'pml');
       validate('/ppt/theme/theme1.xml', 'dml');
     },
   );
