@@ -4,6 +4,7 @@ import {
   basename,
   emptyRels,
   nextRelId,
+  type PartName,
   partName,
   relsPartNameFor,
   resolveTarget,
@@ -27,6 +28,7 @@ import {
   LAYOUT_PART,
   LAYOUT_PART_NAME,
   type PresentationData,
+  SLIDE_DOCUMENT,
   SLIDE_PART_NAME,
   type SlideData,
   type SlideLayoutData,
@@ -46,6 +48,7 @@ import {
   SLIDE_CONTENT_TYPE,
   decode,
   encode,
+  rebuildShapesFromDocument,
   setOpcDefault,
 } from './_helpers.ts';
 import {
@@ -314,6 +317,125 @@ export const removeSlide = (pres: PresentationData, slide: SlideData): void => {
   pkg.removePart(relsPartNameFor(slidePartName));
   pkg.removePart(slidePartName);
   pres._slidesCache = null;
+};
+
+/**
+ * Replaces a slide's body and outgoing relationships without changing the
+ * target slide part name or its presentation-level identity.
+ *
+ * Both handles must belong to the same presentation. The replacement slide
+ * remains in the deck; callers that created it as a temporary authored page
+ * may remove it after this operation.
+ */
+export const replaceSlideContents = (target: SlideData, replacement: SlideData): void => {
+  const pkg = target[INTERNAL_PACKAGE];
+  if (replacement[INTERNAL_PACKAGE] !== pkg) {
+    throw new Error('replaceSlideContents: slides must belong to the same presentation');
+  }
+  const targetName = target[SLIDE_PART_NAME];
+  const replacementName = replacement[SLIDE_PART_NAME];
+  if (targetName.toLowerCase() === replacementName.toLowerCase()) return;
+  const targetPart = pkg.getPart(targetName);
+  const replacementPart = pkg.getPart(replacementName);
+  if (!targetPart) throw new Error(`replaceSlideContents: target ${targetName} not found`);
+  if (!replacementPart) {
+    throw new Error(`replaceSlideContents: replacement ${replacementName} not found`);
+  }
+
+  const replacedRelationships = pkg.getRels(targetName);
+  const oldOwnedParts = collectRelationshipClosure(
+    pkg,
+    targetName,
+    replacedRelationships,
+    new Set([targetName.toLowerCase(), replacementName.toLowerCase()]),
+  );
+  targetPart.data = new Uint8Array(replacementPart.data);
+  const replacementRels = pkg.getRels(replacementName);
+  if (replacementRels === null) {
+    pkg.removePart(relsPartNameFor(targetName));
+  } else {
+    pkg.setRels(targetName, {
+      items: replacementRels.items.map((relationship) => ({ ...relationship })),
+    });
+  }
+
+  target[SLIDE_DOCUMENT] = parseXml(decode(targetPart.data));
+  rebuildShapesFromDocument(target);
+  removeUnreferencedClosure(pkg, oldOwnedParts);
+};
+
+const collectRelationshipClosure = (
+  pkg: OpcPackage,
+  source: PartName,
+  relationships: ReturnType<OpcPackage['getRels']>,
+  excluded: ReadonlySet<string>,
+): Map<string, PartName> => {
+  const collected = new Map<string, PartName>();
+  const pending: Array<{ source: PartName; relationships: ReturnType<OpcPackage['getRels']> }> = [
+    { source, relationships },
+  ];
+  while (pending.length > 0) {
+    const current = pending.pop()!;
+    for (const relationship of current.relationships?.items ?? []) {
+      if (relationship.targetMode === 'External') continue;
+      const targetName = resolveTarget(current.source, relationship.target);
+      const key = targetName.toLowerCase();
+      if (excluded.has(key) || collected.has(key)) continue;
+      const targetPart = pkg.getPart(targetName);
+      if (!targetPart || targetPart.contentType === SLIDE_CONTENT_TYPE) continue;
+      collected.set(key, targetPart.name);
+      pending.push({ source: targetPart.name, relationships: pkg.getRels(targetPart.name) });
+    }
+  }
+  return collected;
+};
+
+const removeUnreferencedClosure = (
+  pkg: OpcPackage,
+  candidates: ReadonlyMap<string, PartName>,
+): void => {
+  if (candidates.size === 0) return;
+  const retained = new Set<string>();
+  const pending: PartName[] = [];
+  const retain = (name: PartName): void => {
+    const key = name.toLowerCase();
+    if (!candidates.has(key) || retained.has(key)) return;
+    retained.add(key);
+    pending.push(name);
+  };
+
+  const inspectRelationships = (source: PartName): void => {
+    for (const relationship of pkg.getRels(source)?.items ?? []) {
+      if (relationship.targetMode === 'External') continue;
+      retain(resolveTarget(source, relationship.target));
+    }
+  };
+
+  for (const part of pkg.parts) {
+    if (part.name.endsWith('.rels') || candidates.has(part.name.toLowerCase())) continue;
+    inspectRelationships(part.name);
+  }
+  for (const relationship of pkg.rootRels()?.items ?? []) {
+    if (relationship.targetMode === 'External') continue;
+    retain(
+      partName(
+        relationship.target.startsWith('/') ? relationship.target : `/${relationship.target}`,
+      ),
+    );
+  }
+  while (pending.length > 0) {
+    const source = pending.pop()!;
+    for (const relationship of pkg.getRels(source)?.items ?? []) {
+      if (relationship.targetMode === 'External') continue;
+      retain(resolveTarget(source, relationship.target));
+    }
+  }
+
+  for (const [key, name] of candidates) {
+    if (retained.has(key)) continue;
+    pkg.removePart(relsPartNameFor(name));
+    pkg.removePart(name);
+  }
 };
 
 /**

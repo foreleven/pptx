@@ -1,7 +1,13 @@
 // Slide comments.
 import { getSlides } from './slide-query.ts';
 
-import { type PartName, emptyRels, nextRelId, partName } from '../../internal/opc/index.ts';
+import {
+  type PartName,
+  emptyRels,
+  nextRelId,
+  partName,
+  resolveTarget,
+} from '../../internal/opc/index.ts';
 import type { OpcPackage } from '../../internal/parts/index.ts';
 import {
   REL_TYPES,
@@ -52,6 +58,11 @@ const slideNumberFromPartName = (name: PartName): number => {
 };
 
 const commentsPartNameForSlide = (slide: SlideData): PartName => {
+  const slidePartName = slide[SLIDE_PART_NAME];
+  const relationship = slide[INTERNAL_PACKAGE]
+    .getRels(slidePartName)
+    ?.items.find((item) => item.type === REL_TYPES.comments && item.targetMode === 'Internal');
+  if (relationship) return resolveTarget(slidePartName, relationship.target);
   const slideN = slideNumberFromPartName(slide[SLIDE_PART_NAME]);
   return partName(`/ppt/comments/comment${slideN}.xml`);
 };

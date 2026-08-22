@@ -443,6 +443,7 @@ export {
   removeTableRow,
   renameShape,
   replaceHyperlink,
+  replaceSlideContents,
   resolveDeckBodyTextColor,
   resolveDrawingColor,
   replaceTextInNotes,
