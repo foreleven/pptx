@@ -256,3 +256,134 @@ export const addSlideImage = (
   });
   return appendAndReturnNewShape(slide, pic);
 };
+
+export type MediaKind = 'video' | 'audio';
+
+/**
+ * Adds an embedded click-to-play audio or video frame backed by a poster image.
+ * The media bytes are stored once and referenced by both the legacy media-file
+ * relationship and the Office 2010 `p14:media` extension.
+ */
+export const addSlideMedia = (
+  slide: SlideData,
+  bytes: Uint8Array,
+  opts: {
+    kind: MediaKind;
+    contentType: string;
+    posterBytes: Uint8Array;
+    posterFormat: ImageFormat;
+    x: Emu;
+    y: Emu;
+    w: Emu;
+    h: Emu;
+    name?: string;
+  },
+): SlideShapeData => {
+  const pkg = slide[INTERNAL_PACKAGE];
+  const mediaExtension = extensionForMediaContentType(opts.kind, opts.contentType);
+  const mediaNumber = nextMediaNumber(
+    pkg.parts.map((part) => part.name),
+    'media',
+  );
+  const mediaName = partName(`/ppt/media/media${mediaNumber}.${mediaExtension}`);
+  ensureContentTypeDefault(pkg, mediaExtension, opts.contentType);
+  pkg.addPart(mediaName, opts.contentType, bytes);
+
+  const posterExtension = extensionForFormat(opts.posterFormat);
+  const posterContentType = contentTypeForFormat(opts.posterFormat);
+  const posterNumber = nextMediaNumber(
+    pkg.parts.map((part) => part.name),
+    'image',
+  );
+  const posterName = partName(`/ppt/media/image${posterNumber}.${posterExtension}`);
+  ensureContentTypeDefault(pkg, posterExtension, posterContentType);
+  pkg.addPart(posterName, posterContentType, opts.posterBytes);
+
+  const rels = pkg.getRels(slide[SLIDE_PART_NAME]) ?? emptyRels();
+  const usedIds = rels.items.map((rel) => rel.id);
+  const fileRelId = nextRelId(usedIds);
+  usedIds.push(fileRelId);
+  const mediaRelId = nextRelId(usedIds);
+  usedIds.push(mediaRelId);
+  const posterRelId = nextRelId(usedIds);
+  const mediaTarget = `../media/media${mediaNumber}.${mediaExtension}`;
+  rels.items.push(
+    {
+      id: fileRelId,
+      type: opts.kind === 'video' ? REL_TYPES.video : REL_TYPES.audio,
+      target: mediaTarget,
+      targetMode: 'Internal',
+    },
+    {
+      id: mediaRelId,
+      type: REL_TYPES.media,
+      target: mediaTarget,
+      targetMode: 'Internal',
+    },
+    {
+      id: posterRelId,
+      type: REL_TYPES.image,
+      target: `../media/image${posterNumber}.${posterExtension}`,
+      targetMode: 'Internal',
+    },
+  );
+  pkg.setRels(slide[SLIDE_PART_NAME], rels);
+
+  return appendAndReturnNewShape(
+    slide,
+    buildPicture({
+      id: nextShapeId(slide),
+      ...(opts.name !== undefined ? { name: opts.name } : {}),
+      rEmbed: posterRelId,
+      x: opts.x,
+      y: opts.y,
+      w: opts.w,
+      h: opts.h,
+      media: { kind: opts.kind, fileRelId, mediaRelId },
+    }),
+  );
+};
+
+function extensionForMediaContentType(kind: MediaKind, contentType: string): string {
+  const normalized = contentType.trim().toLowerCase();
+  const known: Readonly<Record<string, string>> = {
+    'video/mp4': 'mp4',
+    'video/quicktime': 'mov',
+    'video/webm': 'webm',
+    'audio/mpeg': 'mp3',
+    'audio/mp4': 'm4a',
+    'audio/wav': 'wav',
+    'audio/x-wav': 'wav',
+  };
+  const extension = known[normalized];
+  if (!normalized.startsWith(`${kind}/`) || extension === undefined) {
+    throw new Error(
+      `addSlideMedia: unsupported ${kind} content type ${JSON.stringify(contentType)}`,
+    );
+  }
+  return extension;
+}
+
+function nextMediaNumber(partNames: readonly string[], prefix: 'image' | 'media'): number {
+  const pattern = new RegExp(`^/ppt/media/${prefix}(\\d+)\\.`, 'u');
+  let next = 1;
+  for (const name of partNames) {
+    const value = pattern.exec(name)?.[1];
+    if (value !== undefined) next = Math.max(next, Number.parseInt(value, 10) + 1);
+  }
+  return next;
+}
+
+function ensureContentTypeDefault(
+  pkg: SlideData[typeof INTERNAL_PACKAGE],
+  extension: string,
+  contentType: string,
+): void {
+  if (
+    !pkg.contentTypes.defaults.some(
+      (entry) => entry.extension.toLowerCase() === extension.toLowerCase(),
+    )
+  ) {
+    pkg.contentTypes.defaults.push({ extension, contentType });
+  }
+}

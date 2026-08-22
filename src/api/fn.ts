@@ -35,6 +35,8 @@ export * from './fn/shape-removal-zorder.ts';
 export * from './fn/shape-authoring.ts';
 export * from './fn/shape-grouping.ts';
 export * from './fn/shape-image.ts';
+export * from './fn/shape-media.ts';
+export * from './fn/opaque-object.ts';
 export * from './fn/shape-click-action.ts';
 export * from './fn/shape-image-effects.ts';
 export * from './fn/shape-animation.ts';

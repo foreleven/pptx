@@ -41,6 +41,12 @@ const NAME_EXT = qname('a', 'ext', NS.dml);
 const NAME_PRST_GEOM = qname('a', 'prstGeom', NS.dml);
 const NAME_AV_LST = qname('a', 'avLst', NS.dml);
 const NAME_PIC_LOCKS = qname('a', 'picLocks', NS.dml);
+const NAME_HLINK_CLICK = qname('a', 'hlinkClick', NS.dml);
+const NAME_VIDEO_FILE = qname('a', 'videoFile', NS.dml);
+const NAME_AUDIO_FILE = qname('a', 'audioFile', NS.dml);
+const NAME_EXT_LST = qname('p', 'extLst', NS.pml);
+const NAME_P_EXT = qname('p', 'ext', NS.pml);
+const NAME_P14_MEDIA = qname('p14', 'media', NS.p14);
 const ATTR_ID = qname('', 'id', '');
 const ATTR_NAME = qname('', 'name', '');
 const ATTR_X = qname('', 'x', '');
@@ -49,7 +55,17 @@ const ATTR_CX = qname('', 'cx', '');
 const ATTR_CY = qname('', 'cy', '');
 const ATTR_PRST = qname('', 'prst', '');
 const ATTR_R_EMBED = qname('r', 'embed', NS.officeDocRels);
+const ATTR_R_ID = qname('r', 'id', NS.officeDocRels);
+const ATTR_R_LINK = qname('r', 'link', NS.officeDocRels);
 const ATTR_NO_CHANGE_ASPECT = qname('', 'noChangeAspect', '');
+const ATTR_ACTION = qname('', 'action', '');
+const ATTR_URI = qname('', 'uri', '');
+
+export interface PictureMediaAttachment {
+  kind: 'video' | 'audio';
+  fileRelId: string;
+  mediaRelId: string;
+}
 
 export interface PictureOptions {
   id: number;
@@ -65,6 +81,8 @@ export interface PictureOptions {
    * this for pictures inserted via "Insert > Picture" but not for ones
    * dropped onto the canvas; default true to mirror the common case. */
   lockAspect?: boolean;
+  /** Optional embedded click-to-play media attached to this poster picture. */
+  media?: PictureMediaAttachment;
 }
 
 /** Returns a `<p:pic>` element ready to be appended to a slide's `<p:spTree>`. */
@@ -78,8 +96,36 @@ export const buildPicture = (opts: PictureOptions): XmlElement => {
   const cNvPicPr = elem(NAME_C_NV_PIC_PR, { children: [picLocks] });
   const cNvPr = elem(NAME_C_NV_PR, {
     attrs: [attr(ATTR_ID, String(opts.id)), attr(ATTR_NAME, name)],
+    children: opts.media
+      ? [
+          elem(NAME_HLINK_CLICK, {
+            attrs: [attr(ATTR_R_ID, ''), attr(ATTR_ACTION, 'ppaction://media')],
+          }),
+        ]
+      : [],
   });
-  const nvPr = elem(NAME_NV_PR);
+  const nvPr = elem(NAME_NV_PR, {
+    children: opts.media
+      ? [
+          elem(opts.media.kind === 'video' ? NAME_VIDEO_FILE : NAME_AUDIO_FILE, {
+            attrs: [attr(ATTR_R_LINK, opts.media.fileRelId)],
+          }),
+          elem(NAME_EXT_LST, {
+            children: [
+              elem(NAME_P_EXT, {
+                attrs: [attr(ATTR_URI, '{DAA4B4D4-6D71-4841-9C94-3DE7FCFB9230}')],
+                children: [
+                  elem(NAME_P14_MEDIA, {
+                    attrs: [attr(ATTR_R_EMBED, opts.media.mediaRelId)],
+                    prefixDecls: new Map([['p14', NS.p14]]),
+                  }),
+                ],
+              }),
+            ],
+          }),
+        ]
+      : [],
+  });
   const nvPicPr = elem(NAME_NV_PIC_PR, { children: [cNvPr, cNvPicPr, nvPr] });
 
   const blip = elem(NAME_BLIP, { attrs: [attr(ATTR_R_EMBED, opts.rEmbed)] });

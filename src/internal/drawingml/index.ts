@@ -62,6 +62,7 @@ export { readFlip, readPosition, readRotation, readSize } from './geometry.ts';
 export {
   setAdjustValues,
   setFlip,
+  setGroupChildSpace,
   setPosition,
   setRotation,
   setSize,

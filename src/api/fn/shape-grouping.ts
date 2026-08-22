@@ -14,6 +14,7 @@
 import {
   readPosition,
   readSize,
+  setGroupChildSpace,
   setPosition as writePosition,
   setSize as writeSize,
 } from '../../internal/drawingml/index.ts';
@@ -32,7 +33,7 @@ import {
   rebuildShapesFromDocument,
   requireSpTree,
 } from './_helpers.ts';
-import { getGroupTransform } from './shape-read-base.ts';
+import { getGroupTransform, type ShapeBounds } from './shape-read-base.ts';
 
 /**
  * Groups two or more top-level shapes into a single `<p:grpSp>`,
@@ -125,6 +126,21 @@ export const groupShapes = (
   const created = slide[SLIDE_SHAPES].find((s) => s[SHAPE_ELEMENT] === grp);
   if (!created) throw new Error('groupShapes: post-condition failed');
   return created;
+};
+
+/** Replaces a group's outer frame and child coordinate system without moving its children. */
+export const setGroupTransform = (
+  group: SlideShapeData,
+  transform: { outer: ShapeBounds; inner: ShapeBounds },
+): void => {
+  if (group[SHAPE_SNAPSHOT].kind !== 'group') {
+    throw new Error('setGroupTransform: shape is not a group');
+  }
+  const { outer, inner } = transform;
+  writePosition(group[SHAPE_ELEMENT], 'group', outer.x, outer.y);
+  writeSize(group[SHAPE_ELEMENT], 'group', outer.w, outer.h);
+  setGroupChildSpace(group[SHAPE_ELEMENT], inner.x, inner.y, inner.w, inner.h);
+  commitSlideData(group[SHAPE_SLIDE]);
 };
 
 /**

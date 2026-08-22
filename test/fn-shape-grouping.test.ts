@@ -22,6 +22,7 @@ import {
   getShapeRotation,
   getShapeText,
   getSlideShapes,
+  getSlideTopLevelShapes,
   getSlideXmlString,
   groupShapes,
   inches,
@@ -30,6 +31,7 @@ import {
   setShapePosition,
   setShapeRotation,
   setShapeSize,
+  setGroupTransform,
   ungroupShapes,
 } from '../src/api/index.ts';
 import { expectSchemaValid, isSchemaValidationAvailable } from './lib/expect-schema-valid.ts';
@@ -80,6 +82,7 @@ describe('fn API: groupShapes / ungroupShapes', () => {
     // there — but reappear one level down via getGroupChildren, with their
     // own bounds intact.
     expect(getSlideShapes(slide).map((s) => getShapeKind(s))).toEqual(['group', 'shape', 'shape']);
+    expect(getSlideTopLevelShapes(slide)).toEqual([group]);
     const children = getGroupChildren(group);
     expect(children).toHaveLength(2);
     expect(children.map((c) => getShapeText(c))).toContain('KPI card');
@@ -324,6 +327,34 @@ describe('fn API: groupShapes / ungroupShapes', () => {
     const group = groupShapes([a, b]);
     const transform = getGroupTransform(group);
     expect(transform).toEqual({ outer: transform!.inner, inner: transform!.inner });
+  });
+
+  it('sets the outer group frame and child coordinate space independently', () => {
+    const { slide } = blankSlide();
+    const a = addSlideShape(slide, {
+      preset: 'rect',
+      x: inches(1),
+      y: inches(1),
+      w: inches(1),
+      h: inches(1),
+    });
+    const b = addSlideShape(slide, {
+      preset: 'rect',
+      x: inches(3),
+      y: inches(2),
+      w: inches(1),
+      h: inches(1),
+    });
+    const group = groupShapes([a, b]);
+    const transform = {
+      outer: { x: inches(2), y: inches(1.5), w: inches(6), h: inches(3) },
+      inner: { x: inches(1), y: inches(1), w: inches(3), h: inches(2) },
+    };
+
+    setGroupTransform(group, transform);
+
+    expect(getGroupTransform(group)).toEqual(transform);
+    expect(getSlideTopLevelShapes(slide)).toEqual([group]);
   });
 
   skipIfNoXmllint('produces schema-valid XML after group + move + ungroup', async () => {

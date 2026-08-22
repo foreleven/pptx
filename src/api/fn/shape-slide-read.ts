@@ -37,7 +37,7 @@ import {
   type SlideLayoutData,
   type SlideShapeData,
 } from '../_internal-symbols.ts';
-import { commitSlideData, decode, refreshSlideData } from './_helpers.ts';
+import { commitSlideData, decode, refreshSlideData, requireSpTree } from './_helpers.ts';
 import { getShapeHyperlink } from './shape-paragraph.ts';
 import { getSlides } from './slide-query.ts';
 import { hasShapeText } from './embedded.ts';
@@ -50,6 +50,14 @@ import { hasShapeText } from './embedded.ts';
  */
 export const getSlideShapes = (slide: SlideData): ReadonlyArray<SlideShapeData> =>
   slide[SLIDE_SHAPES];
+
+/** Shapes directly under the slide's `<p:spTree>`, without flattened group descendants. */
+export const getSlideTopLevelShapes = (slide: SlideData): ReadonlyArray<SlideShapeData> => {
+  const topLevel = new Set(
+    requireSpTree(slide).children.flatMap((child) => (child.kind === 'element' ? [child] : [])),
+  );
+  return slide[SLIDE_SHAPES].filter((shape) => topLevel.has(shape[SHAPE_ELEMENT]));
+};
 
 /**
  * Rebinds the slide to a different layout. The slide's own content

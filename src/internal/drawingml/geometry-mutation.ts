@@ -16,6 +16,8 @@ const NAME_A_XFRM = qname('a', 'xfrm', NS.dml);
 const NAME_P_XFRM = qname('p', 'xfrm', NS.pml);
 const NAME_OFF = qname('a', 'off', NS.dml);
 const NAME_EXT = qname('a', 'ext', NS.dml);
+const NAME_CH_OFF = qname('a', 'chOff', NS.dml);
+const NAME_CH_EXT = qname('a', 'chExt', NS.dml);
 const ATTR_X = qname('', 'x', '');
 const ATTR_Y = qname('', 'y', '');
 const ATTR_CX = qname('', 'cx', '');
@@ -99,6 +101,35 @@ export const setSize = (
   ext.attrs = [
     attr(ATTR_CX, String(emuExtent(w, 'setShapeSize: w'))),
     attr(ATTR_CY, String(emuExtent(h, 'setShapeSize: h'))),
+  ];
+};
+
+/** Sets a group's child coordinate system (`chOff` / `chExt`) exactly. */
+export const setGroupChildSpace = (
+  shape: XmlElement,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+): void => {
+  const xfrm = ensureTransform(shape, 'group');
+  let chOff = firstChildElement(xfrm, NAME_CH_OFF);
+  if (chOff === null) {
+    chOff = elem(NAME_CH_OFF);
+    xfrm.children.push(chOff);
+  }
+  chOff.attrs = [
+    attr(ATTR_X, String(emuCoordinate(x, 'setGroupTransform: inner.x'))),
+    attr(ATTR_Y, String(emuCoordinate(y, 'setGroupTransform: inner.y'))),
+  ];
+  let chExt = firstChildElement(xfrm, NAME_CH_EXT);
+  if (chExt === null) {
+    chExt = elem(NAME_CH_EXT);
+    xfrm.children.push(chExt);
+  }
+  chExt.attrs = [
+    attr(ATTR_CX, String(emuExtent(w, 'setGroupTransform: inner.w'))),
+    attr(ATTR_CY, String(emuExtent(h, 'setGroupTransform: inner.h'))),
   ];
 };
 
