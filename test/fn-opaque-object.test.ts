@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   addBlankSlide,
   addSlideChart,
@@ -20,6 +20,32 @@ import {
 } from '../src/api/index.ts';
 
 describe('fn API: opaque OOXML objects', () => {
+  it('extracts byte-identical fragments regardless of the current clock', () => {
+    const source = createPresentation();
+    const sourceSlide = addBlankSlide(source);
+    const chart = addSlideChart(sourceSlide, {
+      spec: {
+        kind: 'column',
+        categories: ['North', 'South'],
+        series: [{ name: 'Revenue', values: [12, 18] }],
+      },
+      x: inches(1),
+      y: inches(1),
+      w: inches(5),
+      h: inches(3),
+    });
+
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+      const first = extractOpaqueObjectFragment(chart);
+      vi.setSystemTime(new Date('2026-08-23T00:00:00Z'));
+      expect(extractOpaqueObjectFragment(chart)).toEqual(first);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('copies a shape and its complete internal relationship closure without fetching external targets', async () => {
     const source = createPresentation();
     const sourceSlide = addBlankSlide(source);

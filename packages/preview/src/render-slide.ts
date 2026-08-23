@@ -120,6 +120,7 @@ import {
   getTableColumnWidths,
   getTableDimensions,
   getTableRowHeights,
+  getTableStyleId,
   isChartShape,
   isShapeImageGrayscale,
   isShapePlaceholder,
@@ -494,6 +495,25 @@ const mixHex = (aHex: string, bHex: string, t: number): string => {
   return `#${h(r)}${h(g)}${h(b)}`;
 };
 
+// DrawingML tint is evaluated in linear-light RGB. baseWeight matches the
+// OOXML <a:tint val="…"> value: 0 is white, 1 is the unchanged base color.
+const tintHexLinearLight = (hex: string, baseWeight: number): string => {
+  const srgbToLinear = (channel: number): number => {
+    const c = channel / 255;
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  const linearToSrgb = (channel: number): number =>
+    channel <= 0.0031308 ? channel * 12.92 : 1.055 * channel ** (1 / 2.4) - 0.055;
+  const encode = (channel: number): string =>
+    Math.round(Math.max(0, Math.min(1, linearToSrgb(channel))) * 255)
+      .toString(16)
+      .padStart(2, '0')
+      .toUpperCase();
+  return `#${hexChannels(hex)
+    .map((channel) => encode(srgbToLinear(channel) * baseWeight + (1 - baseWeight)))
+    .join('')}`;
+};
+
 const normalizeHex = (s: string): string => {
   if (s.startsWith('#')) return s;
   if (/^[0-9A-Fa-f]{6}$/.test(s)) return `#${s}`;
@@ -780,39 +800,48 @@ const DASH_PATTERNS: Record<string, string> = {
 };
 
 const arrowSize = (size: 'sm' | 'med' | 'lg' | undefined): number =>
-  size === 'sm' ? 3 : size === 'lg' ? 7 : 5;
+  size === 'sm' ? 2 : size === 'lg' ? 5 : 3;
 
 const buildArrowMarker = (
   type: string,
   width: 'sm' | 'med' | 'lg' | undefined,
   length: 'sm' | 'med' | 'lg' | undefined,
   color: string,
-  orient: 'auto' | 'auto-start-reverse',
+  atStart: boolean,
 ): { id: string; def: string } => {
   const id = mintId();
-  const w = arrowSize(width);
-  const h = arrowSize(length);
-  // refX = w so the tip lands on the line's endpoint; refY centers vertically.
+  // OOXML width is perpendicular to the connector and length runs along it.
+  // Open arrows use a longer viewport than filled heads at every size.
+  const w = arrowSize(length) + (type === 'arrow' ? 2 : 0);
+  const h = arrowSize(width) + (type === 'arrow' ? 1.5 : 0);
+  const tipX = atStart ? 0 : w;
+  const baseX = atStart ? w : 0;
   let body: string;
   switch (type) {
     case 'triangle':
-    case 'arrow':
-      body = `<path d="M0 0L${w} ${h / 2}L0 ${h}z" fill="${color}"/>`;
+      body = `<path d="M${baseX} 0L${tipX} ${h / 2}L${baseX} ${h}z" fill="${color}"/>`;
       break;
-    case 'stealth':
-      body = `<path d="M0 0L${w} ${h / 2}L0 ${h}L${w * 0.4} ${h / 2}z" fill="${color}"/>`;
+    case 'stealth': {
+      const notchX = atStart ? w * 0.6 : w * 0.4;
+      body = `<path d="M${baseX} 0L${tipX} ${h / 2}L${baseX} ${h}L${notchX} ${h / 2}z" fill="${color}"/>`;
       break;
+    }
     case 'diamond':
       body = `<path d="M0 ${h / 2}L${w / 2} 0L${w} ${h / 2}L${w / 2} ${h}z" fill="${color}"/>`;
       break;
     case 'oval':
       body = `<ellipse cx="${w / 2}" cy="${h / 2}" rx="${w / 2}" ry="${h / 2}" fill="${color}"/>`;
       break;
+    case 'arrow':
+      body = `<path d="M${baseX} 0L${tipX} ${h / 2}L${baseX} ${h}" fill="none" stroke="${color}" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>`;
+      break;
     case 'none':
     default:
       body = '';
   }
-  const def = `<defs><marker id="${id}" viewBox="0 0 ${w} ${h}" refX="${w}" refY="${h / 2}" markerWidth="${w}" markerHeight="${h}" orient="${orient}">${body}</marker></defs>`;
+  const centered = type === 'diamond' || type === 'oval';
+  const refX = centered ? w / 2 : atStart ? 0 : w;
+  const def = `<defs><marker id="${id}" viewBox="0 0 ${w} ${h}" refX="${refX}" refY="${h / 2}" markerWidth="${w}" markerHeight="${h}" orient="auto">${body}</marker></defs>`;
   return { id, def };
 };
 
@@ -922,18 +951,12 @@ const paint = (
       const head = getShapeStrokeArrow(shape, 'head');
       const tail = getShapeStrokeArrow(shape, 'tail');
       if (head && head.type !== 'none') {
-        const m = buildArrowMarker(
-          head.type,
-          head.width,
-          head.length,
-          strokeColor,
-          'auto-start-reverse',
-        );
+        const m = buildArrowMarker(head.type, head.width, head.length, strokeColor, true);
         defs += m.def;
         markerAttrs += ` marker-start="url(#${m.id})"`;
       }
       if (tail && tail.type !== 'none') {
-        const m = buildArrowMarker(tail.type, tail.width, tail.length, strokeColor, 'auto');
+        const m = buildArrowMarker(tail.type, tail.width, tail.length, strokeColor, false);
         defs += m.def;
         markerAttrs += ` marker-end="url(#${m.id})"`;
       }
@@ -4784,9 +4807,14 @@ const renderPieChart = (
 // Scatter / radar / bubble plotters. Scatter and bubble plot xy(z) tuples
 // against two value axes (reusing `renderValueAxis`); radar is polar.
 
-// Padded [min, max] for a scatter / bubble value axis so extreme points
-// don't sit on the plot edge. Aligns the bounds to the niceTicks step.
-const scatterAxisBounds = (vals: ReadonlyArray<number>): { min: number; max: number } => {
+// PowerPoint-style automatic bounds for scatter / bubble value axes.
+// Positive-only data includes zero and reserves one major unit above the
+// maximum. Bubble charts reserve one additional unit so the largest circle
+// does not clip against the plot edge.
+const scatterAxisBounds = (
+  vals: ReadonlyArray<number>,
+  extraMaxSteps = 0,
+): { min: number; max: number } => {
   let min = Infinity;
   let max = -Infinity;
   for (const v of vals) {
@@ -4797,6 +4825,11 @@ const scatterAxisBounds = (vals: ReadonlyArray<number>): { min: number; max: num
   }
   if (!Number.isFinite(min)) return { min: 0, max: 1 };
   if (min === max) return { min: min - 1, max: max + 1 };
+  if (min >= 0) {
+    min = 0;
+    const step = niceStep(max - min);
+    return { min, max: (Math.floor(max / step) + 1 + extraMaxSteps) * step };
+  }
   const ticks = niceTicks(min, max);
   const step = ticks.length >= 2 ? ticks[1]! - ticks[0]! : (max - min) / 4 || 1;
   return { min: Math.floor(min / step) * step, max: Math.ceil(max / step) * step };
@@ -4928,8 +4961,8 @@ const renderBubbleChart = (
     }
   }
   if (allX.length === 0) return '';
-  const xB = scatterAxisBounds(allX);
-  const yB = scatterAxisBounds(allY);
+  const xB = scatterAxisBounds(allX, 1);
+  const yB = scatterAxisBounds(allY, 1);
   if (spec.valueAxis?.min !== undefined) yB.min = spec.valueAxis.min;
   if (spec.valueAxis?.max !== undefined) yB.max = spec.valueAxis.max;
   const xRange = xB.max - xB.min || 1;
@@ -4937,10 +4970,12 @@ const renderBubbleChart = (
   const projX = (x: number): number => f.plotX + ((x - xB.min) / xRange) * f.plotW;
   const projY = (y: number): number => f.plotY + f.plotH - ((y - yB.min) / yRange) * f.plotH;
   const out: string[] = [renderScatterAxes(f, spec, xB, yB)];
-  // The largest bubble's diameter is bubbleScale% (default 25%) of the
-  // plot's smaller dimension. Per-point radius scales with sqrt(size) for
-  // the default area mode (sizeRepresents='area'), linearly for 'width'.
-  const scaleFraction = spec.bubbleScale !== undefined ? spec.bubbleScale / 100 : 0.25;
+  // Office's bubbleScale is a percentage of its default bubble diameter,
+  // which is 25% of the plot's smaller dimension. It is not itself a direct
+  // plot percentage: bubbleScale=110 means 27.5%, not 110%.
+  // Per-point radius scales with sqrt(size) for the default area mode
+  // (sizeRepresents='area'), linearly for 'width'.
+  const scaleFraction = 0.25 * ((spec.bubbleScale ?? 100) / 100);
   const maxRadiusPx = Math.max(2, scaleFraction * Math.min(f.plotW, f.plotH) * 0.5);
   const areaMode = (spec.bubbleSizeRepresents ?? 'area') === 'area';
   const radiusFor = (size: number): number => {
@@ -4957,7 +4992,7 @@ const renderBubbleChart = (
       const cy = projY(p.y);
       const r = radiusFor(p.size);
       out.push(
-        `<circle cx="${px(cx)}" cy="${px(cy)}" r="${r.toFixed(2)}" fill="${color}" fill-opacity="0.55" stroke="${color}" stroke-width="0.75"/>`,
+        `<circle cx="${px(cx)}" cy="${px(cy)}" r="${r.toFixed(2)}" fill="${color}" stroke="${color}" stroke-width="0.75"/>`,
       );
     }
   }
@@ -5571,18 +5606,24 @@ const renderTable = (
     rowYs.push((rowYs[r] ?? yPx) + (heightsPx[r] ?? 0) * hScale);
   }
 
-  // A10 table style — header / footer / first-col / last-col / banded
-  // rows / banded columns. Project the boolean flags onto per-cell tints
-  // that approximate the theme-driven look in PowerPoint.
+  // Project A10 table-style flags onto per-cell fills. Medium Style 2 /
+  // Accent 1 is PowerPoint's stock authoring default and has known exact
+  // theme semantics; other style IDs retain the previous approximation.
   const flags = getTableStyleFlags(shape);
+  const styleId = getTableStyleId(shape);
+  const isMediumStyle2Accent1 = styleId === '{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}';
   const accent = theme ? normalizeHex(theme.accent1) : '#4472C4';
   const headerFill = accent;
   // Pale tints for banded rows/cols/first-col/last-col — `t` is the accent's
   // weight, so a *light* tint needs a *low* t (mostly white). PowerPoint/
   // LibreOffice's built-in styles alternate TWO tints across body rows (no
   // row is left unshaded), not one tint vs. no fill.
-  const bandFill = mixHex(accent, '#FFFFFF', 0.12);
-  const bandFill2 = mixHex(accent, '#FFFFFF', 0.27);
+  const bandFill = isMediumStyle2Accent1
+    ? tintHexLinearLight(accent, 0.4)
+    : mixHex(accent, '#FFFFFF', 0.12);
+  const alternateBandFill = isMediumStyle2Accent1
+    ? tintHexLinearLight(accent, 0.2)
+    : mixHex(accent, '#FFFFFF', 0.27);
   // Fallback for cells with no authored color — the deck's body-text color
   // (an inverted map would paint the `tx1` token white-on-white).
   const textColor = activeDeckTextColor;
@@ -5596,7 +5637,8 @@ const renderTable = (
   out.push(
     `<rect x="${px(xPx)}" y="${px(yPx)}" width="${px((colXs[widthsPx.length] ?? xPx) - xPx)}" height="${px((rowYs[heightsPx.length] ?? yPx) - yPx)}" fill="#FFFFFF"/>`,
   );
-  const borderEdges: string[] = [];
+  const defaultBorderEdges: string[] = [];
+  const authoredBorderEdges: string[] = [];
   for (let r = 0; r < dims.rows; r++) {
     for (let c = 0; c < dims.cols; c++) {
       const cell = cells[r]?.[c];
@@ -5629,10 +5671,12 @@ const renderTable = (
         // not at the raw grid row index — otherwise a firstRow table shifts
         // the whole band pattern by one row.
         const bandIndex = r - (flags.firstRow ? 1 : 0);
-        resolvedFill = bandIndex % 2 === 0 ? bandFill : bandFill2;
+        resolvedFill = bandIndex % 2 === 0 ? bandFill : alternateBandFill;
       } else if (flags.bandCol) {
         const bandIndex = c - (flags.firstCol ? 1 : 0);
-        resolvedFill = bandIndex % 2 === 0 ? bandFill : bandFill2;
+        resolvedFill = bandIndex % 2 === 0 ? bandFill : alternateBandFill;
+      } else if (isMediumStyle2Accent1) {
+        resolvedFill = alternateBandFill;
       } else {
         resolvedFill = 'none';
       }
@@ -5666,7 +5710,7 @@ const renderTable = (
         if (!b) return;
         const sw = b.widthEmu ? Math.max(0.4, b.widthEmu / EMU_PER_PX) : 0.5;
         const col = b.color ?? '#9CA3AF';
-        borderEdges.push(
+        authoredBorderEdges.push(
           `<line x1="${px(x1)}" y1="${px(y1)}" x2="${px(x2)}" y2="${px(y2)}" stroke="${col}" stroke-width="${px(sw)}"${dashAttr(b.dash, sw)}/>`,
         );
       };
@@ -5678,7 +5722,7 @@ const renderTable = (
         const sw = borders.tlToBr.widthEmu
           ? Math.max(0.4, borders.tlToBr.widthEmu / EMU_PER_PX)
           : 0.5;
-        borderEdges.push(
+        authoredBorderEdges.push(
           `<line x1="${px(cx)}" y1="${px(cy)}" x2="${px(cx + cw)}" y2="${px(cy + ch)}" stroke="${borders.tlToBr.color ?? '#9CA3AF'}" stroke-width="${px(sw)}"${dashAttr(borders.tlToBr.dash, sw)}/>`,
         );
       }
@@ -5686,27 +5730,31 @@ const renderTable = (
         const sw = borders.blToTr.widthEmu
           ? Math.max(0.4, borders.blToTr.widthEmu / EMU_PER_PX)
           : 0.5;
-        borderEdges.push(
+        authoredBorderEdges.push(
           `<line x1="${px(cx)}" y1="${px(cy + ch)}" x2="${px(cx + cw)}" y2="${px(cy)}" stroke="${borders.blToTr.color ?? '#9CA3AF'}" stroke-width="${px(sw)}"${dashAttr(borders.blToTr.dash, sw)}/>`,
         );
       }
       // Default thin grid for sides that didn't define a border.
-      const defaultColor = '#9CA3AF';
+      const defaultColor = isMediumStyle2Accent1
+        ? normalizeHex(theme?.light1 ?? '#FFFFFF')
+        : '#9CA3AF';
+      const defaultWidth = isMediumStyle2Accent1 ? PX_PER_PT : 0.4;
+      const defaultOpacity = isMediumStyle2Accent1 ? '' : ' opacity="0.6"';
       if (!borders.left)
-        borderEdges.push(
-          `<line x1="${px(cx)}" y1="${px(cy)}" x2="${px(cx)}" y2="${px(cy + ch)}" stroke="${defaultColor}" stroke-width="0.4" opacity="0.6"/>`,
+        defaultBorderEdges.push(
+          `<line x1="${px(cx)}" y1="${px(cy)}" x2="${px(cx)}" y2="${px(cy + ch)}" stroke="${defaultColor}" stroke-width="${px(defaultWidth)}"${defaultOpacity}/>`,
         );
       if (!borders.right)
-        borderEdges.push(
-          `<line x1="${px(cx + cw)}" y1="${px(cy)}" x2="${px(cx + cw)}" y2="${px(cy + ch)}" stroke="${defaultColor}" stroke-width="0.4" opacity="0.6"/>`,
+        defaultBorderEdges.push(
+          `<line x1="${px(cx + cw)}" y1="${px(cy)}" x2="${px(cx + cw)}" y2="${px(cy + ch)}" stroke="${defaultColor}" stroke-width="${px(defaultWidth)}"${defaultOpacity}/>`,
         );
       if (!borders.top)
-        borderEdges.push(
-          `<line x1="${px(cx)}" y1="${px(cy)}" x2="${px(cx + cw)}" y2="${px(cy)}" stroke="${defaultColor}" stroke-width="0.4" opacity="0.6"/>`,
+        defaultBorderEdges.push(
+          `<line x1="${px(cx)}" y1="${px(cy)}" x2="${px(cx + cw)}" y2="${px(cy)}" stroke="${defaultColor}" stroke-width="${px(defaultWidth)}"${defaultOpacity}/>`,
         );
       if (!borders.bottom)
-        borderEdges.push(
-          `<line x1="${px(cx)}" y1="${px(cy + ch)}" x2="${px(cx + cw)}" y2="${px(cy + ch)}" stroke="${defaultColor}" stroke-width="0.4" opacity="0.6"/>`,
+        defaultBorderEdges.push(
+          `<line x1="${px(cx)}" y1="${px(cy + ch)}" x2="${px(cx + cw)}" y2="${px(cy + ch)}" stroke="${defaultColor}" stroke-width="${px(defaultWidth)}"${defaultOpacity}/>`,
         );
 
       const cellParagraphs = getTableCellParagraphs(
@@ -5735,7 +5783,11 @@ const renderTable = (
       );
     }
   }
-  out.push(borderEdges.join(''));
+  // Shared table edges can be emitted by both neighbouring cells. PowerPoint
+  // gives an authored edge precedence over the table style's default edge,
+  // independent of cell traversal order.
+  out.push(defaultBorderEdges.join(''));
+  out.push(authoredBorderEdges.join(''));
   out.push('</g>');
   return out.join('');
 };
@@ -5997,7 +6049,11 @@ const renderShape = (
     // Connectors default to a round cap/join, but an explicit cap/join from
     // <a:ln cap="…"> / <a:round/> already sits in strokeAttrs — emitting the
     // default alongside it would repeat the attribute and break SVG parsing.
-    const capDefault = sa.includes('stroke-linecap') ? '' : ' stroke-linecap="round"';
+    const capDefault = sa.includes('stroke-linecap')
+      ? ''
+      : ma
+        ? ' stroke-linecap="butt"'
+        : ' stroke-linecap="round"';
     const joinDefault = sa.includes('stroke-linejoin') ? '' : ' stroke-linejoin="round"';
     // B8 — bent / curved connector routing. Per ECMA-376 §20.1.9.18,
     // bentConnector{2,3,4,5} are L-shaped, step, and double-step paths;

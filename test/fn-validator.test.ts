@@ -15,6 +15,7 @@ import {
   loadPresentation,
   savePresentation,
   setCoreProperties,
+  setSlideNotes,
   validatePresentation,
 } from '../src/api/index.ts';
 import { partName } from '../src/internal/opc/index.ts';
@@ -71,6 +72,29 @@ describe('fn API: validatePresentation', () => {
     const broken = await loadPresentation(await savePresentation(reloaded));
     const issues = validatePresentation(broken);
     expect(issues.some((i) => i.message.includes('slide2.xml'))).toBe(true);
+  });
+
+  it('reports a dangling slide backlink from a notes part', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    setSlideNotes(getSlides(pres)[0]!, 'Notes with a broken backlink');
+    const pkg = _internalPackageOf(pres);
+    const notesPart = pkg.parts.find((part) =>
+      /^\/ppt\/notesSlides\/notesSlide\d+\.xml$/u.test(part.name),
+    );
+    if (!notesPart) throw new Error('expected notes slide part');
+    const notesRels = pkg.getRels(notesPart.name);
+    if (!notesRels) throw new Error('expected notes slide relationships');
+    const slideRel = notesRels.items.find((relationship) => relationship.type.endsWith('/slide'));
+    if (!slideRel) throw new Error('expected notes-to-slide backlink');
+    slideRel.target = '../slides/slide99.xml';
+    pkg.setRels(notesPart.name, notesRels);
+
+    expect(validatePresentation(pres)).toContainEqual({
+      severity: 'error',
+      message:
+        'part /ppt/notesSlides/notesSlide1.xml has dangling slide rel → /ppt/slides/slide99.xml',
+      partName: partName('/ppt/notesSlides/notesSlide1.xml'),
+    });
   });
 
   it('reports nothing extra after a successful addSlide round-trip', async () => {

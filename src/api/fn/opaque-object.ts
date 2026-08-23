@@ -1,4 +1,4 @@
-import { unzipSync, zipSync } from 'fflate';
+import { type ZipOptions, unzipSync, zipSync } from 'fflate';
 import {
   emptyRels,
   nextRelId,
@@ -32,6 +32,7 @@ const MAX_EXPANDED_BYTES = 128 * 1024 * 1024;
 const MAX_ENTRY_BYTES = 64 * 1024 * 1024;
 const MAX_ENTRIES = 1024;
 const MAX_COMPRESSION_RATIO = 100;
+const FRAGMENT_ZIP_MTIME = new Date(1980, 0, 1, 0, 0, 0, 0);
 
 /** Classify the preserved object for registries and diagnostics without exposing its XML. */
 export const getOpaqueObjectKind = (shape: SlideShapeData): string =>
@@ -124,7 +125,11 @@ export const extractOpaqueObjectFragment = (shape: SlideShapeData): Uint8Array =
     parts,
   };
   files['manifest.json'] = encoder.encode(`${JSON.stringify(manifest, null, 2)}\n`);
-  return zipSync(files, { level: 6 });
+  const deterministicFiles: Record<string, [Uint8Array, ZipOptions]> = {};
+  for (const [name, bytes] of Object.entries(files)) {
+    deterministicFiles[name] = [bytes, { level: 6, mtime: FRAGMENT_ZIP_MTIME }];
+  }
+  return zipSync(deterministicFiles);
 };
 
 /** Insert one validated opaque fragment into a slide, rebinding its package relationships. */

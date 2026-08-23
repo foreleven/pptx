@@ -11,6 +11,7 @@
 //   - `/ppt/presentation.xml` or its `.rels` part missing.
 //   - A `<p:sldId>` whose `r:id` has no matching rel.
 //   - A slide rel whose target part is absent from the package.
+//   - A notesSlide whose required slide backlink is missing or dangling.
 //   - A slide that has no `slideLayout` rel.
 //   - A slide layout that has no `slideMaster` rel.
 //   - Duplicate `<p:sldId>` `id` or `r:id` within `<p:sldIdLst>`.
@@ -90,6 +91,30 @@ const validateCorePropertyDates = (pkg: OpcPackage, issues: ValidationIssue[]): 
   }
 };
 
+/** Validate the reverse notesSlide → slide edge that PowerPoint requires. */
+const validateNotesSlideBacklinks = (pkg: OpcPackage, issues: ValidationIssue[]): void => {
+  for (const part of pkg.parts) {
+    if (!part.contentType.endsWith('notesSlide+xml')) continue;
+    const rels = pkg.getRels(part.name);
+    const slideRel = rels?.items.find((relationship) => relationship.type === REL_TYPES.slide);
+    if (!slideRel || slideRel.targetMode === 'External') {
+      issues.push({
+        severity: 'error',
+        message: `notes part ${part.name} is missing an internal slide backlink`,
+        partName: part.name,
+      });
+      continue;
+    }
+    const slideName = targetPartName(part.name, slideRel);
+    if (pkg.getPart(slideName) !== null) continue;
+    issues.push({
+      severity: 'error',
+      message: `part ${part.name} has dangling slide rel → ${slideName}`,
+      partName: part.name,
+    });
+  }
+};
+
 /**
  * Runs every invariant check in this module against `pkg`. Returns a
  * list of issues; an empty list means the deck passes every check. The
@@ -99,6 +124,7 @@ const validateCorePropertyDates = (pkg: OpcPackage, issues: ValidationIssue[]): 
 export const validatePresentationPackage = (pkg: OpcPackage): ValidationIssue[] => {
   const issues: ValidationIssue[] = [];
   validateCorePropertyDates(pkg, issues);
+  validateNotesSlideBacklinks(pkg, issues);
 
   const presPart = pkg.getPart(PRES_PART);
   if (!presPart) {

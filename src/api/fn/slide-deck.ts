@@ -351,17 +351,71 @@ export const replaceSlideContents = (target: SlideData, replacement: SlideData):
   );
   targetPart.data = new Uint8Array(replacementPart.data);
   const replacementRels = pkg.getRels(replacementName);
+  // Owned parts such as notesSlide can point back to the temporary replacement slide.
+  // Preserve the closure, but rebind those backlinks before callers remove that slide.
+  const replacementOwnedParts = collectRelationshipClosure(
+    pkg,
+    replacementName,
+    replacementRels,
+    new Set([targetName.toLowerCase(), replacementName.toLowerCase()]),
+  );
   if (replacementRels === null) {
     pkg.removePart(relsPartNameFor(targetName));
   } else {
     pkg.setRels(targetName, {
-      items: replacementRels.items.map((relationship) => ({ ...relationship })),
+      items: replacementRels.items.map((relationship) => {
+        const adopted = { ...relationship };
+        if (
+          adopted.targetMode !== 'External' &&
+          resolveTarget(replacementName, adopted.target).toLowerCase() ===
+            replacementName.toLowerCase()
+        ) {
+          adopted.target = relativeRelationshipTarget(targetName, targetName);
+        }
+        return adopted;
+      }),
     });
   }
+  retargetRelationshipBacklinks(pkg, replacementOwnedParts, replacementName, targetName);
 
   target[SLIDE_DOCUMENT] = parseXml(decode(targetPart.data));
   rebuildShapesFromDocument(target);
   removeUnreferencedClosure(pkg, oldOwnedParts);
+};
+
+const retargetRelationshipBacklinks = (
+  pkg: OpcPackage,
+  ownedParts: ReadonlyMap<string, PartName>,
+  replacementName: PartName,
+  targetName: PartName,
+): void => {
+  for (const sourceName of ownedParts.values()) {
+    const relationships = pkg.getRels(sourceName);
+    if (relationships === null) continue;
+    let changed = false;
+    for (const relationship of relationships.items) {
+      if (relationship.targetMode === 'External') continue;
+      if (
+        resolveTarget(sourceName, relationship.target).toLowerCase() !==
+        replacementName.toLowerCase()
+      ) {
+        continue;
+      }
+      relationship.target = relativeRelationshipTarget(sourceName, targetName);
+      changed = true;
+    }
+    if (changed) pkg.setRels(sourceName, relationships);
+  }
+};
+
+const relativeRelationshipTarget = (source: PartName, target: PartName): string => {
+  const from = source.slice(1).split('/').slice(0, -1);
+  const to = target.slice(1).split('/');
+  while (from.length > 0 && to.length > 0 && from[0]!.toLowerCase() === to[0]!.toLowerCase()) {
+    from.shift();
+    to.shift();
+  }
+  return `${from.map(() => '..').join('/')}${from.length > 0 && to.length > 0 ? '/' : ''}${to.join('/')}`;
 };
 
 const collectRelationshipClosure = (

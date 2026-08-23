@@ -128,6 +128,7 @@ describe('replaceSlideContents', () => {
 
     const remainingNames = new Set(listPackageParts(reloaded).map((part) => part.name));
     for (const oldOwnedPart of oldOwnedParts) expect(remainingNames.has(oldOwnedPart)).toBe(false);
+    expect(validatePresentation(reloaded)).toEqual([]);
     void oldPicture;
   });
 
