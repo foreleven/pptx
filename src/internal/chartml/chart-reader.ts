@@ -933,14 +933,39 @@ export const readChartSpec = (root: XmlElement): ChartSpec | null => {
     }
   }
 
-  // <c:dropLines> and <c:hiLowLines> on the plotted-kind element.
-  // Both flags are pure booleans for our purposes — the line color /
-  // style they author would require the full ln cascade and isn't
-  // worth modeling at this layer.
-  const dropLinesEl = firstChildElement(plotted, qname('c', 'dropLines', NS_C));
-  const hiLowLinesEl = firstChildElement(plotted, qname('c', 'hiLowLines', NS_C));
-  const dropLines = dropLinesEl !== null ? true : undefined;
-  const hiLowLines = hiLowLinesEl !== null ? true : undefined;
+  // <c:dropLines> and <c:hiLowLines> live on the line plot group, which
+  // is not necessarily the first group in a combo chart. A single global
+  // flag is sufficient when every line group agrees. When primary and
+  // secondary line groups differ, retain exact per-group state instead
+  // of OR-aggregating and silently adding guides during the round trip.
+  // Retain the first-group fallback for legacy area-chart imports.
+  const guideLineGroups = plotGroups.filter((group) => group.kind === 'line');
+  const readGuide = (element: XmlElement, localName: 'dropLines' | 'hiLowLines'): boolean =>
+    firstChildElement(element, qname('c', localName, NS_C)) !== null;
+  const guideStates = guideLineGroups.map((group) => ({
+    secondaryAxis: groupUsesSecondaryAxis(group.element),
+    dropLines: readGuide(group.element, 'dropLines'),
+    hiLowLines: readGuide(group.element, 'hiLowLines'),
+  }));
+  const guidesDiffer = guideStates.some(
+    (state) =>
+      state.dropLines !== guideStates[0]?.dropLines ||
+      state.hiLowLines !== guideStates[0]?.hiLowLines,
+  );
+  const fallbackGuideElement = guideLineGroups.length === 0 ? plotted : null;
+  const dropLines = guidesDiffer
+    ? undefined
+    : (guideStates[0]?.dropLines ??
+        (fallbackGuideElement !== null && readGuide(fallbackGuideElement, 'dropLines')))
+      ? true
+      : undefined;
+  const hiLowLines = guidesDiffer
+    ? undefined
+    : (guideStates[0]?.hiLowLines ??
+        (fallbackGuideElement !== null && readGuide(fallbackGuideElement, 'hiLowLines')))
+      ? true
+      : undefined;
+  const lineGuideGroups = guidesDiffer ? guideStates : undefined;
 
   // <c:lineChart><c:marker val="1"/> toggles point markers for the whole
   // line chart: present (the "Line with Markers" subtype) shows them, absent
@@ -1437,6 +1462,7 @@ export const readChartSpec = (root: XmlElement): ChartSpec | null => {
     ...(grouping !== undefined ? { grouping } : {}),
     ...(dropLines !== undefined ? { dropLines } : {}),
     ...(hiLowLines !== undefined ? { hiLowLines } : {}),
+    ...(lineGuideGroups !== undefined ? { lineGuideGroups } : {}),
     ...(lineMarkers !== undefined ? { lineMarkers } : {}),
     ...(gapWidthPct !== undefined ? { gapWidthPct } : {}),
     ...(overlapPct !== undefined ? { overlapPct } : {}),

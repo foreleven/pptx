@@ -313,6 +313,16 @@ export interface ChartAxisScaling {
  */
 export type ChartGrouping = 'clustered' | 'stacked' | 'percentStacked' | 'standard';
 
+/** Exact guide-line state for one line plot group on a combo-chart axis. */
+export interface ChartLineGuideGroup {
+  /** `true` targets the right-hand secondary value axis; `false` targets the primary axis. */
+  readonly secondaryAxis: boolean;
+  /** Whether this plot group carries `<c:dropLines>`. */
+  readonly dropLines: boolean;
+  /** Whether this plot group carries `<c:hiLowLines>`. */
+  readonly hiLowLines: boolean;
+}
+
 /**
  * Authored text style for a chart label (title / axis title / etc.).
  * Read from the label's first `<a:rPr>` (and `<a:defRPr>` as fallback).
@@ -588,6 +598,12 @@ export interface ChartSpec {
    * charts and side-by-side line charts.
    */
   readonly hiLowLines?: boolean;
+  /**
+   * Per-plot-group guide-line state used when a combo chart's primary and
+   * secondary line groups differ. The global `dropLines` / `hiLowLines`
+   * fields take precedence when explicitly authored.
+   */
+  readonly lineGuideGroups?: ReadonlyArray<ChartLineGuideGroup>;
   /**
    * Whether a line chart draws point markers (`<c:lineChart><c:marker
    * val="1"/>`). `true` is PowerPoint's "Line with Markers" subtype;

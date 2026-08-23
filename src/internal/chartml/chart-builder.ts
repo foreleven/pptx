@@ -808,8 +808,11 @@ const buildLineChart = (
     ...ser,
     ...(dl ? [dl] : []),
   ];
-  if (spec.dropLines) children.push(elem(c('dropLines')));
-  if (spec.hiLowLines) children.push(elem(c('hiLowLines')));
+  const exactGuides = spec.lineGuideGroups?.find(
+    (group) => group.secondaryAxis === (axes.val === SEC_VAL_AX_ID),
+  );
+  if (spec.dropLines ?? exactGuides?.dropLines) children.push(elem(c('dropLines')));
+  if (spec.hiLowLines ?? exactGuides?.hiLowLines) children.push(elem(c('hiLowLines')));
   // <c:marker val> selects the line subtype: "1" → Line with Markers,
   // "0" → plain Line. Default on, preserving the historical output;
   // authors opt out of markers with `lineMarkers: false`.

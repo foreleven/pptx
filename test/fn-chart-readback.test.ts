@@ -347,6 +347,81 @@ describe('fn API: getSlideCharts', () => {
     expect(spec2.holeSizePct).toBe(70);
   });
 
+  it('reads drop lines and high-low lines from a non-leading line group in a combo chart', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    addSlideChart(slide, {
+      x: inches(0.5),
+      y: inches(0.5),
+      w: inches(6),
+      h: inches(4),
+      spec: {
+        kind: 'column',
+        categories: ['Q1', 'Q2', 'Q3'],
+        series: [
+          { name: 'Volume', values: [20, 30, 25] },
+          { name: 'Low', values: [8, 12, 10], chartKind: 'line' },
+          { name: 'High', values: [14, 18, 16], chartKind: 'line' },
+        ],
+        dropLines: true,
+        hiLowLines: true,
+      },
+    });
+
+    const bytes = await savePresentation(pres);
+    const reloaded = await loadPresentation(bytes);
+    const spec = getSlideCharts(getSlides(reloaded)[0]!)[0]!.spec!;
+    expect(spec.kind).toBe('column');
+    expect(spec.series.map((series) => series.chartKind)).toEqual([undefined, 'line', 'line']);
+    expect(spec.dropLines).toBe(true);
+    expect(spec.hiLowLines).toBe(true);
+  });
+
+  it('preserves different guide-line settings on primary and secondary line groups', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    addSlideChart(slide, {
+      x: inches(0.5),
+      y: inches(0.5),
+      w: inches(6),
+      h: inches(4),
+      spec: {
+        kind: 'column',
+        categories: ['Q1', 'Q2', 'Q3'],
+        series: [
+          { name: 'Volume', values: [20, 30, 25] },
+          { name: 'Primary trend', values: [8, 12, 10], chartKind: 'line' },
+          {
+            name: 'Secondary trend',
+            values: [40, 50, 45],
+            chartKind: 'line',
+            secondaryAxis: true,
+          },
+        ],
+        lineGuideGroups: [
+          { secondaryAxis: false, dropLines: true, hiLowLines: false },
+          { secondaryAxis: true, dropLines: false, hiLowLines: true },
+        ],
+      },
+    });
+
+    const bytes = await savePresentation(pres);
+    const reloaded = await loadPresentation(bytes);
+    const spec = getSlideCharts(getSlides(reloaded)[0]!)[0]!.spec!;
+    expect(spec.dropLines).toBeUndefined();
+    expect(spec.hiLowLines).toBeUndefined();
+    expect(spec.lineGuideGroups).toEqual([
+      { secondaryAxis: false, dropLines: true, hiLowLines: false },
+      { secondaryAxis: true, dropLines: false, hiLowLines: true },
+    ]);
+
+    const secondBytes = await savePresentation(reloaded);
+    const secondReload = await loadPresentation(secondBytes);
+    expect(getSlideCharts(getSlides(secondReload)[0]!)[0]!.spec!.lineGuideGroups).toEqual(
+      spec.lineGuideGroups,
+    );
+  });
+
   it('round-trips plot-area / chart-area fill and stroke colors', async () => {
     const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
     const slide = getSlides(pres)[0]!;
