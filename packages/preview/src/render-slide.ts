@@ -3963,10 +3963,6 @@ const renderColumnChart = (
   const clusterUnitsC = isStacked ? 1 : 1 + (Sc - 1) * (1 - overlapPctC);
   const barW = groupW / Math.max(0.5, clusterUnitsC + gapPctC);
   const baseY = f.plotY + f.plotH - ((0 - min) / range) * f.plotH;
-  // Per-series <c:dLbls> overrides the chart-level toggles for that
-  // one series.
-  const showLabelFor = (s: number): boolean =>
-    spec.series[s]?.dataLabels?.showValue ?? spec.dataLabels?.showValue ?? false;
   const out: string[] = [];
   for (let c = 0; c < N; c++) {
     if (isStacked) {
@@ -3996,13 +3992,17 @@ const renderColumnChart = (
         out.push(
           `<rect x="${px(x0)}" y="${px(y0)}" width="${px(barW)}" height="${px(h)}" fill="${spec.series[s]?.color ?? colors[s % colors.length]}"/>`,
         );
-        if (showLabelFor(s) && Math.abs(v) > 0) {
+        const labelText = chartDataLabelText(
+          spec,
+          s,
+          c,
+          v,
+          isPercent ? { valueText: `${Math.round(v * 100)}%` } : {},
+        );
+        if (labelText.length > 0 && Math.abs(v) > 0) {
           const labelY = (y0 + y1) / 2 + 3;
-          const labelText = isPercent
-            ? `${Math.round(v * 100)}%`
-            : formatDataLabelValue(spec, s, v);
           out.push(
-            `<text x="${px(x0 + barW / 2)}" y="${px(labelY)}" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#FFFFFF" font-weight="600">${labelText}</text>`,
+            `<text x="${px(x0 + barW / 2)}" y="${px(labelY)}" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#FFFFFF" font-weight="600">${escapeXml(labelText)}</text>`,
           );
         }
         if (v >= 0) posAcc = stackedTop;
@@ -4035,7 +4035,8 @@ const renderColumnChart = (
         out.push(
           `<rect x="${px(x0)}" y="${px(y0)}" width="${px(barW)}" height="${px(h)}" fill="${fillColor}"/>`,
         );
-        if (showLabelFor(s)) {
+        const labelText = chartDataLabelText(spec, s, c, v);
+        if (labelText.length > 0) {
           // dLblPos: ctr (center) / inEnd (just inside the bar tip) /
           // outEnd (outside the bar — default) / inBase (just inside the
           // bar base).
@@ -4055,7 +4056,7 @@ const renderColumnChart = (
             labelY = v >= 0 ? y0 - 2 : y0 + h + 9;
           }
           out.push(
-            `<text x="${px(x0 + barW / 2)}" y="${px(labelY)}" text-anchor="middle" ${dataLabelTextAttrs(spec, s, fill)}>${formatDataLabelValue(spec, s, v)}</text>`,
+            `<text x="${px(x0 + barW / 2)}" y="${px(labelY)}" text-anchor="middle" ${dataLabelTextAttrs(spec, s, fill)}>${escapeXml(labelText)}</text>`,
           );
         }
       }
@@ -4333,6 +4334,24 @@ const dataLabelTextAttrs = (
   return `font-family="sans-serif" font-size="${chartFontPx(sz)}" fill="${fill}"${weight}${italic}`;
 };
 
+const chartDataLabelText = (
+  spec: ChartSpec,
+  seriesIdx: number,
+  categoryIdx: number,
+  value: number,
+  options: { valueText?: string; percentText?: string } = {},
+): string => {
+  const labels = spec.series[seriesIdx]?.dataLabels ?? spec.dataLabels;
+  if (!labels) return '';
+  const parts: string[] = [];
+  if (labels.showSeriesName) parts.push(spec.series[seriesIdx]?.name ?? `Series ${seriesIdx + 1}`);
+  if (labels.showCategory) parts.push(spec.categories[categoryIdx] ?? String(categoryIdx + 1));
+  if (labels.showValue)
+    parts.push(options.valueText ?? formatDataLabelValue(spec, seriesIdx, value));
+  if (labels.showPercent && options.percentText !== undefined) parts.push(options.percentText);
+  return parts.join(labels.separator ?? ' ');
+};
+
 const renderBarChart = (f: ChartFrame, spec: ChartSpec, colors: ReadonlyArray<string>): string => {
   const N = pointCount(spec);
   if (N === 0 || spec.series.length === 0) return '';
@@ -4351,8 +4370,6 @@ const renderBarChart = (f: ChartFrame, spec: ChartSpec, colors: ReadonlyArray<st
   const barH = groupH / Math.max(0.5, clusterUnitsB + gapPctB);
   const baseX = f.plotX + ((0 - min) / range) * f.plotW;
   // Per-series <c:dLbls> overrides chart-level toggles for that series.
-  const showLabelForBar = (s: number): boolean =>
-    spec.series[s]?.dataLabels?.showValue ?? spec.dataLabels?.showValue ?? false;
   const out: string[] = [];
   for (let c = 0; c < N; c++) {
     if (isStacked) {
@@ -4377,13 +4394,17 @@ const renderBarChart = (f: ChartFrame, spec: ChartSpec, colors: ReadonlyArray<st
         out.push(
           `<rect x="${px(x0)}" y="${px(y0)}" width="${px(w)}" height="${px(barH)}" fill="${spec.series[s]?.color ?? colors[s % colors.length]}"/>`,
         );
-        if (showLabelForBar(s) && Math.abs(v) > 0) {
+        const labelText = chartDataLabelText(
+          spec,
+          s,
+          c,
+          v,
+          isPercent ? { valueText: `${Math.round(v * 100)}%` } : {},
+        );
+        if (labelText.length > 0 && Math.abs(v) > 0) {
           const labelX = (x0 + x1) / 2;
-          const labelText = isPercent
-            ? `${Math.round(v * 100)}%`
-            : formatDataLabelValue(spec, s, v);
           out.push(
-            `<text x="${px(labelX)}" y="${px(y0 + barH / 2 + 3)}" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#FFFFFF" font-weight="600">${labelText}</text>`,
+            `<text x="${px(labelX)}" y="${px(y0 + barH / 2 + 3)}" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#FFFFFF" font-weight="600">${escapeXml(labelText)}</text>`,
           );
         }
         if (v >= 0) posAcc = stackedTop;
@@ -4413,7 +4434,8 @@ const renderBarChart = (f: ChartFrame, spec: ChartSpec, colors: ReadonlyArray<st
         out.push(
           `<rect x="${px(x0)}" y="${px(y0)}" width="${px(w)}" height="${px(barH)}" fill="${fillColor}"/>`,
         );
-        if (showLabelForBar(s)) {
+        const labelText = chartDataLabelText(spec, s, c, v);
+        if (labelText.length > 0) {
           // dLblPos for horizontal bars uses the same enum as columns
           // but maps to X positions.
           const pos = spec.series[s]?.dataLabels?.position ?? spec.dataLabels?.position;
@@ -4437,7 +4459,7 @@ const renderBarChart = (f: ChartFrame, spec: ChartSpec, colors: ReadonlyArray<st
             anchor = v >= 0 ? 'start' : 'end';
           }
           out.push(
-            `<text x="${px(labelX)}" y="${px(y0 + barH / 2 + 3)}" text-anchor="${anchor}" ${dataLabelTextAttrs(spec, s, fill)}>${formatDataLabelValue(spec, s, v)}</text>`,
+            `<text x="${px(labelX)}" y="${px(y0 + barH / 2 + 3)}" text-anchor="${anchor}" ${dataLabelTextAttrs(spec, s, fill)}>${escapeXml(labelText)}</text>`,
           );
         }
       }
@@ -4623,8 +4645,8 @@ const renderLineChart = (
     // Per-point value labels for line / area charts. Sits above the
     // marker so the line / fill stays unobscured. Honors the same
     // per-series → chart-level cascade as bar / pie.
-    const showLineLabel = series.dataLabels?.showValue ?? spec.dataLabels?.showValue ?? false;
-    if (showLineLabel) {
+    const hasLineLabels = series.dataLabels !== undefined || spec.dataLabels !== undefined;
+    if (hasLineLabels) {
       // dLblPos for line / area: ctr (on marker) / t / b / l / r.
       // Default = t (above marker), matching PowerPoint's stock layout.
       const lblPos = series.dataLabels?.position ?? spec.dataLabels?.position;
@@ -4647,10 +4669,12 @@ const renderLineChart = (
         if (p == null) continue;
         const v = series.values[c];
         if (v === null || v === undefined || !Number.isFinite(v)) continue;
+        const labelText = chartDataLabelText(spec, s, c, v);
+        if (labelText.length === 0) continue;
         const [xp, yp] = p;
         const { x: lx, y: ly, anchor } = computeAttrs(xp, yp);
         out.push(
-          `<text x="${px(lx)}" y="${px(ly)}" text-anchor="${anchor}" ${dataLabelTextAttrs(spec, s, '#374151')}>${formatDataLabelValue(spec, s, v as number)}</text>`,
+          `<text x="${px(lx)}" y="${px(ly)}" text-anchor="${anchor}" ${dataLabelTextAttrs(spec, s, '#374151')}>${escapeXml(labelText)}</text>`,
         );
       }
     }
@@ -4785,18 +4809,12 @@ const renderPieChart = (
     }
     const labelX = sx + labelR * Math.cos(labelMid);
     const labelY = sy + labelR * Math.sin(labelMid);
-    // PowerPoint/LibreOffice order a pie/doughnut label as category, then
-    // value, then percent (e.g. "Web — 48%"), not the reverse.
-    const labels: string[] = [];
-    if (spec.dataLabels?.showCategory) {
-      const catLabel = spec.categories[i];
-      if (catLabel) labels.push(catLabel);
-    }
-    if (spec.dataLabels?.showValue) labels.push(formatDataLabelValue(spec, 0, v));
-    if (spec.dataLabels?.showPercent) labels.push(`${((v / total) * 100).toFixed(0)}%`);
-    if (labels.length > 0) {
+    const labelText = chartDataLabelText(spec, 0, i, v, {
+      percentText: `${((v / total) * 100).toFixed(0)}%`,
+    });
+    if (labelText.length > 0) {
       out.push(
-        `<text x="${px(labelX)}" y="${px(labelY)}" text-anchor="middle" dominant-baseline="middle" ${dataLabelTextAttrs(spec, 0, labelFill, 10, true)}>${escapeXml(labels.join(spec.series[0]?.dataLabels?.separator ?? spec.dataLabels?.separator ?? ' '))}</text>`,
+        `<text x="${px(labelX)}" y="${px(labelY)}" text-anchor="middle" dominant-baseline="middle" ${dataLabelTextAttrs(spec, 0, labelFill, 10, true)}>${escapeXml(labelText)}</text>`,
       );
     }
   }
