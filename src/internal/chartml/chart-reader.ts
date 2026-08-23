@@ -86,9 +86,7 @@ const KIND_MAP: ReadonlyArray<PlottedKindMap> = [
   { localName: 'area3DChart', kind: 'area' },
   // Scatter / bubble carry xy / xyz tuples per series (`<c:xVal>` /
   // `<c:yVal>` / `<c:bubbleSize>`) rather than numeric channels against
-  // shared categories; radar uses cat+val like line. All three are
-  // modeled as their own kind (read + render only — the builder rejects
-  // them, see chart-builder.ts).
+  // shared categories; radar uses cat+val like line.
   { localName: 'scatterChart', kind: 'scatter' },
   { localName: 'bubbleChart', kind: 'bubble' },
   { localName: 'radarChart', kind: 'radar' },
@@ -823,11 +821,25 @@ export const readChartSpec = (root: XmlElement): ChartSpec | null => {
     };
   }
 
+  const valueAxes = allChildElements(plotArea, qname('c', 'valAx', NS_C));
+  const axisAtPosition = (
+    axes: ReadonlyArray<XmlElement>,
+    positions: ReadonlySet<string>,
+  ): XmlElement | null =>
+    axes.find((axis) => {
+      const axPos = firstChildElement(axis, qname('c', 'axPos', NS_C));
+      const position = axPos === null ? null : getAttrValue(axPos, ATTR_VAL);
+      return position !== null && positions.has(position);
+    }) ?? null;
+  const xyChart = kind === 'scatter' || kind === 'bubble';
+  const xyCategoryAxis = xyChart ? axisAtPosition(valueAxes, new Set(['b', 't'])) : null;
+  const xyValueAxis = xyChart ? axisAtPosition(valueAxes, new Set(['l', 'r'])) : null;
+
   // <c:valAx> lives on the plotArea (not on the plotted-kind element).
   // Pull its <c:scaling><c:min/>/<c:max/> as the authored axis range,
   // plus optional <c:majorUnit> / <c:minorUnit> tick spacing.
   let valueAxis: ChartAxisScaling | undefined;
-  const valAx = findFirst(plotArea, ['valAx']);
+  const valAx = xyValueAxis ?? valueAxes[0] ?? null;
   if (valAx) {
     let min: number | undefined;
     let max: number | undefined;
@@ -1040,7 +1052,7 @@ export const readChartSpec = (root: XmlElement): ChartSpec | null => {
     const v = getAttrValue(srgb, ATTR_VAL);
     return v !== null ? `#${v.toUpperCase()}` : undefined;
   };
-  const catAx = findFirst(plotArea, ['catAx', 'dateAx', 'serAx']);
+  const catAx = xyCategoryAxis ?? findFirst(plotArea, ['catAx', 'dateAx', 'serAx']);
   const isHidden = (axis: XmlElement): boolean | undefined => {
     const d = firstChildElement(axis, qname('c', 'delete', NS_C));
     if (!d) return undefined;

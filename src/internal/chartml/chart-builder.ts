@@ -8,6 +8,7 @@
 // can render the chart without ever opening the workbook.
 
 import {
+  bubbleScalePercent,
   firstSliceAngle,
   gapAmountPercent,
   holeSizePercent,
@@ -15,6 +16,7 @@ import {
   overlapPercent,
 } from '../bounds.ts';
 import { NS, type XmlDocument, type XmlElement, attr, elem, qname, text } from '../xml/index.ts';
+import { cellAddr, cellRange } from './embedded-xlsx.ts';
 import type { ChartSpec, ChartTextStyle } from './types.ts';
 
 // QNames (chart `c:` namespace) --------------------------------------------
@@ -343,6 +345,72 @@ const seriesElement = (spec: ChartSpec, seriesIdx: number, sheet: string): XmlEl
   return elem(c('ser'), { children });
 };
 
+const xySeriesElement = (spec: ChartSpec, seriesIdx: number, sheet: string): XmlElement => {
+  const series = spec.series[seriesIdx];
+  if (!series) throw new Error('xySeriesElement: out of range');
+  if (!series.xValues || series.xValues.length === 0) {
+    throw new Error(`${spec.kind} chart series[${seriesIdx}] requires non-empty xValues`);
+  }
+  const pointCount = Math.max(series.xValues.length, series.values.length);
+  if (pointCount === 0) {
+    throw new Error(`${spec.kind} chart series[${seriesIdx}] requires at least one x/y point`);
+  }
+
+  const baseColumn = seriesIdx * (spec.kind === 'bubble' ? 3 : 2);
+  const xValues = Array.from({ length: pointCount }, (_, index) => series.xValues?.[index] ?? null);
+  const yValues = Array.from({ length: pointCount }, (_, index) => series.values[index] ?? null);
+  const color =
+    series.color !== undefined
+      ? series.color.replace(/^#/, '').toUpperCase()
+      : (DEFAULT_ACCENT_COLORS[seriesIdx % DEFAULT_ACCENT_COLORS.length] ?? '4472C4');
+
+  const children: XmlElement[] = [
+    valNode(c('idx'), seriesIdx),
+    valNode(c('order'), seriesIdx),
+    elem(c('tx'), {
+      children: [strRef(cellAddr(sheet, 0, baseColumn + 1), [series.name])],
+    }),
+    seriesSpPr(color, series.lineWidthEmu, series.lineDash),
+  ];
+  if (spec.kind === 'scatter') {
+    const marker = markerElement(series.markerSymbol, series.markerSizePt);
+    if (marker !== null) children.push(marker);
+  }
+  for (const dPt of dPtElements(series.pointColors, series.pointExplosions)) {
+    children.push(dPt);
+  }
+  const seriesLabels = buildDLblsFromLabels(series.dataLabels, spec.kind);
+  if (seriesLabels !== null) children.push(seriesLabels);
+  if (series.trendline) children.push(trendlineElement(series.trendline));
+  children.push(
+    elem(c('xVal'), {
+      children: [numRef(cellRange(sheet, 1, baseColumn, pointCount), xValues)],
+    }),
+    elem(c('yVal'), {
+      children: [numRef(cellRange(sheet, 1, baseColumn + 1, pointCount), yValues)],
+    }),
+  );
+  if (spec.kind === 'bubble') {
+    if (!series.bubbleSizes || series.bubbleSizes.length === 0) {
+      throw new Error(`bubble chart series[${seriesIdx}] requires non-empty bubbleSizes`);
+    }
+    const bubbleSizes = Array.from(
+      { length: pointCount },
+      (_, index) => series.bubbleSizes?.[index] ?? null,
+    );
+    children.push(
+      elem(c('bubbleSize'), {
+        children: [numRef(cellRange(sheet, 1, baseColumn + 2, pointCount), bubbleSizes)],
+      }),
+      valNode(c('bubble3D'), '0'),
+    );
+  }
+  if (spec.kind === 'scatter') {
+    children.push(valNode(c('smooth'), series.smooth === true ? '1' : '0'));
+  }
+  return elem(c('ser'), { children });
+};
+
 // Axis ids — arbitrary distinct positive 32-bit integers PowerPoint just
 // needs them stable within the chart for the `<c:crossAx>` back-pointer.
 const CAT_AX_ID = 111111111;
@@ -508,11 +576,15 @@ const valAxis = (spec: ChartSpec): XmlElement => {
       titleElement(spec.valueAxisTitle, spec.valueAxisTitleStyle, spec.valueAxisTitleRotationDeg),
     );
   }
-  if (spec.valueAxis?.numberFormat !== undefined) {
+  if (
+    spec.valueAxis?.numberFormat !== undefined ||
+    spec.kind === 'scatter' ||
+    spec.kind === 'bubble'
+  ) {
     children.push(
       elem(c('numFmt'), {
         attrs: [
-          attr(qname('', 'formatCode', ''), spec.valueAxis.numberFormat),
+          attr(qname('', 'formatCode', ''), spec.valueAxis?.numberFormat ?? 'General'),
           attr(qname('', 'sourceLinked', ''), '0'),
         ],
       }),
@@ -523,6 +595,13 @@ const valAxis = (spec: ChartSpec): XmlElement => {
   }
   if (spec.valueAxisMinorTickMark !== undefined) {
     children.push(valNode(c('minorTickMark'), spec.valueAxisMinorTickMark));
+  }
+  if (spec.kind === 'scatter' || spec.kind === 'bubble') {
+    if (spec.valueAxisMajorTickMark === undefined)
+      children.push(valNode(c('majorTickMark'), 'none'));
+    if (spec.valueAxisMinorTickMark === undefined)
+      children.push(valNode(c('minorTickMark'), 'none'));
+    children.push(valNode(c('tickLblPos'), 'nextTo'));
   }
   if (spec.valueAxisLineColor !== undefined) {
     children.push(spPrChildren(undefined, spec.valueAxisLineColor));
@@ -539,9 +618,13 @@ const valAxis = (spec: ChartSpec): XmlElement => {
     } else {
       children.push(valNode(c('crossesAt'), String(xross.at)));
     }
+  } else if (spec.kind === 'scatter' || spec.kind === 'bubble') {
+    children.push(valNode(c('crosses'), 'autoZero'));
   }
   if (spec.valueAxisCrossBetween !== undefined) {
     children.push(valNode(c('crossBetween'), spec.valueAxisCrossBetween));
+  } else if (spec.kind === 'scatter' || spec.kind === 'bubble') {
+    children.push(valNode(c('crossBetween'), spec.kind === 'scatter' ? 'midCat' : 'between'));
   }
   if (spec.valueAxis?.majorUnit !== undefined) {
     children.push(valNode(c('majorUnit'), spec.valueAxis.majorUnit));
@@ -556,6 +639,69 @@ const valAxis = (spec: ChartSpec): XmlElement => {
       }),
     );
   }
+  return elem(c('valAx'), { children });
+};
+
+/** Numeric horizontal axis used by scatter/bubble charts. */
+const xyXAxis = (spec: ChartSpec): XmlElement => {
+  const children: XmlElement[] = [
+    valNode(c('axId'), CAT_AX_ID),
+    elem(c('scaling'), {
+      children: [valNode(c('orientation'), spec.categoryAxisOrientation ?? 'minMax')],
+    }),
+    valNode(c('delete'), spec.categoryAxisHidden ? '1' : '0'),
+    valNode(c('axPos'), 'b'),
+  ];
+  if (spec.categoryAxisMajorGridlines) {
+    children.push(gridlinesElement('majorGridlines', spec.categoryAxisMajorGridlineColor));
+  }
+  if (spec.categoryAxisMinorGridlines) {
+    children.push(gridlinesElement('minorGridlines', spec.categoryAxisMinorGridlineColor));
+  }
+  if (spec.categoryAxisTitle !== undefined) {
+    children.push(
+      titleElement(
+        spec.categoryAxisTitle,
+        spec.categoryAxisTitleStyle,
+        spec.categoryAxisTitleRotationDeg,
+      ),
+    );
+  }
+  if (
+    spec.categoryAxisNumberFormat !== undefined ||
+    spec.kind === 'scatter' ||
+    spec.kind === 'bubble'
+  ) {
+    children.push(
+      elem(c('numFmt'), {
+        attrs: [
+          attr(qname('', 'formatCode', ''), spec.categoryAxisNumberFormat ?? 'General'),
+          attr(qname('', 'sourceLinked', ''), '1'),
+        ],
+      }),
+    );
+  }
+  if (spec.categoryAxisMajorTickMark !== undefined) {
+    children.push(valNode(c('majorTickMark'), spec.categoryAxisMajorTickMark));
+  }
+  if (spec.categoryAxisMinorTickMark !== undefined) {
+    children.push(valNode(c('minorTickMark'), spec.categoryAxisMinorTickMark));
+  }
+  if (spec.categoryAxisMajorTickMark === undefined)
+    children.push(valNode(c('majorTickMark'), 'none'));
+  if (spec.categoryAxisMinorTickMark === undefined)
+    children.push(valNode(c('minorTickMark'), 'none'));
+  if (spec.categoryAxisTickLabelPos !== undefined) {
+    children.push(valNode(c('tickLblPos'), spec.categoryAxisTickLabelPos));
+  } else {
+    children.push(valNode(c('tickLblPos'), 'nextTo'));
+  }
+  if (spec.categoryAxisLineColor !== undefined) {
+    children.push(spPrChildren(undefined, spec.categoryAxisLineColor));
+  }
+  const txPr = axisTxPrElement(spec.categoryAxisLabelStyle, spec.categoryAxisLabelRotationDeg);
+  if (txPr !== null) children.push(txPr);
+  children.push(valNode(c('crossAx'), VAL_AX_ID), valNode(c('crosses'), 'autoZero'));
   return elem(c('valAx'), { children });
 };
 
@@ -724,6 +870,37 @@ const buildAreaChart = (
       ...(dl ? [dl] : []),
       valNode(c('axId'), axes.cat),
       valNode(c('axId'), axes.val),
+    ],
+  });
+};
+
+const buildScatterChart = (spec: ChartSpec, sheet: string): XmlElement => {
+  const series = spec.series.map((_, index) => xySeriesElement(spec, index, sheet));
+  const labels = dLblsElement(spec);
+  return elem(c('scatterChart'), {
+    children: [
+      valNode(c('scatterStyle'), spec.scatterStyle ?? 'lineMarker'),
+      valNode(c('varyColors'), spec.varyColors ? '1' : '0'),
+      ...series,
+      ...(labels ? [labels] : []),
+      valNode(c('axId'), CAT_AX_ID),
+      valNode(c('axId'), VAL_AX_ID),
+    ],
+  });
+};
+
+const buildBubbleChart = (spec: ChartSpec, sheet: string): XmlElement => {
+  const series = spec.series.map((_, index) => xySeriesElement(spec, index, sheet));
+  const labels = dLblsElement(spec);
+  return elem(c('bubbleChart'), {
+    children: [
+      valNode(c('varyColors'), spec.varyColors ? '1' : '0'),
+      ...series,
+      ...(labels ? [labels] : []),
+      valNode(c('bubbleScale'), bubbleScalePercent(spec.bubbleScale ?? 100, 'chart: bubbleScale')),
+      valNode(c('sizeRepresents'), spec.bubbleSizeRepresents === 'width' ? 'w' : 'area'),
+      valNode(c('axId'), CAT_AX_ID),
+      valNode(c('axId'), VAL_AX_ID),
     ],
   });
 };
@@ -906,15 +1083,19 @@ export const buildChartSpaceDoc = (spec: ChartSpec): XmlDocument => {
       plottedGroups = [buildDoughnutChart(spec, sheet)];
       break;
     case 'scatter':
-    case 'radar':
+      plottedGroups = [buildScatterChart(spec, sheet)];
+      break;
     case 'bubble':
+      plottedGroups = [buildBubbleChart(spec, sheet)];
+      break;
+    case 'radar':
       // Read + render only (plan W4): the builder can't serialize the
       // xy(z) tuple channels these kinds need, so reject rather than
       // silently emit a malformed or wrong-kind chart. `readChartSpec`
       // surfaces these kinds, but `addSlideChart` / `setChartSpec` won't
       // write them.
       throw new Error(
-        `chart kind '${spec.kind}' is read-only; authoring scatter / radar / bubble charts is not yet supported`,
+        `chart kind '${spec.kind}' is read-only; authoring radar charts is not yet supported`,
       );
     default: {
       const exhaustive: never = spec.kind;
@@ -925,7 +1106,11 @@ export const buildChartSpaceDoc = (spec: ChartSpec): XmlDocument => {
   const axisless = spec.kind === 'pie' || spec.kind === 'doughnut';
   const plotAreaChildren: XmlElement[] = [elem(c('layout')), ...plottedGroups];
   if (!axisless) {
-    plotAreaChildren.push(catAxis(spec), valAxis(spec));
+    if (spec.kind === 'scatter' || spec.kind === 'bubble') {
+      plotAreaChildren.push(xyXAxis(spec), valAxis(spec));
+    } else {
+      plotAreaChildren.push(catAxis(spec), valAxis(spec));
+    }
     if (hasSecondary) {
       plotAreaChildren.push(secondaryValAxis(), secondaryCatAxis());
     }

@@ -3,13 +3,12 @@
 // One or more named series of numeric values plotted against shared
 // string categories (bar / column / line / pie / doughnut / area), plus
 // the xy(z)-tuple kinds (scatter / radar / bubble) the reader and preview
-// model. Authoring is supported for the category kinds only; the xy(z)
-// kinds are read + render only (see `chart-builder.ts`).
+// model. Scatter and bubble are authorable; radar remains read + render only.
 
 /**
  * Chart type tokens. `bar` / `column` / `line` / `pie` / `doughnut` /
- * `area` are authorable; `scatter` / `radar` / `bubble` are read +
- * render only — the builder rejects them (see `buildChartSpaceDoc`).
+ * Every listed kind except `radar` is authorable; radar is currently
+ * read + render only and the builder rejects it.
  */
 export type ChartKind =
   | 'bar'

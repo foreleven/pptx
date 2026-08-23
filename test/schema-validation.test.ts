@@ -290,6 +290,41 @@ describe('Layer 1: schema validation', () => {
     }
   });
 
+  skipIfNoXmllint('scatter and bubble charts validate', async () => {
+    const { addSlideChart, getSlides, loadPresentation, savePresentation } =
+      await import('../src/api/index.ts');
+    for (const kind of ['scatter', 'bubble'] as const) {
+      const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+      const slide = getSlides(pres)[0];
+      if (!slide) throw new Error('expected slide');
+      addSlideChart(slide, {
+        x: inches(0.5),
+        y: inches(0.5),
+        w: inches(4),
+        h: inches(3),
+        spec: {
+          kind,
+          categories: [],
+          series: [
+            {
+              name: 'XY',
+              xValues: [1, 2, 3],
+              values: [4, 8, 6],
+              ...(kind === 'bubble' ? { bubbleSizes: [10, 30, 70] } : {}),
+            },
+          ],
+        },
+      });
+      const bytes = await savePresentation(pres);
+      const reloaded = await loadPresentation(bytes);
+      const chartPart = _internalPackageOf(reloaded).parts.find(
+        (part) => part.name === '/ppt/charts/chart1.xml',
+      );
+      expect(chartPart, `chart not found for ${kind}`).not.toBeUndefined();
+      expectSchemaValid(decode(chartPart!.data), 'chart');
+    }
+  });
+
   skipIfNoXmllint('a column chart generated via addSlideChart validates', async () => {
     const { addSlideChart, getSlides, loadPresentation, savePresentation } =
       await import('../src/api/index.ts');

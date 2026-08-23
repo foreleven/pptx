@@ -34,6 +34,7 @@ const RANGES = {
   gapAmount: [0, 500], // ST_GapAmountUShort (bar/column gap width %)
   holeSize: [1, 90], // ST_HoleSizeUByte (doughnut hole %)
   firstSliceAng: [0, 360], // ST_FirstSliceAng (pie/doughnut start angle, degrees)
+  bubbleScale: [0, 300], // ST_BubbleScale (percent)
 } as const;
 
 type RangeKey = keyof typeof RANGES;
@@ -94,6 +95,9 @@ export const holeSizePercent = (v: number, field: string): number =>
 /** Pie/doughnut first-slice angle in degrees — ST_FirstSliceAng (0..360). */
 export const firstSliceAngle = (v: number, field: string): number =>
   boundedInt(v, 'firstSliceAng', field);
+/** Bubble size scale percentage — ST_BubbleScale (0..300). */
+export const bubbleScalePercent = (v: number, field: string): number =>
+  boundedInt(v, 'bubbleScale', field);
 
 // ST_Guid requires UPPERCASE hex inside braces. PowerPoint emits uppercase, and
 // `crypto.randomUUID()` yields lowercase, so we accept either case and normalize

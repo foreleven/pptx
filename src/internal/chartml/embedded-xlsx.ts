@@ -44,6 +44,52 @@ export interface DataRow {
   readonly values: ReadonlyArray<number | null>;
 }
 
+type WorksheetCell = string | number | null;
+
+/**
+ * Builds the chart workbook from an explicit rectangular table. This is
+ * shared by category charts and xy(z) charts, whose series occupy two or
+ * three adjacent numeric columns instead of one shared category column.
+ */
+export const buildEmbeddedXlsxTable = (
+  headers: ReadonlyArray<string>,
+  rows: ReadonlyArray<ReadonlyArray<WorksheetCell>>,
+): Uint8Array => {
+  const sheetXmlParts: string[] = [];
+  sheetXmlParts.push(
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n',
+    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">',
+    '<sheetData>',
+  );
+
+  sheetXmlParts.push('<row r="1">');
+  for (let col = 0; col < headers.length; col++) {
+    sheetXmlParts.push(
+      `<c r="${cellRef(0, col)}" t="inlineStr"><is><t>${xmlEscape(headers[col] ?? '')}</t></is></c>`,
+    );
+  }
+  sheetXmlParts.push('</row>');
+
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+    const row = rows[rowIndex]!;
+    sheetXmlParts.push(`<row r="${rowIndex + 2}">`);
+    for (let col = 0; col < row.length; col++) {
+      const value = row[col];
+      if (value === null || value === undefined) continue;
+      const ref = cellRef(rowIndex + 1, col);
+      if (typeof value === 'string') {
+        sheetXmlParts.push(`<c r="${ref}" t="inlineStr"><is><t>${xmlEscape(value)}</t></is></c>`);
+      } else {
+        sheetXmlParts.push(`<c r="${ref}"><v>${value}</v></c>`);
+      }
+    }
+    sheetXmlParts.push('</row>');
+  }
+
+  sheetXmlParts.push('</sheetData></worksheet>');
+  return packageWorkbook(sheetXmlParts.join(''));
+};
+
 /**
  * Builds the bytes of a fresh xlsx whose only sheet is laid out as
  *
@@ -58,44 +104,13 @@ export interface DataRow {
 export const buildEmbeddedXlsx = (
   seriesNames: ReadonlyArray<string>,
   rows: ReadonlyArray<DataRow>,
-): Uint8Array => {
-  // ----- /xl/worksheets/sheet1.xml --------------------------------------
-  const sheetXmlParts: string[] = [];
-  sheetXmlParts.push(
-    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n',
-    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">',
-    '<sheetData>',
+): Uint8Array =>
+  buildEmbeddedXlsxTable(
+    ['', ...seriesNames],
+    rows.map((row) => [row.label, ...row.values]),
   );
 
-  // Header row.
-  sheetXmlParts.push('<row r="1">');
-  // A1 = blank.
-  sheetXmlParts.push(`<c r="${cellRef(0, 0)}" t="inlineStr"><is><t></t></is></c>`);
-  for (let i = 0; i < seriesNames.length; i++) {
-    sheetXmlParts.push(
-      `<c r="${cellRef(0, i + 1)}" t="inlineStr"><is><t>${xmlEscape(seriesNames[i] ?? '')}</t></is></c>`,
-    );
-  }
-  sheetXmlParts.push('</row>');
-
-  for (let r = 0; r < rows.length; r++) {
-    const row = rows[r]!;
-    const rowIdx = r + 1; // header sits at index 0.
-    sheetXmlParts.push(`<row r="${rowIdx + 1}">`);
-    sheetXmlParts.push(
-      `<c r="${cellRef(rowIdx, 0)}" t="inlineStr"><is><t>${xmlEscape(row.label)}</t></is></c>`,
-    );
-    for (let i = 0; i < row.values.length; i++) {
-      const v = row.values[i];
-      if (v === null || v === undefined) continue; // omit empty cell.
-      sheetXmlParts.push(`<c r="${cellRef(rowIdx, i + 1)}"><v>${v}</v></c>`);
-    }
-    sheetXmlParts.push('</row>');
-  }
-
-  sheetXmlParts.push('</sheetData></worksheet>');
-  const sheetXml = sheetXmlParts.join('');
-
+const packageWorkbook = (sheetXml: string): Uint8Array => {
   // ----- /xl/workbook.xml -----------------------------------------------
   const workbookXml =
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +

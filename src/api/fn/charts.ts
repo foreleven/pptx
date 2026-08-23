@@ -19,6 +19,7 @@ import {
   type ChartTextStyle,
   buildChartSpaceDoc,
   buildEmbeddedXlsx,
+  buildEmbeddedXlsxTable,
   readChartSpec,
 } from '../../internal/chartml/index.ts';
 import {
@@ -177,14 +178,15 @@ const validateChartSpecColors = (spec: ChartSpec): void => {
 /**
  * Adds a chart to the slide. Returns the new shape handle (kind
  * `graphicFrame`). Supported chart kinds today: `bar`, `column`,
- * `line`, `pie` — see `ChartSpec.kind`.
+ * `line`, `area`, `pie`, `doughnut`, `scatter`, and `bubble` — see
+ * `ChartSpec.kind`.
  *
  * Side effects:
  *
  *   - Allocates `/ppt/charts/chart{N}.xml` for the chart definition.
  *   - Allocates `/ppt/embeddings/Microsoft_Excel_Worksheet{N}.xlsx` as
  *     a placeholder workbook (single sheet, header row + one row per
- *     category). PowerPoint reads the inline `<c:strCache>` /
+ *     category or XY(Z) tuple). PowerPoint reads the inline `<c:strCache>` /
  *     `<c:numCache>` so the workbook is for "Edit data" only.
  *   - Slide → chart and chart → workbook rels are wired with fresh rIds.
  *   - `<a:graphicFrame>` is appended to the slide's `<p:spTree>`.
@@ -218,6 +220,44 @@ const withChartDefaultTextColor = (spec: ChartSpec, color: string | null): Chart
   };
 };
 
+const buildChartWorkbook = (spec: ChartSpec): Uint8Array => {
+  if (spec.kind === 'scatter' || spec.kind === 'bubble') {
+    const channelCount = spec.kind === 'bubble' ? 3 : 2;
+    const headers = spec.series.flatMap((series) => [
+      `${series.name} X`,
+      series.name,
+      ...(spec.kind === 'bubble' ? [`${series.name} Size`] : []),
+    ]);
+    const pointCount = Math.max(
+      0,
+      ...spec.series.map((series) =>
+        Math.max(
+          series.xValues?.length ?? 0,
+          series.values.length,
+          series.bubbleSizes?.length ?? 0,
+        ),
+      ),
+    );
+    const rows = Array.from({ length: pointCount }, (_, pointIndex) =>
+      spec.series.flatMap((series) => [
+        series.xValues?.[pointIndex] ?? null,
+        series.values[pointIndex] ?? null,
+        ...(channelCount === 3 ? [series.bubbleSizes?.[pointIndex] ?? null] : []),
+      ]),
+    );
+    return buildEmbeddedXlsxTable(headers, rows);
+  }
+
+  const rows = spec.categories.map((label, i) => ({
+    label,
+    values: spec.series.map((series) => series.values[i] ?? null),
+  }));
+  return buildEmbeddedXlsx(
+    spec.series.map((series) => series.name),
+    rows,
+  );
+};
+
 export const addSlideChart = (
   slide: SlideData,
   opts: {
@@ -236,16 +276,7 @@ export const addSlideChart = (
   const chartPartName = partName(`/ppt/charts/chart${chartN}.xml`);
   const xlsxPartName = partName(`/ppt/embeddings/Microsoft_Excel_Worksheet${chartN}.xlsx`);
 
-  // Build the embedded xlsx bytes. Each row in the sheet corresponds to
-  // one category; header row carries the series names.
-  const xlsxRows = spec.categories.map((label, i) => ({
-    label,
-    values: spec.series.map((s) => s.values[i] ?? null),
-  }));
-  const xlsxBytes = buildEmbeddedXlsx(
-    spec.series.map((s) => s.name),
-    xlsxRows,
-  );
+  const xlsxBytes = buildChartWorkbook(spec);
 
   // Build the chart XML and serialize.
   const chartDoc = buildChartSpaceDoc(spec);
@@ -386,14 +417,7 @@ export const setChartSpec = (chart: SlideChartData, spec: ChartSpec): void => {
         ? partName(xlsxRel.target)
         : resolveTarget(resolved.partName, xlsxRel.target);
       const xlsxPart = pkg.getPart(xlsxName);
-      const rows = spec.categories.map((label, i) => ({
-        label,
-        values: spec.series.map((s) => s.values[i] ?? null),
-      }));
-      const xlsxBytes = buildEmbeddedXlsx(
-        spec.series.map((s) => s.name),
-        rows,
-      );
+      const xlsxBytes = buildChartWorkbook(spec);
       if (xlsxPart) {
         xlsxPart.data = xlsxBytes;
       }
