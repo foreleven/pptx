@@ -34,6 +34,7 @@ import {
   setShapeImageContrast,
   setShapeImageDuotone,
   setShapeImageGrayscale,
+  setShapeImageOpacity,
   setShapeNoFill,
   setShapeRunFormat,
   setShapeStroke,
@@ -358,12 +359,14 @@ describe('schema coverage: images, notes, connectors, animation', () => {
     setShapeImageGrayscale(p, true);
     setShapeImageBiLevel(p, 0.42);
     setShapeImageDuotone(p, { dark: '#17233C', light: '#F26B5B' });
+    setShapeImageOpacity(p, 0.55);
     const xml = await authoredXml(pres);
     expect(xml).toContain('<p:pic>');
     expect(xml).toContain('<a:lum');
     expect(xml).toContain('<a:grayscl/>');
     expect(xml).toContain('<a:biLevel thresh="42000"/>');
     expect(xml).toContain('<a:duotone>');
+    expect(xml).toContain('<a:alphaModFix amt="55000"/>');
     expect(xml).not.toContain('lumOff');
     expect(xml).not.toContain('lumMod');
   });
