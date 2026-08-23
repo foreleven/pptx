@@ -30,17 +30,20 @@ import {
   setShapeGradientFill,
   setShapeImageBrightness,
   setShapeImageContrast,
+  setShapeNoFill,
   setShapeRunFormat,
   setShapeStroke,
   setShapeStrokeArrow,
   setShapeStrokeDash,
   setShapeStrokeJoin,
+  setTableCellAnchor,
   setShapeText,
   setSlideNotes,
   setSlideTransition,
   getTableCell,
   setTableCellBorders,
   setTableCellFill,
+  setTableCellMargins,
 } from '../src/api/index.ts';
 import { buildPng } from './lib/build-png.ts';
 import {
@@ -156,6 +159,15 @@ describe('schema coverage: fills', () => {
     await authoredXml(pres);
   });
 
+  skipIfNoXmllint('solid and no-fill shapes validate against PresentationML', async () => {
+    const pres = createPresentation();
+    setShapeFill(shape(pres), '#3659E3');
+    setShapeNoFill(shape(pres));
+    const xml = await authoredXml(pres);
+    expect(xml).toContain('<a:solidFill>');
+    expect(xml).toContain('<a:noFill/>');
+  });
+
   skipIfNoXmllint('radial gradient emits <a:path>, not a downgraded <a:lin>', async () => {
     const pres = createPresentation();
     setShapeGradientFill(shape(pres), {
@@ -193,7 +205,7 @@ describe('schema coverage: tables', () => {
     expect(xml).toContain('<a:t>lines</a:t>');
   });
 
-  skipIfNoXmllint('cell fill then border keeps tcPr children ordered', async () => {
+  skipIfNoXmllint('cell fill, border, margins, and anchor keep tcPr schema-valid', async () => {
     const pres = createPresentation();
     const t = addSlideTable(addBlankSlide(pres), {
       x: inches(1),
@@ -211,7 +223,14 @@ describe('schema coverage: tables', () => {
       left: { color: '#000000', widthEmu: pt(1) },
       bottom: { color: '#FF0000', widthEmu: pt(2) },
     });
-    await authoredXml(pres);
+    setTableCellMargins(c, { left: 50000, right: 60000, top: 70000, bottom: 80000 });
+    setTableCellAnchor(c, 'bottom');
+    const xml = await authoredXml(pres);
+    expect(xml).toContain('marL="50000"');
+    expect(xml).toContain('marR="60000"');
+    expect(xml).toContain('marT="70000"');
+    expect(xml).toContain('marB="80000"');
+    expect(xml).toContain('anchor="b"');
   });
 });
 
@@ -278,6 +297,29 @@ describe('schema coverage: charts', () => {
     expect(xml).not.toContain('invertIfNegative');
     expect(xml).not.toContain('<c:marker');
   });
+
+  skipIfNoXmllint(
+    'standard, stacked, and percent-stacked area charts validate against ChartML',
+    async () => {
+      const pres = createPresentation();
+      for (const grouping of ['standard', 'stacked', 'percentStacked'] as const) {
+        chart(pres, {
+          kind: 'area',
+          grouping,
+          categories: ['Q1', 'Q2', 'Q3'],
+          series: [
+            { name: 'Core', values: [18, 25, 34] },
+            { name: 'Growth', values: [10, 16, 22] },
+          ],
+        });
+      }
+      const xml = await authoredXml(pres);
+      expect(xml.match(/<c:areaChart>/g)).toHaveLength(3);
+      expect(xml).toContain('<c:grouping val="standard"/>');
+      expect(xml).toContain('<c:grouping val="stacked"/>');
+      expect(xml).toContain('<c:grouping val="percentStacked"/>');
+    },
+  );
 
   skipIfNoXmllint('trendline is dropped on pie series (CT_PieSer has no trendline)', async () => {
     const pres = createPresentation();
