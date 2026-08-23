@@ -321,7 +321,8 @@ Keep content within `x ∈ [0.5, 12.83]`, `y ∈ [0.5, 7.0]` inches.
 
 Read-pass-through or post-1.0, _not_ authorable today:
 
-- `scatter` / `radar` / `bubble` charts, combo charts, and secondary value axes.
+- Chart kinds outside `bar` / `column` / `line` / `pie` / `doughnut` / `area` /
+  `scatter` / `radar` / `bubble`, plus high-level combo-chart and secondary-axis helpers.
 - Multiple independently-formatted runs **within one paragraph** (inline rich
   text like "make _this word_ bold"); each paragraph is authored as one run.
   Use per-shape or per-paragraph formatting, or split across shapes.

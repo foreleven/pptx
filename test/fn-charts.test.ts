@@ -169,10 +169,22 @@ describe('fn API: addSlideChart', () => {
             {
               name: 'Share',
               values: [50, 30, 20],
-              dataLabels: { showValue: true, position: 'bestFit' },
+              dataLabels: {
+                showValue: true,
+                showCategory: false,
+                showSeriesName: false,
+                showPercent: false,
+                position: 'bestFit',
+              },
             },
           ],
-          dataLabels: { showPercent: true, position: 'bestFit' },
+          dataLabels: {
+            showValue: false,
+            showCategory: false,
+            showSeriesName: false,
+            showPercent: true,
+            position: 'bestFit',
+          },
         },
       });
       const chartBytes = await partBytes(await savePresentation(pres), '/ppt/charts/chart1.xml');
