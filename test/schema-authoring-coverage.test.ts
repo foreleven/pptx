@@ -29,7 +29,10 @@ import {
   setShapeFill,
   setShapeGradientFill,
   setShapeImageBrightness,
+  setShapeImageBiLevel,
   setShapeImageContrast,
+  setShapeImageDuotone,
+  setShapeImageGrayscale,
   setShapeNoFill,
   setShapeRunFormat,
   setShapeStroke,
@@ -196,8 +199,14 @@ describe('schema coverage: tables', () => {
         [' leading', 'trailing '],
         ['mid\tdle', 'two\nlines'],
       ],
+      colWidths: [inches(2), inches(4)],
+      rowHeights: [inches(1), inches(2)],
     });
     const xml = await authoredXml(pres);
+    expect(xml).toContain('<a:gridCol w="1828800"/>');
+    expect(xml).toContain('<a:gridCol w="3657600"/>');
+    expect(xml).toContain('<a:tr h="914400">');
+    expect(xml).toContain('<a:tr h="1828800">');
     expect(xml).not.toContain('xml:space');
     // A `\n` splits the cell into separate paragraphs — each line is its own
     // `<a:t>`, not one run carrying an embedded newline (the old behavior).
@@ -335,7 +344,7 @@ describe('schema coverage: charts', () => {
 });
 
 describe('schema coverage: images, notes, connectors, animation', () => {
-  skipIfNoXmllint('brightness + contrast share one valid <a:lum>', async () => {
+  skipIfNoXmllint('common picture color transforms form a valid p:pic effect chain', async () => {
     const pres = createPresentation();
     const p = addSlideImage(addBlankSlide(pres), buildPng(32, 32, [9, 9, 9]), {
       x: inches(1),
@@ -345,8 +354,15 @@ describe('schema coverage: images, notes, connectors, animation', () => {
     });
     setShapeImageBrightness(p, 0.2);
     setShapeImageContrast(p, -0.3);
+    setShapeImageGrayscale(p, true);
+    setShapeImageBiLevel(p, 0.42);
+    setShapeImageDuotone(p, { dark: '#17233C', light: '#F26B5B' });
     const xml = await authoredXml(pres);
+    expect(xml).toContain('<p:pic>');
     expect(xml).toContain('<a:lum');
+    expect(xml).toContain('<a:grayscl/>');
+    expect(xml).toContain('<a:biLevel thresh="42000"/>');
+    expect(xml).toContain('<a:duotone>');
     expect(xml).not.toContain('lumOff');
     expect(xml).not.toContain('lumMod');
   });
