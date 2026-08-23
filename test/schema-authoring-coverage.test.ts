@@ -13,6 +13,7 @@ import {
   addSlideChart,
   addSlideImage,
   addSlideLine,
+  addSlideMedia,
   addSlideShape,
   addSlideTable,
   createPresentation,
@@ -365,6 +366,36 @@ describe('schema coverage: images, notes, connectors, animation', () => {
     expect(xml).toContain('<a:duotone>');
     expect(xml).not.toContain('lumOff');
     expect(xml).not.toContain('lumMod');
+  });
+
+  skipIfNoXmllint('embedded video and audio relationships keep their media frames schema-valid', async () => {
+    const pres = createPresentation();
+    const slide = addBlankSlide(pres);
+    const poster = buildPng(32, 32, [54, 89, 227]);
+    addSlideMedia(slide, Uint8Array.from([0, 0, 0, 24, 102, 116, 121, 112]), {
+      kind: 'video',
+      contentType: 'video/mp4',
+      posterBytes: poster,
+      posterFormat: 'png',
+      x: inches(1),
+      y: inches(1),
+      w: inches(3),
+      h: inches(2),
+    });
+    addSlideMedia(slide, Uint8Array.from([73, 68, 51, 4, 0, 0]), {
+      kind: 'audio',
+      contentType: 'audio/mpeg',
+      posterBytes: poster,
+      posterFormat: 'png',
+      x: inches(5),
+      y: inches(1),
+      w: inches(2),
+      h: inches(1),
+    });
+    const xml = await authoredXml(pres);
+    expect(xml).toContain('<a:videoFile');
+    expect(xml).toContain('<a:audioFile');
+    expect(xml).toContain('<p14:media');
   });
 
   skipIfNoXmllint('notes slide part root is <p:notes>', async () => {
