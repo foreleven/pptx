@@ -40,7 +40,15 @@ describe('fn API: combo charts', () => {
         categories: ['速い', '普通', '遅い'],
         series: [
           { name: '件数', values: [92, 118, 54] },
-          { name: '平均スコア', values: [4.5, 3.8, 2.9], chartKind: 'line', secondaryAxis: true },
+          {
+            name: '平均スコア',
+            values: [4.5, 3.8, 2.9],
+            chartKind: 'line',
+            secondaryAxis: true,
+            markerSymbol: 'circle',
+            markerSizePt: 7,
+            smooth: true,
+          },
         ],
       },
     });
@@ -58,12 +66,18 @@ describe('fn API: combo charts', () => {
     expect(xml).toContain('<c:axId val="444444444"/>');
     expect(xml).toContain('<c:axPos val="r"/>');
     expect(xml).toContain('<c:crosses val="max"/>');
+    expect(xml).toContain('<c:crossBetween val="between"/>');
     expect(xml).toContain('<c:axId val="333333333"/>');
+    expect(xml).toContain('<c:crosses val="autoZero"/>');
     // The line group must reference the secondary pair, the bar group
     // the primary pair.
     const lineChartXml = xml.slice(xml.indexOf('<c:lineChart>'), xml.indexOf('</c:lineChart>'));
     expect(lineChartXml).toContain('<c:axId val="333333333"/>');
     expect(lineChartXml).toContain('<c:axId val="444444444"/>');
+    expect(lineChartXml).toContain(
+      '<c:marker><c:symbol val="circle"/><c:size val="7"/></c:marker>',
+    );
+    expect(lineChartXml).toContain('<c:smooth val="1"/>');
     const barChartXml = xml.slice(xml.indexOf('<c:barChart>'), xml.indexOf('</c:barChart>'));
     expect(barChartXml).toContain('<c:axId val="111111111"/>');
     expect(barChartXml).toContain('<c:axId val="222222222"/>');

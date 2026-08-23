@@ -268,6 +268,7 @@ const trendlineElement = (
 const seriesElement = (spec: ChartSpec, seriesIdx: number, sheet: string): XmlElement => {
   const series = spec.series[seriesIdx];
   if (!series) throw new Error('seriesElement: out of range');
+  const seriesKind = series.chartKind ?? spec.kind;
 
   const headerCellFormula = `${sheet}!$${String.fromCharCode(66 + seriesIdx)}$1`;
   const catRange = `${sheet}!$A$2:$A$${spec.categories.length + 1}`;
@@ -298,8 +299,8 @@ const seriesElement = (spec: ChartSpec, seriesIdx: number, sheet: string): XmlEl
   // solidFill the reader round-trips. Bar / column / pie keep the legacy
   // solid-fill-only shape for tight round-trip compatibility with fixtures.
   if (
-    spec.kind === 'line' ||
-    spec.kind === 'radar' ||
+    seriesKind === 'line' ||
+    seriesKind === 'radar' ||
     series.lineWidthEmu !== undefined ||
     series.lineDash !== undefined
   ) {
@@ -309,13 +310,13 @@ const seriesElement = (spec: ChartSpec, seriesIdx: number, sheet: string): XmlEl
   }
   // invertIfNegative only exists on CT_BarSer (bar/column). Emitting it on a
   // line/pie/area series is schema-invalid, so gate on the bar-family kinds.
-  if (series.invertIfNegative === true && (spec.kind === 'bar' || spec.kind === 'column')) {
+  if (series.invertIfNegative === true && (seriesKind === 'bar' || seriesKind === 'column')) {
     children.push(valNode(c('invertIfNegative'), '1'));
   }
   // <c:marker> is only valid on the marker-bearing series types
   // (CT_LineSer / CT_ScatterSer / CT_RadarSer). Emitting it on bar/column/
   // pie/doughnut/area produces schema-invalid XML.
-  if (spec.kind === 'line' || spec.kind === 'scatter' || spec.kind === 'radar') {
+  if (seriesKind === 'line' || seriesKind === 'scatter' || seriesKind === 'radar') {
     const mk = markerElement(series.markerSymbol, series.markerSizePt);
     if (mk !== null) children.push(mk);
   }
@@ -323,16 +324,16 @@ const seriesElement = (spec: ChartSpec, seriesIdx: number, sheet: string): XmlEl
   for (const dPt of dPtElements(series.pointColors, series.pointExplosions)) {
     children.push(dPt);
   }
-  const serDLbls = buildDLblsFromLabels(series.dataLabels, spec.kind);
+  const serDLbls = buildDLblsFromLabels(series.dataLabels, seriesKind);
   if (serDLbls !== null) children.push(serDLbls);
   // <c:trendline> exists on CT_BarSer/LineSer/AreaSer/ScatterSer/BubbleSer but
   // NOT on CT_PieSer (pie/doughnut) or CT_RadarSer — emitting it there is
   // schema-invalid, so gate on the trendline-bearing kinds.
   if (
     series.trendline &&
-    spec.kind !== 'pie' &&
-    spec.kind !== 'doughnut' &&
-    spec.kind !== 'radar'
+    seriesKind !== 'pie' &&
+    seriesKind !== 'doughnut' &&
+    seriesKind !== 'radar'
   ) {
     children.push(trendlineElement(series.trendline));
   }
@@ -344,7 +345,7 @@ const seriesElement = (spec: ChartSpec, seriesIdx: number, sheet: string): XmlEl
   // writes the element; doing the same keeps every renderer straight unless
   // smoothing was asked for. (Only CT_LineSer carries smooth — emitting it on
   // a bar/pie series would be schema-invalid.)
-  if (spec.kind === 'line') {
+  if (seriesKind === 'line') {
     children.push(valNode(c('smooth'), series.smooth === true ? '1' : '0'));
   }
   return elem(c('ser'), { children });
@@ -960,6 +961,7 @@ const secondaryValAxis = (): XmlElement =>
       valNode(c('axPos'), 'r'),
       valNode(c('crossAx'), SEC_CAT_AX_ID),
       valNode(c('crosses'), 'max'),
+      valNode(c('crossBetween'), 'between'),
     ],
   });
 
@@ -976,6 +978,7 @@ const secondaryCatAxis = (): XmlElement =>
       valNode(c('delete'), '1'),
       valNode(c('axPos'), 'b'),
       valNode(c('crossAx'), SEC_VAL_AX_ID),
+      valNode(c('crosses'), 'autoZero'),
     ],
   });
 
