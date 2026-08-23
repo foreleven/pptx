@@ -107,7 +107,7 @@ export type ShapeEffectAny =
       readonly angleDeg: number;
     }
   | { readonly kind: 'softEdge'; readonly radiusEmu: number }
-  | { readonly kind: 'blur'; readonly radiusEmu: number };
+  | { readonly kind: 'blur'; readonly radiusEmu: number; readonly grow?: boolean };
 
 export const getShapeEffect = (shape: SlideShapeData): ShapeEffect | null => {
   const spPr = firstChildElement(shape[SHAPE_ELEMENT], qname('p', 'spPr', NS.pml));
@@ -263,7 +263,12 @@ const parseEffectLst = (
       out.push({ kind: 'softEdge', radiusEmu: rad });
     } else if (local === 'blur') {
       const rad = Number.parseInt(getAttrValue(child, qname('', 'rad', '')) ?? '0', 10) || 0;
-      out.push({ kind: 'blur', radiusEmu: rad });
+      const grow = getAttrValue(child, qname('', 'grow', ''));
+      out.push({
+        kind: 'blur',
+        radiusEmu: rad,
+        ...(grow === null ? {} : { grow: grow !== '0' && grow !== 'false' }),
+      });
     }
   }
   return out;

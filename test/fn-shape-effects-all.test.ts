@@ -9,9 +9,12 @@ import { describe, expect, it } from 'vitest';
 import {
   addSlideShape,
   getShapeEffects,
+  getSlideShapes,
   getSlides,
   inches,
   loadPresentation,
+  savePresentation,
+  setShapeEffects,
   setShapeGlow,
   setShapeShadow,
 } from '../src/api/index.ts';
@@ -73,5 +76,24 @@ describe('fn API: getShapeEffects', () => {
       expect(effects[0]!.color).toBe('#FF0000');
       expect(effects[0]!.radiusEmu).toBe(63500);
     }
+  });
+
+  it('round-trips the blur grow flag', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const shape = addSlideShape(slide, {
+      preset: 'rect',
+      x: inches(0),
+      y: inches(0),
+      w: inches(3),
+      h: inches(2),
+    });
+    setShapeEffects(shape, [{ kind: 'blur', radiusEmu: 38100, grow: false }]);
+
+    const reloaded = await loadPresentation(await savePresentation(pres));
+    const rebuiltShape = getSlideShapes(getSlides(reloaded)[0]!).at(-1)!;
+    expect(getShapeEffects(reloaded, rebuiltShape)).toEqual([
+      { kind: 'blur', radiusEmu: 38100, grow: false },
+    ]);
   });
 });
