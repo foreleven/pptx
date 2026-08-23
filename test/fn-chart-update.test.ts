@@ -105,18 +105,36 @@ describe('fn API: setChartSpec', () => {
     ).toThrow(/not a chart/);
   });
 
-  it('rejects radar authoring while scatter and bubble use native xy(z) channels', async () => {
+  it('authors radar chart XML, workbook data, and reload semantics', async () => {
     const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
     const slide = getSlides(pres)[0]!;
-    expect(() =>
-      addSlideChart(slide, {
-        x: inches(0),
-        y: inches(0),
-        w: inches(4),
-        h: inches(3),
-        spec: { kind: 'radar', categories: ['A'], series: [{ name: 'S', values: [1] }] },
-      }),
-    ).toThrow(/read-only/);
+    addSlideChart(slide, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(4),
+      h: inches(3),
+      spec: {
+        kind: 'radar',
+        radarStyle: 'filled',
+        categories: ['Reach', 'Quality', 'Speed'],
+        series: [{ name: 'Current', values: [72, 84, 66], color: '#3659E3' }],
+      },
+    });
+
+    const reloaded = await loadPresentation(await savePresentation(pres));
+    expect(getSlideCharts(getSlides(reloaded)[0]!)[0]!.spec).toMatchObject({
+      kind: 'radar',
+      radarStyle: 'filled',
+      categories: ['Reach', 'Quality', 'Speed'],
+      series: [{ name: 'Current', values: [72, 84, 66], color: '#3659E3' }],
+    });
+    const chartXml = decodePart(reloaded, '/ppt/charts/chart1.xml');
+    expect(chartXml).toContain('<c:radarChart>');
+    expect(chartXml).toContain('<c:radarStyle val="filled"/>');
+    expect(chartXml).toContain('<c:cat>');
+    expect(chartXml).toContain('<c:val>');
+    expect(chartXml).not.toContain('<c:barDir');
+    expect(chartXml).not.toContain('<c:grouping');
   });
 
   it('rewrites scatter and bubble chart XML, workbooks, and reload semantics', async () => {
@@ -193,7 +211,7 @@ describe('fn API: setChartSpec', () => {
     expect(bubbleSheetXml).toContain('<c r="C4"><v>36</v></c>');
   });
 
-  it('setChartSpec rejects switching an existing chart to radar', async () => {
+  it('setChartSpec switches an existing chart to radar', async () => {
     const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
     const slide = getSlides(pres)[0]!;
     addSlideChart(slide, {
@@ -205,13 +223,19 @@ describe('fn API: setChartSpec', () => {
     });
     const reloaded = await loadPresentation(await savePresentation(pres));
     const chart = getSlideCharts(getSlides(reloaded)[0]!)[0]!;
-    expect(() =>
-      setChartSpec(chart, {
-        kind: 'radar',
-        categories: ['A'],
-        series: [{ name: 'S', values: [1] }],
-      }),
-    ).toThrow(/read-only/);
+    setChartSpec(chart, {
+      kind: 'radar',
+      radarStyle: 'marker',
+      categories: ['A', 'B'],
+      series: [{ name: 'S', values: [1, 2] }],
+    });
+    const radarReloaded = await loadPresentation(await savePresentation(reloaded));
+    expect(getSlideCharts(getSlides(radarReloaded)[0]!)[0]!.spec).toMatchObject({
+      kind: 'radar',
+      radarStyle: 'marker',
+      categories: ['A', 'B'],
+      series: [{ name: 'S', values: [1, 2] }],
+    });
   });
 });
 

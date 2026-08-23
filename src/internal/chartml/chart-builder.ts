@@ -297,7 +297,12 @@ const seriesElement = (spec: ChartSpec, seriesIdx: number, sheet: string): XmlEl
   // and <a:solidFill>, so it colors the line for PowerPoint while keeping the
   // solidFill the reader round-trips. Bar / column / pie keep the legacy
   // solid-fill-only shape for tight round-trip compatibility with fixtures.
-  if (spec.kind === 'line' || series.lineWidthEmu !== undefined || series.lineDash !== undefined) {
+  if (
+    spec.kind === 'line' ||
+    spec.kind === 'radar' ||
+    series.lineWidthEmu !== undefined ||
+    series.lineDash !== undefined
+  ) {
     children.push(seriesSpPr(color, series.lineWidthEmu, series.lineDash));
   } else {
     children.push(solidFillSpPr(color));
@@ -889,6 +894,21 @@ const buildScatterChart = (spec: ChartSpec, sheet: string): XmlElement => {
   });
 };
 
+const buildRadarChart = (spec: ChartSpec, sheet: string): XmlElement => {
+  const series = spec.series.map((_, index) => seriesElement(spec, index, sheet));
+  const labels = dLblsElement(spec);
+  return elem(c('radarChart'), {
+    children: [
+      valNode(c('radarStyle'), spec.radarStyle ?? 'standard'),
+      valNode(c('varyColors'), spec.varyColors ? '1' : '0'),
+      ...series,
+      ...(labels ? [labels] : []),
+      valNode(c('axId'), CAT_AX_ID),
+      valNode(c('axId'), VAL_AX_ID),
+    ],
+  });
+};
+
 const buildBubbleChart = (spec: ChartSpec, sheet: string): XmlElement => {
   const series = spec.series.map((_, index) => xySeriesElement(spec, index, sheet));
   const labels = dLblsElement(spec);
@@ -1089,14 +1109,8 @@ export const buildChartSpaceDoc = (spec: ChartSpec): XmlDocument => {
       plottedGroups = [buildBubbleChart(spec, sheet)];
       break;
     case 'radar':
-      // Read + render only (plan W4): the builder can't serialize the
-      // xy(z) tuple channels these kinds need, so reject rather than
-      // silently emit a malformed or wrong-kind chart. `readChartSpec`
-      // surfaces these kinds, but `addSlideChart` / `setChartSpec` won't
-      // write them.
-      throw new Error(
-        `chart kind '${spec.kind}' is read-only; authoring radar charts is not yet supported`,
-      );
+      plottedGroups = [buildRadarChart(spec, sheet)];
+      break;
     default: {
       const exhaustive: never = spec.kind;
       throw new Error(`unsupported chart kind: ${String(exhaustive)}`);

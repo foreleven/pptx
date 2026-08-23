@@ -5060,8 +5060,9 @@ const renderRadarChart = (
       `<text x="${px(lx)}" y="${px(ly)}" text-anchor="${anchor}" dominant-baseline="middle" ${axisTickAttrs(spec.categoryAxisLabelStyle)}>${escapeXml(label)}</text>`,
     );
   }
-  // Series polygons (closed). 'filled' fills the polygon at reduced
-  // opacity; 'marker' draws a point glyph at each vertex.
+  // Series polygons (closed). PowerPoint paints the filled radar polygon
+  // with the authored series color at full opacity; marker style adds a
+  // point glyph at each vertex.
   const filled = spec.radarStyle === 'filled';
   const showMarker = spec.radarStyle === 'marker';
   for (let s = 0; s < spec.series.length; s++) {
@@ -5080,7 +5081,7 @@ const renderRadarChart = (
     const lineWPx = series.lineWidthEmu ? Math.max(0.3, series.lineWidthEmu / EMU_PER_PX) : 1.8;
     out.push(
       filled
-        ? `<polygon points="${ptsStr}" fill="${color}" fill-opacity="0.3" stroke="${color}" stroke-width="${lineWPx.toFixed(2)}" stroke-linejoin="round"/>`
+        ? `<polygon points="${ptsStr}" fill="${color}" stroke="${color}" stroke-width="${lineWPx.toFixed(2)}" stroke-linejoin="round"/>`
         : `<polygon points="${ptsStr}" fill="none" stroke="${color}" stroke-width="${lineWPx.toFixed(2)}" stroke-linejoin="round"/>`,
     );
     if (showMarker) {

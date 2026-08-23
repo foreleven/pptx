@@ -178,7 +178,7 @@ const validateChartSpecColors = (spec: ChartSpec): void => {
 /**
  * Adds a chart to the slide. Returns the new shape handle (kind
  * `graphicFrame`). Supported chart kinds today: `bar`, `column`,
- * `line`, `area`, `pie`, `doughnut`, `scatter`, and `bubble` — see
+ * `line`, `area`, `pie`, `doughnut`, `scatter`, `radar`, and `bubble` — see
  * `ChartSpec.kind`.
  *
  * Side effects:

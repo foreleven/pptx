@@ -90,7 +90,8 @@ const TRANSITIONS = [
   { effect: 'none' as const },
 ];
 const ANIMS = ['fadeIn', 'fadeOut', 'appear', 'disappear'] as const;
-// Authorable chart kinds (scatter / radar / bubble are read-only for now).
+// Compact category-chart set used by this generator; specialized chart kinds
+// have dedicated channel and schema tests.
 const CHART_KINDS = ['bar', 'column', 'line', 'pie', 'doughnut', 'area'] as const;
 
 const validateDeck = (pres: PresentationData): void => {

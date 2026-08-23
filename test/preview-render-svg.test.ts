@@ -640,7 +640,7 @@ describe('renderSlideToSvg', () => {
     expect(countTags(lineMarker, 'path')).toBeGreaterThan(countTags(markerOnly, 'path'));
   });
 
-  it('radar (filled): closed series polygon filled at reduced opacity, no fallback', async () => {
+  it('radar (filled): closed series polygon uses PowerPoint opaque fill, no fallback', async () => {
     const svg = await renderInjectedChart(
       chartSpaceXml(`
       <c:plotArea>
@@ -662,7 +662,7 @@ describe('renderSlideToSvg', () => {
     expect(svg).not.toContain('data-pptx-fallback="chart"');
     // Rings + the closed series polygon are all <polygon>.
     expect(countTags(svg, 'polygon')).toBeGreaterThan(0);
-    expect(svg).toContain('fill-opacity="0.3"');
+    expect(svg).not.toContain('fill-opacity');
     expect(svg).toContain('Alpha');
   });
 

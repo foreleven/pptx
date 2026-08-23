@@ -2,13 +2,12 @@
 //
 // One or more named series of numeric values plotted against shared
 // string categories (bar / column / line / pie / doughnut / area), plus
-// the xy(z)-tuple kinds (scatter / radar / bubble) the reader and preview
-// model. Scatter and bubble are authorable; radar remains read + render only.
+// the xy(z)-tuple kinds (scatter / bubble) and polar radar charts modelled by
+// the reader, writer, and preview renderer.
 
 /**
  * Chart type tokens. `bar` / `column` / `line` / `pie` / `doughnut` /
- * Every listed kind except `radar` is authorable; radar is currently
- * read + render only and the builder rejects it.
+ * Every listed kind is authorable and readable.
  */
 export type ChartKind =
   | 'bar'
