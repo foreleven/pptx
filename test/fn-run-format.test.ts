@@ -76,7 +76,12 @@ describe('fn API: per-run text editing', () => {
     expect(xml).toMatch(/<a:rPr[^>]*sz="3200"[^>]*b="1"/);
     expect(xml).toContain('typeface="PingFang SC"');
     expect(xml).toContain('baseline="-8000"');
-    expect(xml).toContain('xml:space="preserve"');
+    expect(xml).not.toContain('xml:space');
+
+    const reloaded = await loadPresentation(await savePresentation(pres));
+    const reloadedShape = getSlideShapes(getSlides(reloaded)[0]!)[0]!;
+    expect(getShapeRunText(reloadedShape, 0, 0)).toBe('3,309');
+    expect(getShapeRunText(reloadedShape, 0, 1)).toBe(' 亿港元');
   });
 
   it('setShapeRunText replaces visible characters but preserves rPr', async () => {

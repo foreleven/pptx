@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   addSlideTable,
   clearTableCellFill,
+  getSlideShapes,
   getSlideXmlString,
   getSlides,
   getTableCell,
@@ -14,6 +15,7 @@ import {
   getTableCellText,
   getTableCells,
   inches,
+  isTableShape,
   loadPresentation,
   savePresentation,
   setTableCellAlignment,
@@ -129,6 +131,14 @@ describe('fn API: table cell access', () => {
     expect(xml).toMatch(/<a:pPr[^>]*algn="ctr"[^>]*marL="12700"[^>]*indent="-6350"/);
     expect(xml).toContain('<a:spcBef><a:spcPts val="400"/></a:spcBef>');
     expect(xml).toMatch(/<a:hlinkClick[^>]*r:id="rId\d+"[^>]*tooltip="Details"/);
+    expect(xml).not.toContain('xml:space');
+
+    const reloaded = await loadPresentation(await savePresentation(pres));
+    const reloadedTable = getSlideShapes(getSlides(reloaded)[0]!).find(isTableShape)!;
+    expect(getTableCellParagraphs(getTableCell(reloadedTable, 0, 0))[0]?.elements).toMatchObject([
+      { kind: 'r', text: 'Revenue ' },
+      { kind: 'r', text: '42' },
+    ]);
   });
 
   it('clearTableCellFill removes a previously-set fill', async () => {

@@ -50,7 +50,6 @@ const NAME_A_R = qname('a', 'r', NS.dml);
 export const NAME_A_RPR = qname('a', 'rPr', NS.dml);
 const NAME_A_T = qname('a', 't', NS.dml);
 const NAME_A_END_PARA_RPR = qname('a', 'endParaRPr', NS.dml);
-const ATTR_XML_SPACE = qname('xml', 'space', NS.xml);
 
 export interface ShapeParagraphRun {
   text: string;
@@ -142,9 +141,7 @@ export const setShapeParagraphRuns = (
   const authoredRuns = runs.map((value) => {
     const runProperties = value.format ? elem(NAME_A_RPR) : null;
     if (runProperties && value.format) applyRunFormat(runProperties, value.format);
-    const preserveSpace = /^\s|\s$/u.test(value.text);
     const textElement = elem(NAME_A_T, {
-      attrs: preserveSpace ? [attr(ATTR_XML_SPACE, 'preserve')] : [],
       children: [text(value.text)],
     });
     return elem(NAME_A_R, {

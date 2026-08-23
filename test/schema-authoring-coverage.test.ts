@@ -49,6 +49,7 @@ import {
   setTableCellBorders,
   setTableCellFill,
   setTableCellMargins,
+  setTableCellParagraphs,
 } from '../src/api/index.ts';
 import { buildPng } from './lib/build-png.ts';
 import {
@@ -242,6 +243,40 @@ describe('schema coverage: tables', () => {
     expect(xml).toContain('marT="70000"');
     expect(xml).toContain('marB="80000"');
     expect(xml).toContain('anchor="b"');
+  });
+
+  skipIfNoXmllint('multiple table-cell paragraphs and mixed runs stay schema-valid', async () => {
+    const pres = createPresentation();
+    const table = addSlideTable(addBlankSlide(pres), {
+      x: inches(1),
+      y: inches(1),
+      w: inches(6),
+      h: inches(2),
+      rows: [['placeholder']],
+    });
+    setTableCellParagraphs(getTableCell(table, 0, 0), [
+      {
+        alignment: 'left',
+        runs: [
+          { text: 'Revenue ', format: { size: 21, color: '#17233C' } },
+          { text: '+18%', format: { size: 21, color: '#35B9C6', bold: true } },
+        ],
+      },
+      {
+        alignment: 'right',
+        runs: [
+          { text: 'FY26 ', format: { size: 15, color: '#56627A' } },
+          {
+            text: 'forecast',
+            format: { size: 15, color: '#F26B5B', italic: true, underline: true, spc: 50 },
+          },
+        ],
+      },
+    ]);
+    const xml = await authoredXml(pres);
+    expect(xml.match(/<a:p>/g)).toHaveLength(2);
+    expect(xml).toContain('<a:t>Revenue </a:t>');
+    expect(xml).toContain('<a:t>forecast</a:t>');
   });
 });
 

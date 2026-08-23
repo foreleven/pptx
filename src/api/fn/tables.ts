@@ -79,7 +79,6 @@ const NAME_A_PPR_TBL = qname('a', 'pPr', NS.dml);
 const NAME_A_R_TBL = qname('a', 'r', NS.dml);
 const NAME_A_RPR_TBL = qname('a', 'rPr', NS.dml);
 const NAME_A_T_TBL = qname('a', 't', NS.dml);
-const ATTR_XML_SPACE_TBL = qname('xml', 'space', NS.xml);
 
 const findTblElement = (shape: SlideShapeData): XmlElement | null => {
   if (shape[SHAPE_SNAPSHOT].kind !== 'graphicFrame') return null;
@@ -668,12 +667,10 @@ export const setTableCellParagraphs = (
         rPr ??= elem(NAME_A_RPR_TBL);
         rPr.children.push(tableRunHyperlinkElement(cell, inputRun.hyperlink));
       }
-      const preserveSpace = /^\s|\s$/u.test(inputRun.text);
       return elem(NAME_A_R_TBL, {
         children: [
           ...(rPr ? [rPr] : []),
           elem(NAME_A_T_TBL, {
-            attrs: preserveSpace ? [attr(ATTR_XML_SPACE_TBL, 'preserve')] : [],
             children: [text(inputRun.text)],
           }),
         ],
