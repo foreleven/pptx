@@ -277,7 +277,7 @@ addSlideChart(slide!, {
   w: inches(8),
   h: inches(4.5),
   spec: {
-    kind: 'column', // bar | column | line | pie | doughnut | area | scatter | bubble
+    kind: 'column', // bar | column | line | pie | doughnut | area | scatter | radar | bubble
     categories: ['Q1', 'Q2', 'Q3', 'Q4'],
     series: [
       { name: 'Revenue', values: [120, 180, 240, 300] },
@@ -377,7 +377,7 @@ shown together.
 | Click actions        | `setShapeClickAction` / `getShapeClickAction` (`url` / `slide` / `nextSlide` / `prevSlide` / `firstSlide` / `lastSlide`)                                                                                                                                                                |
 | Shape removal        | `removeShape`                                                                                                                                                                                                                                                                           |
 | Tables               | `getTableCell` / `getTableCells`, `setTableCellText` / `getTableCellText`, `setTableCellFill` / `clearTableCellFill`, `setTableCellAlignment`, `setTableCellTextFormat`, `insertTableRow` / `removeTableRow`, `insertTableColumn` / `removeTableColumn`                                 |
-| Charts               | `addSlideChart`, `getSlideCharts`, `setChartSpec` — kinds: `bar`, `column`, `line`, `pie`, `doughnut`, `area`, `scatter`, `bubble`; `radar` remains read-only                                                                                                                           |
+| Charts               | `addSlideChart`, `getSlideCharts`, `setChartSpec` — authorable/readable kinds: `bar`, `column`, `line`, `pie`, `doughnut`, `area`, `scatter`, `radar`, `bubble`                                                                                                                         |
 | Theme                | `getPresentationTheme` — color scheme (`accent1`..`accent6`, `dark1`, `light1`, `hyperlink`, ...)                                                                                                                                                                                       |
 | Validation           | `validatePresentation(pres)` — invariant checks, returns `ValidationIssue[]`                                                                                                                                                                                                            |
 | Units                | `inches(n)`, `cm(n)`, `mm(n)`, `pt(n)`, `emu(n)` — return branded `Emu` numbers                                                                                                                                                                                                         |

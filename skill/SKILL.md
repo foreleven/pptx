@@ -293,8 +293,9 @@ Keep content within `x ∈ [0.5, 12.83]`, `y ∈ [0.5, 7.0]` inches.
   lines — each becomes its own paragraph. A literal newline inside one run is
   not a line break.
 - **Authorable chart kinds** are `bar`, `column`, `line`, `pie`, `doughnut`,
-  `area`. `scatter`/`radar`/`bubble` are read-only today (authoring them
-  throws). `pie`/`doughnut` take exactly one series.
+  `area`, `scatter`, `radar`, and `bubble`. `pie`/`doughnut` take exactly one
+  series; `scatter` uses X/Y channels, `bubble` uses X/Y/size channels, and
+  `radar` uses shared categories with standard, marker, or filled style.
 - **Find placeholders by type token**, not display name:
   `findSlidePlaceholder(slide, 'title' | 'body' | 'ctrTitle' | 'subTitle')`.
 

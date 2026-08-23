@@ -57,7 +57,7 @@ the fidelity README:
 | Multi-column text (`numCol`)               | CSS columns in browser; **single column** in SVG/server mode     | server           |
 | Custom geometry (`a:custGeom`)             | Labelled `<rect>` fallback                                       | both             |
 | Table cell text                            | Fixed 18 pt, no per-run format                                   | both             |
-| Scatter / radar / bubble charts            | Read as `line` approximation or labelled placeholder             | both             |
+| Scatter / radar / bubble charts            | Resolved: native read/write plus dedicated preview plotters      | —                |
 | Reflection effect                          | Skipped                                                          | both             |
 | Picture bullets (`a:buBlip`)               | "■" fallback                                                     | both             |
 | Gradient fill inherited from layout/master | Orange-tint fallback                                             | both             |

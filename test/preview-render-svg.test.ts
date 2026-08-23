@@ -568,10 +568,10 @@ describe('renderSlideToSvg', () => {
     expect(renderSlideToSvg(pres, slide, opts)).toBe(renderSlideToSvg(pres, slide, opts));
   });
 
-  // scatter / radar / bubble have no public authoring API (read + render
-  // only — plan W4). To exercise their plotters we build a deck with a
-  // throwaway bar chart, then swap the chart part's XML via the internal
-  // OPC zip layer (the same hook the fallback test above uses).
+  // Keep these tests driven by hand-authored ChartML so they exercise reader
+  // compatibility independently of the public chart builder. We create a
+  // throwaway bar chart, then swap the chart part's XML via the internal OPC
+  // zip layer (the same hook the fallback test above uses).
   const renderInjectedChart = async (chartXml: string): Promise<string> => {
     const { pres, slide } = await blankSlide();
     addSlideChart(slide, {
