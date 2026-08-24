@@ -59,6 +59,7 @@ export type {
   AllShapesEntry,
   CoreProperties,
   CustomGeometry,
+  ExtendedPropertyHeadingPair,
   ExtendedProperties,
   GeomCommand,
   GeomPath,

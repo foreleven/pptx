@@ -4,13 +4,17 @@ import { emptyRels, nextRelId, partName } from '../../internal/opc/index.ts';
 import { REL_TYPES } from '../../internal/presentationml/index.ts';
 import {
   type XmlElement,
+  type XmlNode,
   attr,
+  childElements,
   elem,
   firstChildElement,
+  getAttrValue,
   parseXml,
   qname,
   serializeXml,
   text as textNode,
+  textContent,
 } from '../../internal/xml/index.ts';
 import { INTERNAL_PACKAGE, type PresentationData } from '../_internal-symbols.ts';
 import { decode, encode } from './_helpers.ts';
@@ -252,17 +256,52 @@ export const setCoreProperties = (
 // Extended properties (`/docProps/app.xml`).
 
 const NS_EXT_PROPS = 'http://schemas.openxmlformats.org/officeDocument/2006/extended-properties';
+const NS_VARIANT_TYPES = 'http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes';
 const EXT_PROPS_PART_NAME = partName('/docProps/app.xml');
 
+export interface ExtendedPropertyHeadingPair {
+  readonly heading: string;
+  readonly count: number;
+}
+
+const parseBoundedXsdInteger = (
+  value: string,
+  minimum: number,
+  maximum: number,
+  label: string,
+): number => {
+  const lexical = value
+    .replaceAll('\t', ' ')
+    .replaceAll('\n', ' ')
+    .replaceAll('\r', ' ')
+    .replace(/ +/gu, ' ')
+    .replace(/^ | $/gu, '');
+  if (!/^[+-]?[0-9]+$/u.test(lexical)) {
+    throw new Error(`${label} is not an XML Schema integer`);
+  }
+  const parsed = Number(lexical);
+  if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new Error(`${label} is outside its XML Schema integer range`);
+  }
+  return parsed;
+};
+
+const parseXsdInt = (value: string, label: string): number =>
+  parseBoundedXsdInteger(value, -2_147_483_648, 2_147_483_647, label);
+
+const parseXsdUnsignedInt = (value: string, label: string): number =>
+  parseBoundedXsdInteger(value, 0, 4_294_967_295, label);
+
 /**
- * Selected string fields from `/docProps/app.xml`
+ * Presentation-oriented fields from `/docProps/app.xml`
  * (extended-properties / "app props"). PowerPoint exposes these
  * under File › Info / Properties as the "Origin" and "Related
  * People" groups.
  *
- * Numeric / derived fields (`Slides`, `Words`, `Paragraphs`, …) are
- * intentionally omitted — they're recomputed by PowerPoint on save
- * and reading them tends to lie about decks edited outside Office.
+ * The presentation-oriented count fields and the paired vectors used by
+ * PowerPoint's Properties UI are exposed verbatim. They are metadata, not a
+ * live view: consumers that edit slides must update them explicitly when
+ * they need the values to reflect the new deck.
  */
 export interface ExtendedProperties {
   readonly application: string | null;
@@ -271,6 +310,11 @@ export interface ExtendedProperties {
   readonly manager: string | null;
   readonly presentationFormat: string | null;
   readonly hyperlinkBase: string | null;
+  readonly slides: number | null;
+  readonly notes: number | null;
+  readonly hiddenSlides: number | null;
+  readonly headingPairs: readonly ExtendedPropertyHeadingPair[] | null;
+  readonly titlesOfParts: readonly string[] | null;
 }
 
 /**
@@ -283,13 +327,90 @@ export const getExtendedProperties = (pres: PresentationData): ExtendedPropertie
   const part = pkg.getPart(EXT_PROPS_PART_NAME);
   if (!part) return null;
   const root = parseXml(decode(part.data)).root;
+  const element = (local: string): XmlElement | null =>
+    firstChildElement(root, qname('', local, NS_EXT_PROPS));
   const read = (local: string): string | null => {
-    const el = firstChildElement(root, qname('', local, NS_EXT_PROPS));
+    const el = element(local);
     if (!el) return null;
-    let s = '';
-    for (const c of el.children) if (c.kind === 'text') s += c.data;
+    const s = textContent(el);
     return s.length === 0 ? null : s;
   };
+  const readInteger = (local: string): number | null => {
+    const field = element(local);
+    if (field === null) return null;
+    const value = parseXsdInt(textContent(field), `getExtendedProperties: ${local}`);
+    if (value < 0) throw new Error(`getExtendedProperties: ${local} must be non-negative`);
+    return value;
+  };
+  const readVector = (
+    local: string,
+    baseType: 'variant' | 'lpstr',
+  ): readonly XmlElement[] | null => {
+    const container = element(local);
+    if (!container) return null;
+    const vector = firstChildElement(container, qname('vt', 'vector', NS_VARIANT_TYPES));
+    if (!vector || getAttrValue(vector, qname('', 'baseType', '')) !== baseType) {
+      throw new Error(`getExtendedProperties: ${local} has an invalid vt:vector`);
+    }
+    const entries = childElements(vector);
+    const size = getAttrValue(vector, qname('', 'size', ''));
+    if (
+      size === null ||
+      parseXsdUnsignedInt(size, `getExtendedProperties: ${local} vt:vector size`) !==
+        entries.length ||
+      entries.length === 0
+    ) {
+      throw new Error(`getExtendedProperties: ${local} vt:vector size does not match its entries`);
+    }
+    return entries;
+  };
+  const headingPairEntries = readVector('HeadingPairs', 'variant');
+  const headingPairs = (() => {
+    if (headingPairEntries === null) return null;
+    if (headingPairEntries.length % 2 !== 0) {
+      throw new Error('getExtendedProperties: HeadingPairs requires heading/count pairs');
+    }
+    const pairs: ExtendedPropertyHeadingPair[] = [];
+    for (let index = 0; index < headingPairEntries.length; index += 2) {
+      const headingVariant = headingPairEntries[index]!;
+      const countVariant = headingPairEntries[index + 1]!;
+      const heading = childElements(headingVariant);
+      const count = childElements(countVariant);
+      if (
+        headingVariant.name.namespaceURI !== NS_VARIANT_TYPES ||
+        headingVariant.name.localName !== 'variant' ||
+        countVariant.name.namespaceURI !== NS_VARIANT_TYPES ||
+        countVariant.name.localName !== 'variant' ||
+        heading.length !== 1 ||
+        heading[0]!.name.namespaceURI !== NS_VARIANT_TYPES ||
+        heading[0]!.name.localName !== 'lpstr' ||
+        count.length !== 1 ||
+        count[0]!.name.namespaceURI !== NS_VARIANT_TYPES ||
+        count[0]!.name.localName !== 'i4'
+      ) {
+        throw new Error('getExtendedProperties: HeadingPairs contains an invalid variant pair');
+      }
+      const parsedCount = parseXsdInt(
+        textContent(count[0]!),
+        'getExtendedProperties: HeadingPairs count',
+      );
+      if (parsedCount < 0) {
+        throw new Error('getExtendedProperties: HeadingPairs count must be non-negative');
+      }
+      pairs.push({ heading: textContent(heading[0]!), count: parsedCount });
+    }
+    return pairs;
+  })();
+  const titleEntries = readVector('TitlesOfParts', 'lpstr');
+  const titlesOfParts =
+    titleEntries === null
+      ? null
+      : titleEntries.map((entry) => {
+          if (entry.name.namespaceURI !== NS_VARIANT_TYPES || entry.name.localName !== 'lpstr') {
+            throw new Error('getExtendedProperties: TitlesOfParts contains a non-lpstr entry');
+          }
+          return textContent(entry);
+        });
   return {
     application: read('Application'),
     appVersion: read('AppVersion'),
@@ -297,10 +418,26 @@ export const getExtendedProperties = (pres: PresentationData): ExtendedPropertie
     manager: read('Manager'),
     presentationFormat: read('PresentationFormat'),
     hyperlinkBase: read('HyperlinkBase'),
+    slides: readInteger('Slides'),
+    notes: readInteger('Notes'),
+    hiddenSlides: readInteger('HiddenSlides'),
+    headingPairs,
+    titlesOfParts,
   };
 };
 
-const EXT_PROP_FIELDS: ReadonlyArray<{ key: keyof ExtendedProperties; local: string }> = [
+type ExtendedStringPropertyKey =
+  | 'application'
+  | 'appVersion'
+  | 'company'
+  | 'manager'
+  | 'presentationFormat'
+  | 'hyperlinkBase';
+
+const EXT_PROP_STRING_FIELDS: ReadonlyArray<{
+  key: ExtendedStringPropertyKey;
+  local: string;
+}> = [
   { key: 'application', local: 'Application' },
   { key: 'appVersion', local: 'AppVersion' },
   { key: 'company', local: 'Company' },
@@ -309,14 +446,25 @@ const EXT_PROP_FIELDS: ReadonlyArray<{ key: keyof ExtendedProperties; local: str
   { key: 'hyperlinkBase', local: 'HyperlinkBase' },
 ];
 
+type ExtendedIntegerPropertyKey = 'slides' | 'notes' | 'hiddenSlides';
+
+const EXT_PROP_INTEGER_FIELDS: ReadonlyArray<{
+  key: ExtendedIntegerPropertyKey;
+  local: string;
+}> = [
+  { key: 'slides', local: 'Slides' },
+  { key: 'notes', local: 'Notes' },
+  { key: 'hiddenSlides', local: 'HiddenSlides' },
+];
+
 /**
  * Writes selected fields on `/docProps/app.xml`. Throws when the
- * package has no extended-properties part — unlike core-properties,
- * we don't bootstrap app.xml from scratch because its schema
- * requires several derived `<vt:*>` elements (`HeadingPairs`,
- * `TitlesOfParts`, …) that aren't user-facing.
+ * package has no extended-properties part. Bootstrapping remains a separate
+ * package-level operation because it must also create the content-type and
+ * root relationship; presentations created by this package already include
+ * that complete relationship chain.
  *
- * Pass `null` to clear an existing field's text. Unspecified keys
+ * Pass `null` to remove an existing field element. Unspecified keys
  * are left untouched.
  */
 export const setExtendedProperties = (
@@ -329,20 +477,95 @@ export const setExtendedProperties = (
     throw new Error('setExtendedProperties: /docProps/app.xml not present; cannot bootstrap');
   }
   const doc = parseXml(decode(part.data));
-  for (const field of EXT_PROP_FIELDS) {
+  const setChildren = (local: string, children: XmlNode[] | null): void => {
+    const name = qname('', local, NS_EXT_PROPS);
+    const existing = firstChildElement(doc.root, name);
+    if (children === null) {
+      if (existing) doc.root.children = doc.root.children.filter((child) => child !== existing);
+    } else if (existing) {
+      existing.children = children;
+    } else {
+      doc.root.children.push(elem(name, { children }));
+    }
+  };
+  for (const field of EXT_PROP_STRING_FIELDS) {
     if (!(field.key in values)) continue;
     const value = values[field.key] ?? null;
-    const name = qname('', field.local, NS_EXT_PROPS);
-    const existing = firstChildElement(doc.root, name);
-    if (value === null) {
-      if (existing) existing.children = [];
-      continue;
+    setChildren(field.local, value === null ? null : [textNode(value)]);
+  }
+  for (const field of EXT_PROP_INTEGER_FIELDS) {
+    if (!(field.key in values)) continue;
+    const value = values[field.key] ?? null;
+    if (value !== null && (!Number.isInteger(value) || value < 0 || value > 2_147_483_647)) {
+      throw new RangeError(`setExtendedProperties: ${field.key} must be a non-negative xsd:int`);
     }
-    if (existing) {
-      existing.children = [textNode(value)];
-    } else {
-      doc.root.children.push(elem(name, { children: [textNode(value)] }));
+    setChildren(field.local, value === null ? null : [textNode(String(value))]);
+  }
+  if ('headingPairs' in values) {
+    const pairs = values.headingPairs ?? null;
+    if (pairs !== null && pairs.length === 0) {
+      throw new RangeError('setExtendedProperties: headingPairs must be non-empty or null');
     }
+    doc.root.prefixDecls.set('vt', NS_VARIANT_TYPES);
+    const entries =
+      pairs?.flatMap(({ heading, count }) => {
+        if (!Number.isInteger(count) || count < 0 || count > 2_147_483_647) {
+          throw new RangeError(
+            'setExtendedProperties: heading-pair count must be a non-negative xsd:int',
+          );
+        }
+        return [
+          elem(qname('vt', 'variant', NS_VARIANT_TYPES), {
+            children: [
+              elem(qname('vt', 'lpstr', NS_VARIANT_TYPES), { children: [textNode(heading)] }),
+            ],
+          }),
+          elem(qname('vt', 'variant', NS_VARIANT_TYPES), {
+            children: [
+              elem(qname('vt', 'i4', NS_VARIANT_TYPES), { children: [textNode(String(count))] }),
+            ],
+          }),
+        ];
+      }) ?? null;
+    setChildren(
+      'HeadingPairs',
+      entries === null
+        ? null
+        : [
+            elem(qname('vt', 'vector', NS_VARIANT_TYPES), {
+              attrs: [
+                attr(qname('', 'size', ''), String(entries.length)),
+                attr(qname('', 'baseType', ''), 'variant'),
+              ],
+              children: entries,
+            }),
+          ],
+    );
+  }
+  if ('titlesOfParts' in values) {
+    const titles = values.titlesOfParts ?? null;
+    if (titles !== null && titles.length === 0) {
+      throw new RangeError('setExtendedProperties: titlesOfParts must be non-empty or null');
+    }
+    doc.root.prefixDecls.set('vt', NS_VARIANT_TYPES);
+    setChildren(
+      'TitlesOfParts',
+      titles === null
+        ? null
+        : [
+            elem(qname('vt', 'vector', NS_VARIANT_TYPES), {
+              attrs: [
+                attr(qname('', 'size', ''), String(titles.length)),
+                attr(qname('', 'baseType', ''), 'lpstr'),
+              ],
+              children: titles.map((title) =>
+                elem(qname('vt', 'lpstr', NS_VARIANT_TYPES), {
+                  children: [textNode(title)],
+                }),
+              ),
+            }),
+          ],
+    );
   }
   part.data = encode(serializeXml(doc));
 };
