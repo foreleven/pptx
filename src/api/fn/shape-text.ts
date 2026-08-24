@@ -338,6 +338,51 @@ export const setShapeTextColumns = (
   commitAndRefresh(shape);
 };
 
+/** Reads an explicit text-column flow flag from `<a:bodyPr>`. */
+const getShapeTextBodyBoolean = (
+  shape: SlideShapeData,
+  localName: 'rtlCol' | 'upright',
+): boolean | null => {
+  const txBody = firstChildElement(shape[SHAPE_ELEMENT], NAME_TX_BODY);
+  if (!txBody) return null;
+  const bodyPr = firstChildElement(txBody, NAME_A_BODY_PR);
+  if (!bodyPr) return null;
+  const value = getAttrValue(bodyPr, qname('', localName, ''));
+  if (value === '1' || value === 'true') return true;
+  if (value === '0' || value === 'false') return false;
+  return null;
+};
+
+/** Writes or clears one explicit boolean attribute on `<a:bodyPr>`. */
+const setShapeTextBodyBoolean = (
+  shape: SlideShapeData,
+  localName: 'rtlCol' | 'upright',
+  value: boolean | null,
+): void => {
+  const bodyPr = requireBodyPr(shape);
+  bodyPr.attrs = bodyPr.attrs.filter(
+    (candidate) => !(candidate.name.namespaceURI === '' && candidate.name.localName === localName),
+  );
+  if (value !== null) bodyPr.attrs.push(attr(qname('', localName, ''), value ? '1' : '0'));
+  commitAndRefresh(shape);
+};
+
+/** Reads whether multi-column text flows from right to left (`bodyPr@rtlCol`). */
+export const getShapeTextRtlColumns = (shape: SlideShapeData): boolean | null =>
+  getShapeTextBodyBoolean(shape, 'rtlCol');
+
+/** Sets or clears right-to-left text-column flow (`bodyPr@rtlCol`). */
+export const setShapeTextRtlColumns = (shape: SlideShapeData, value: boolean | null): void =>
+  setShapeTextBodyBoolean(shape, 'rtlCol', value);
+
+/** Reads whether PowerPoint keeps text upright through shape rotation (`bodyPr@upright`). */
+export const getShapeTextUpright = (shape: SlideShapeData): boolean | null =>
+  getShapeTextBodyBoolean(shape, 'upright');
+
+/** Sets or clears PowerPoint's keep-text-upright flag (`bodyPr@upright`). */
+export const setShapeTextUpright = (shape: SlideShapeData, value: boolean | null): void =>
+  setShapeTextBodyBoolean(shape, 'upright', value);
+
 /**
  * Reads the shape's text-body rotation from `<a:bodyPr rot="N"/>`.
  * `rot` is stored in 60000ths of a degree (OOXML angle units); the
