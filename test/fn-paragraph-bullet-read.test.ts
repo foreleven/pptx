@@ -4,11 +4,18 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
+  _internalPackageOf,
+  addBlankSlide,
   addSlideTextBox,
+  createPresentation,
+  findShapeByText,
   getParagraphBullet,
+  getParagraphBulletPropertiesEffective,
+  getSlidePartName,
   getSlides,
   inches,
   loadPresentation,
+  savePresentation,
   setParagraphBullet,
 } from '../src/api/index.ts';
 
@@ -50,5 +57,66 @@ describe('fn API: getParagraphBullet', () => {
     expect(getParagraphBullet(tb, 2)).toBe('none');
     expect(getParagraphBullet(tb, 3)).toEqual({ char: '★' });
     expect(getParagraphBullet(tb, 4)).toEqual({ autoNum: 'romanLcPeriod' });
+  });
+
+  it('resolves marker overrides independently from a direct bullet identity', async () => {
+    const pres = createPresentation();
+    const slide = addBlankSlide(pres);
+    const tb = addSlideTextBox(slide, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(3),
+      h: inches(1),
+      text: 'Inherited marker',
+    });
+    setParagraphBullet(tb, 0, { char: '▪' });
+    const pkg = _internalPackageOf(pres);
+    const slidePartName = getSlidePartName(slide) as Parameters<typeof pkg.getPart>[0];
+    const slidePart = pkg.getPart(slidePartName)!;
+    const xml = new TextDecoder().decode(slidePart.data);
+    slidePart.data = new TextEncoder().encode(
+      xml.replace(
+        '<a:lstStyle/>',
+        '<a:lstStyle><a:lvl1pPr><a:buSzPct val="80%"/><a:buFont typeface="Wingdings"/></a:lvl1pPr></a:lstStyle>',
+      ),
+    );
+
+    const rebuilt = await loadPresentation(await savePresentation(pres));
+    const shape = findShapeByText(getSlides(rebuilt)[0]!, 'Inherited marker')!;
+    expect(getParagraphBulletPropertiesEffective(rebuilt, shape, 0)).toMatchObject({
+      bullet: { char: '▪' },
+      picture: false,
+      sizePct: 0.8,
+      font: 'Wingdings',
+    });
+  });
+
+  it('resolves picture bullets inherited from a text-body list style', async () => {
+    const pres = createPresentation();
+    const slide = addBlankSlide(pres);
+    addSlideTextBox(slide, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(3),
+      h: inches(1),
+      text: 'Inherited picture',
+    });
+    const pkg = _internalPackageOf(pres);
+    const slidePartName = getSlidePartName(slide) as Parameters<typeof pkg.getPart>[0];
+    const slidePart = pkg.getPart(slidePartName)!;
+    const xml = new TextDecoder().decode(slidePart.data);
+    slidePart.data = new TextEncoder().encode(
+      xml.replace(
+        '<a:lstStyle/>',
+        '<a:lstStyle><a:lvl1pPr><a:buBlip><a:blip r:embed="rId999"/></a:buBlip></a:lvl1pPr></a:lstStyle>',
+      ),
+    );
+
+    const rebuilt = await loadPresentation(await savePresentation(pres));
+    const shape = findShapeByText(getSlides(rebuilt)[0]!, 'Inherited picture')!;
+    expect(getParagraphBulletPropertiesEffective(rebuilt, shape, 0)).toMatchObject({
+      bullet: null,
+      picture: true,
+    });
   });
 });

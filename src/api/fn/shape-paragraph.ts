@@ -9,7 +9,7 @@ import {
   requireRun,
   runsOf,
 } from './shape-runs.ts';
-import { parseRPrLikeElement } from './shape-color.ts';
+import { parseRPrLikeElement, resolveDrawingColor } from './shape-color.ts';
 import {
   getShapePlaceholderIdx,
   getShapePlaceholderType,
@@ -395,6 +395,44 @@ export interface ParagraphProperties {
   bullet: BulletStyle | null;
 }
 
+/** Effective bullet identity and marker overrides after the paragraph/list/layout/master cascade. */
+export interface ParagraphBulletPropertiesEffective {
+  bullet: BulletStyle | null;
+  picture: boolean;
+  color: string | null;
+  sizePct: number | null;
+  sizePts: number | null;
+  font: string | null;
+}
+
+interface ParsedBulletIdentity {
+  bullet: BulletStyle | null;
+  picture: boolean;
+}
+
+/** Parse the mutually exclusive buNone, buChar, buAutoNum, or buBlip identity from one pPr layer. */
+const parseBulletIdentity = (pPr: XmlElement): ParsedBulletIdentity | undefined => {
+  for (const child of pPr.children) {
+    if (child.kind !== 'element' || child.name.namespaceURI !== NS.dml) continue;
+    if (child.name.localName === 'buNone') return { bullet: 'none', picture: false };
+    if (child.name.localName === 'buChar') {
+      const char = getAttrValue(child, qname('', 'char', ''));
+      if (char !== null) return { bullet: char === '•' ? 'bullet' : { char }, picture: false };
+    }
+    if (child.name.localName === 'buAutoNum') {
+      const type = getAttrValue(child, qname('', 'type', ''));
+      if (type !== null) {
+        return {
+          bullet: type === 'arabicPeriod' ? 'number' : { autoNum: type },
+          picture: false,
+        };
+      }
+    }
+    if (child.name.localName === 'buBlip') return { bullet: null, picture: true };
+  }
+  return undefined;
+};
+
 /**
  * Maps an OOXML `algn` token to the friendly `ParagraphAlignment` form the
  * rest of the API speaks. Exported so the table-cell reader normalises the
@@ -470,23 +508,8 @@ const parsePPrLikeElement = (pPr: XmlElement): Partial<ParagraphProperties> => {
   if (before !== null) out.spcBefPts = before;
   const after = readSpcSide('spcAft');
   if (after !== null) out.spcAftPts = after;
-  // Bullet: buNone / buChar / buAutoNum are mutually exclusive children.
-  // Normalisation mirrors getParagraphBullet so both readers speak the same
-  // BulletStyle vocabulary.
-  for (const c of pPr.children) {
-    if (c.kind !== 'element' || c.name.namespaceURI !== NS.dml) continue;
-    if (c.name.localName === 'buNone') {
-      out.bullet = 'none';
-    } else if (c.name.localName === 'buChar') {
-      const char = getAttrValue(c, qname('', 'char', ''));
-      if (char === '•') out.bullet = 'bullet';
-      else if (char !== null) out.bullet = { char };
-    } else if (c.name.localName === 'buAutoNum') {
-      const t = getAttrValue(c, qname('', 'type', ''));
-      if (t === 'arabicPeriod') out.bullet = 'number';
-      else if (t !== null) out.bullet = { autoNum: t };
-    }
-  }
+  const bulletIdentity = parseBulletIdentity(pPr);
+  if (bulletIdentity && !bulletIdentity.picture) out.bullet = bulletIdentity.bullet;
   return out;
 };
 
@@ -511,6 +534,67 @@ const mergePPrLayer = (
   if (base.bullet === undefined && layer.bullet !== undefined) base.bullet = layer.bullet;
 };
 
+interface ParagraphPPrCascade {
+  level: number;
+  layers: XmlElement[];
+}
+
+/** Collect paragraph-property layers from most specific to least specific for one paragraph. */
+const paragraphPPrCascade = (
+  pres: PresentationData,
+  shape: SlideShapeData,
+  paragraphIndex: number,
+): ParagraphPPrCascade => {
+  const paragraph = requireParagraph(shape, paragraphIndex);
+  const pPr = firstChildElement(paragraph, NAME_A_PPR);
+  let level = 0;
+  if (pPr) {
+    const lvlAttr = getAttrValue(pPr, ATTR_LVL);
+    if (lvlAttr !== null) {
+      const parsed = Number.parseInt(lvlAttr, 10);
+      if (Number.isFinite(parsed)) level = parsed;
+    }
+  }
+
+  const layers: XmlElement[] = [];
+  if (pPr) layers.push(pPr);
+  const shapeLvlPPr = lstStyleLevelPPr(findShapeLstStyleElement(shape), level);
+  if (shapeLvlPPr) layers.push(shapeLvlPPr);
+
+  const phIdx = getShapePlaceholderIdx(shape);
+  const phType = getShapePlaceholderType(shape);
+  const slide = shape[SHAPE_SLIDE];
+  const layout = getSlideLayout(slide);
+  if (!layout || !shapeIsPlaceholder(shape)) return { level, layers };
+
+  const layoutPh = findPlaceholderShapeIn(layout[LAYOUT_PART].shapes, phIdx, phType);
+  if (layoutPh) {
+    const layoutLvlPPr = lstStyleLevelPPr(extractPlaceholderLstStyle(layoutPh.element), level);
+    if (layoutLvlPPr) layers.push(layoutLvlPPr);
+  }
+
+  const pkg = pres[INTERNAL_PACKAGE];
+  const layoutPartName = partName(layout[LAYOUT_PART_NAME]);
+  const layoutRels = pkg.getRels(layoutPartName);
+  const masterRel = layoutRels?.items.find(
+    (relationship) => relationship.type === REL_TYPES.slideMaster,
+  );
+  if (!masterRel) return { level, layers };
+  const masterPart = pkg.getPart(resolveTarget(layoutPartName, masterRel.target));
+  if (!masterPart) return { level, layers };
+
+  const masterRoot = parseXml(decode(masterPart.data)).root;
+  const { shapes: masterShapes } = readShapeTreeFromCsldRoot(masterRoot, 'sldMaster');
+  const masterPh = findPlaceholderShapeIn(masterShapes, phIdx, phType);
+  if (masterPh) {
+    const masterLvlPPr = lstStyleLevelPPr(extractPlaceholderLstStyle(masterPh.element), level);
+    if (masterLvlPPr) layers.push(masterLvlPPr);
+  }
+  const txLvlPPr = lstStyleLevelPPr(masterTxStyleFor(masterRoot, phType), level);
+  if (txLvlPPr) layers.push(txLvlPPr);
+  return { level, layers };
+};
+
 /**
  * Resolves a paragraph's effective properties by walking the same
  * inheritance chain `getShapeRunFormatEffective` uses, but for the
@@ -532,69 +616,9 @@ export const getParagraphPropertiesEffective = (
   shape: SlideShapeData,
   paragraphIndex: number,
 ): ParagraphProperties => {
-  const paragraph = requireParagraph(shape, paragraphIndex);
-  const pPr = firstChildElement(paragraph, NAME_A_PPR);
-
-  let level = 0;
-  if (pPr) {
-    const lvlAttr = getAttrValue(pPr, ATTR_LVL);
-    if (lvlAttr !== null) {
-      const parsed = Number.parseInt(lvlAttr, 10);
-      if (Number.isFinite(parsed)) level = parsed;
-    }
-  }
-
+  const { level, layers } = paragraphPPrCascade(pres, shape, paragraphIndex);
   const result: Partial<ParagraphProperties> = {};
-
-  // 1. Paragraph's own pPr.
-  if (pPr) mergePPrLayer(result, parsePPrLikeElement(pPr));
-
-  // 2. Text-body lstStyle at the paragraph's level.
-  const shapeLstStyle = findShapeLstStyleElement(shape);
-  const shapeLvlPPr = lstStyleLevelPPr(shapeLstStyle, level);
-  if (shapeLvlPPr) mergePPrLayer(result, parsePPrLikeElement(shapeLvlPPr));
-
-  const phIdx = getShapePlaceholderIdx(shape);
-  const phType = getShapePlaceholderType(shape);
-  const isPlaceholder = shapeIsPlaceholder(shape);
-  const slide = shape[SHAPE_SLIDE];
-  const layout = getSlideLayout(slide);
-
-  // Placeholder inheritance only: a plain text box does not read the master's
-  // txStyles for paragraph defaults (align / indent / spacing) either.
-  if (layout && isPlaceholder) {
-    // 3. Layout placeholder lstStyle.
-    const layoutPh = findPlaceholderShapeIn(layout[LAYOUT_PART].shapes, phIdx, phType);
-    if (layoutPh) {
-      const layoutLst = extractPlaceholderLstStyle(layoutPh.element);
-      const layoutLvlPPr = lstStyleLevelPPr(layoutLst, level);
-      if (layoutLvlPPr) mergePPrLayer(result, parsePPrLikeElement(layoutLvlPPr));
-    }
-
-    // 4. Master placeholder lstStyle + master txStyles.
-    const pkg = pres[INTERNAL_PACKAGE];
-    const layoutPartName = partName(layout[LAYOUT_PART_NAME]);
-    const layoutRels = pkg.getRels(layoutPartName);
-    if (layoutRels) {
-      const masterRel = layoutRels.items.find((r) => r.type === REL_TYPES.slideMaster);
-      if (masterRel) {
-        const masterPart = pkg.getPart(resolveTarget(layoutPartName, masterRel.target));
-        if (masterPart) {
-          const masterRoot = parseXml(decode(masterPart.data)).root;
-          const { shapes: masterShapes } = readShapeTreeFromCsldRoot(masterRoot, 'sldMaster');
-          const masterPh = findPlaceholderShapeIn(masterShapes, phIdx, phType);
-          if (masterPh) {
-            const masterLst = extractPlaceholderLstStyle(masterPh.element);
-            const masterLvlPPr = lstStyleLevelPPr(masterLst, level);
-            if (masterLvlPPr) mergePPrLayer(result, parsePPrLikeElement(masterLvlPPr));
-          }
-          const txStyle = masterTxStyleFor(masterRoot, phType);
-          const txLvlPPr = lstStyleLevelPPr(txStyle, level);
-          if (txLvlPPr) mergePPrLayer(result, parsePPrLikeElement(txLvlPPr));
-        }
-      }
-    }
-  }
+  for (const layer of layers) mergePPrLayer(result, parsePPrLikeElement(layer));
 
   return {
     align: result.align ?? null,
@@ -607,6 +631,95 @@ export const getParagraphPropertiesEffective = (
     spcAftPts: result.spcAftPts ?? null,
     rtl: result.rtl ?? null,
     bullet: result.bullet ?? null,
+  };
+};
+
+interface ParsedBulletLayer {
+  identity?: ParsedBulletIdentity;
+  color?: string | null;
+  size?: { sizePct: number | null; sizePts: number | null } | null;
+  font?: string | null;
+}
+
+/** Parse independently inheritable bullet identity, color, size, and font groups from one pPr layer. */
+const parseBulletLayer = (
+  pPr: XmlElement,
+  theme: ReturnType<typeof getPresentationTheme>,
+): ParsedBulletLayer => {
+  const identity = parseBulletIdentity(pPr);
+  const result: ParsedBulletLayer = identity ? { identity } : {};
+  for (const child of pPr.children) {
+    if (child.kind !== 'element' || child.name.namespaceURI !== NS.dml) continue;
+    if (child.name.localName === 'buClrTx') {
+      result.color = null;
+    } else if (child.name.localName === 'buClr') {
+      const color = child.children.find(
+        (candidate): candidate is XmlElement =>
+          candidate.kind === 'element' && candidate.name.namespaceURI === NS.dml,
+      );
+      result.color = color ? resolveDrawingColor(color, theme) : null;
+    } else if (child.name.localName === 'buSzTx') {
+      result.size = null;
+    } else if (child.name.localName === 'buSzPct') {
+      const value = getAttrValue(child, qname('', 'val', ''));
+      const parsed = parsePercentageFraction(value);
+      if (parsed !== null) {
+        result.size = {
+          sizePct: parsed,
+          sizePts: null,
+        };
+      }
+    } else if (child.name.localName === 'buSzPts') {
+      const value = getAttrValue(child, qname('', 'val', ''));
+      const parsed = value === null ? Number.NaN : Number.parseInt(value, 10);
+      if (Number.isFinite(parsed)) result.size = { sizePct: null, sizePts: parsed / 100 };
+    } else if (child.name.localName === 'buFontTx') {
+      result.font = null;
+    } else if (child.name.localName === 'buFont') {
+      result.font = getAttrValue(child, qname('', 'typeface', ''));
+    }
+  }
+  return result;
+};
+
+/** Parse Transitional integer units and Strict percent lexemes into a unit fraction. */
+const parsePercentageFraction = (value: string | null): number | null => {
+  if (value === null) return null;
+  const parsed = value.endsWith('%') ? Number(value.slice(0, -1)) / 100 : Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return value.endsWith('%') || Math.abs(parsed) <= 1 ? parsed : parsed / 100000;
+};
+
+/**
+ * Resolve one paragraph's effective bullet identity and marker overrides without mutating the presentation.
+ * Identity, color, size, and font inherit independently through pPr, text-body list style, layout, and master.
+ * `picture: true` pairs with `bullet: null`; null marker fields mean the marker follows text or has no override.
+ */
+export const getParagraphBulletPropertiesEffective = (
+  pres: PresentationData,
+  shape: SlideShapeData,
+  paragraphIndex: number,
+): ParagraphBulletPropertiesEffective => {
+  const { layers } = paragraphPPrCascade(pres, shape, paragraphIndex);
+  const theme = getPresentationTheme(pres);
+  let identity: ParsedBulletLayer['identity'];
+  let color: string | null | undefined;
+  let size: ParsedBulletLayer['size'];
+  let font: string | null | undefined;
+  for (const layer of layers) {
+    const parsed = parseBulletLayer(layer, theme);
+    if (identity === undefined && parsed.identity !== undefined) identity = parsed.identity;
+    if (color === undefined && parsed.color !== undefined) color = parsed.color;
+    if (size === undefined && parsed.size !== undefined) size = parsed.size;
+    if (font === undefined && parsed.font !== undefined) font = parsed.font;
+  }
+  return {
+    bullet: identity?.bullet ?? null,
+    picture: identity?.picture ?? false,
+    color: color ?? null,
+    sizePct: size?.sizePct ?? null,
+    sizePts: size?.sizePts ?? null,
+    font: font ?? null,
   };
 };
 
