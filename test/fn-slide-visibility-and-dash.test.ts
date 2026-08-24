@@ -3,9 +3,13 @@
 
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
 import {
   addSlideShape,
+  getShapeStrokeCustomDash,
+  getShapeStrokeDash,
+  getSlideShapes,
   getSlideXmlString,
   getSlides,
   inches,
@@ -13,6 +17,7 @@ import {
   loadPresentation,
   savePresentation,
   setShapeStroke,
+  setShapeStrokeCustomDash,
   setShapeStrokeDash,
   setSlideHidden,
 } from '../src/api/index.ts';
@@ -74,5 +79,73 @@ describe('fn API: setShapeStrokeDash', () => {
     const xml = await slideXml(await savePresentation(pres), 0);
     expect(xml).toContain('val="dashDot"');
     expect(xml).not.toContain('val="dot"');
+  });
+
+  it('round-trips a custom dash and replaces the preset dash choice', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const shape = addSlideShape(slide, {
+      preset: 'line',
+      x: inches(0),
+      y: inches(0),
+      w: inches(3),
+      h: inches(0),
+    });
+    setShapeStrokeDash(shape, 'dash');
+    setShapeStrokeCustomDash(shape, [
+      { dash: 250_000, space: 150_000 },
+      { dash: 50_000, space: 150_000 },
+    ]);
+
+    expect(getShapeStrokeCustomDash(shape)).toEqual([
+      { dash: 250_000, space: 150_000 },
+      { dash: 50_000, space: 150_000 },
+    ]);
+    expect(await slideXml(await savePresentation(pres), 0)).toContain(
+      '<a:custDash><a:ds d="250000" sp="150000"/><a:ds d="50000" sp="150000"/></a:custDash>',
+    );
+    expect(getShapeStrokeDash(shape)).toBeNull();
+
+    const entries = unzipSync(await savePresentation(pres));
+    const slidePart = entries['ppt/slides/slide1.xml']!;
+    entries['ppt/slides/slide1.xml'] = strToU8(
+      strFromU8(slidePart)
+        .replace('d="250000" sp="150000"', 'd="250%" sp="150%"')
+        .replace('d="50000" sp="150000"', 'd="50%" sp="150%"'),
+    );
+    const strict = await loadPresentation(zipSync(entries));
+    expect(getShapeStrokeCustomDash(getSlideShapes(getSlides(strict)[0]!).at(-1)!)).toEqual([
+      { dash: 250_000, space: 150_000 },
+      { dash: 50_000, space: 150_000 },
+    ]);
+  });
+
+  it('rejects invalid custom dash sequences while preserving fractional Strict units', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const shape = addSlideShape(getSlides(pres)[0]!, {
+      preset: 'line',
+      x: inches(0),
+      y: inches(0),
+      w: inches(3),
+      h: inches(0),
+    });
+
+    expect(() => setShapeStrokeCustomDash(shape, [])).toThrow(/must not be empty/u);
+    expect(() => setShapeStrokeCustomDash(shape, [{ dash: -1, space: 100_000 }])).toThrow(
+      /non-negative/u,
+    );
+    expect(() => setShapeStrokeCustomDash(shape, [{ dash: Number.NaN, space: 100_000 }])).toThrow(
+      /finite/u,
+    );
+    expect(() =>
+      setShapeStrokeCustomDash(shape, [{ dash: Number.POSITIVE_INFINITY, space: 100_000 }]),
+    ).toThrow(/finite/u);
+    expect(() =>
+      setShapeStrokeCustomDash(shape, [{ dash: Number.MIN_VALUE, space: 100_000 }]),
+    ).toThrow(/too small/u);
+
+    setShapeStrokeCustomDash(shape, [{ dash: 1e-10, space: 100_000 }]);
+    expect(getShapeStrokeCustomDash(shape)).toEqual([{ dash: 1e-10, space: 100_000 }]);
+    expect(await slideXml(await savePresentation(pres), 0)).toContain('d="0.0000000000001%"');
   });
 });

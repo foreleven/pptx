@@ -30,6 +30,7 @@ export type {
   LineCap,
   LineCompound,
   LineDash,
+  LineDashStop,
   LineEndSize,
   LineEndType,
   LineJoin,
@@ -42,6 +43,7 @@ export {
   setStrokeArrow,
   setStrokeCap,
   setStrokeCompound,
+  setStrokeCustomDash,
   setStrokeDash,
   setStrokeJoin,
 } from './stroke.ts';

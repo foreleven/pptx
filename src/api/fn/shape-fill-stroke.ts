@@ -7,6 +7,7 @@ import {
   coverImageCrop,
   type GradientFillOptions,
   type LineDash,
+  type LineDashStop,
   type PatternFillOptions,
   type StrokeOptions,
   type ImageCrop,
@@ -27,6 +28,7 @@ import {
   setStrokeArrow,
   setStrokeCap,
   setStrokeCompound,
+  setStrokeCustomDash,
   setStrokeJoin,
   setStrokeDash,
 } from '../../internal/drawingml/index.ts';
@@ -352,6 +354,42 @@ export const getShapeStrokeDash = (shape: SlideShapeData): LineDash | null => {
 };
 
 /**
+ * Reads `<a:custDash>` as raw dash/space percentages (`100000` = one
+ * line-width). Returns `null` when the shape does not use a custom dash.
+ */
+export const getShapeStrokeCustomDash = (shape: SlideShapeData): readonly LineDashStop[] | null => {
+  const spPr = firstChildElement(shape[SHAPE_ELEMENT], qname('p', 'spPr', NS.pml));
+  if (!spPr) return null;
+  const ln = firstChildElement(spPr, qname('a', 'ln', NS.dml));
+  if (!ln) return null;
+  const custDash = firstChildElement(ln, qname('a', 'custDash', NS.dml));
+  if (!custDash) return null;
+  const result: LineDashStop[] = [];
+  for (const child of custDash.children) {
+    if (
+      child.kind !== 'element' ||
+      child.name.namespaceURI !== NS.dml ||
+      child.name.localName !== 'ds'
+    ) {
+      continue;
+    }
+    const dash = parsePositivePercentageUnits(getAttrValue(child, qname('', 'd', '')));
+    const space = parsePositivePercentageUnits(getAttrValue(child, qname('', 'sp', '')));
+    if (dash !== null && space !== null) {
+      result.push({ dash, space });
+    }
+  }
+  return result;
+};
+
+/** Normalize Transitional integers and Strict percent lexemes into 1/1000-percent units. */
+const parsePositivePercentageUnits = (value: string | null | undefined): number | null => {
+  if (value === null || value === undefined) return null;
+  const parsed = value.endsWith('%') ? Number(value.slice(0, -1)) * 1_000 : Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+};
+
+/**
  * Reads back the shape's arrowhead on one end of `<a:ln>`, or `null`
  * when no `<a:headEnd>` / `<a:tailEnd>` is present.
  */
@@ -394,6 +432,18 @@ export const getShapeStrokeArrow = (
  */
 export const setShapeStrokeDash = (shape: SlideShapeData, dash: LineDash): void => {
   setStrokeDash(requireSpPr(shape), dash);
+  commitAndRefresh(shape);
+};
+
+/**
+ * Sets a custom dash sequence using DrawingML percentages relative to the
+ * line width (`100000` = 100%). Replaces any preset dash on the shape.
+ */
+export const setShapeStrokeCustomDash = (
+  shape: SlideShapeData,
+  stops: readonly LineDashStop[],
+): void => {
+  setStrokeCustomDash(requireSpPr(shape), stops);
   commitAndRefresh(shape);
 };
 

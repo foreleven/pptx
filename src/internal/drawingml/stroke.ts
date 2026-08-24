@@ -121,7 +121,18 @@ export type LineDash =
   | 'sysDashDotDot';
 
 const NAME_PRST_DASH = qname('a', 'prstDash', NS.dml);
+const NAME_CUST_DASH = qname('a', 'custDash', NS.dml);
+const NAME_DASH_STOP = qname('a', 'ds', NS.dml);
 const ATTR_VAL = qname('', 'val', '');
+const ATTR_DASH = qname('', 'd', '');
+const ATTR_SPACE = qname('', 'sp', '');
+const DASH_LOCALS = new Set(['prstDash', 'custDash']);
+
+/** One DrawingML custom-dash pair in thousandths-of-a-percent units. */
+export interface LineDashStop {
+  readonly dash: number;
+  readonly space: number;
+}
 
 /**
  * Sets `<a:prstDash val="..."/>` inside the shape's `<a:ln>`. Creates
@@ -129,11 +140,55 @@ const ATTR_VAL = qname('', 'val', '');
  */
 export const setStrokeDash = (spPr: XmlElement, dash: LineDash): void => {
   const ln = ensureLn(spPr);
-  ln.children = ln.children.filter(
-    (c) =>
-      !(c.kind === 'element' && c.name.namespaceURI === NS.dml && c.name.localName === 'prstDash'),
-  );
+  removeChildrenIn(ln, DASH_LOCALS);
   insertLnChild(ln, elem(NAME_PRST_DASH, { attrs: [attr(ATTR_VAL, dash)] }));
+};
+
+/**
+ * Sets `<a:custDash>` using raw `ST_PositivePercentage` values. Each
+ * dash/space value is relative to the line width (`100000` = 100%).
+ * The sequence must be non-empty and every value must be finite and non-negative.
+ * Fractional units use the Strict-compatible percent lexical form.
+ */
+export const setStrokeCustomDash = (spPr: XmlElement, stops: readonly LineDashStop[]): void => {
+  if (stops.length === 0) throw new RangeError('setShapeStrokeCustomDash: stops must not be empty');
+  const children = stops.map(({ dash, space }, index) => {
+    if (!Number.isFinite(dash) || dash < 0 || !Number.isFinite(space) || space < 0) {
+      throw new RangeError(
+        `setShapeStrokeCustomDash: stops[${String(index)}] dash and space must be finite non-negative numbers`,
+      );
+    }
+    return elem(NAME_DASH_STOP, {
+      attrs: [attr(ATTR_DASH, percentageLexeme(dash)), attr(ATTR_SPACE, percentageLexeme(space))],
+    });
+  });
+  const ln = ensureLn(spPr);
+  removeChildrenIn(ln, DASH_LOCALS);
+  insertLnChild(ln, elem(NAME_CUST_DASH, { children }));
+};
+
+/** Serialize compatible integers compactly and all other values as Strict percentage decimals. */
+const percentageLexeme = (value: number): string => {
+  if (Number.isInteger(value) && value <= 2_147_483_647) return String(value);
+  const percent = value / 1_000;
+  if (value > 0 && percent === 0) {
+    throw new RangeError('setShapeStrokeCustomDash: dash values are too small to serialize');
+  }
+  return `${plainDecimal(percent)}%`;
+};
+
+/** Expand JavaScript exponent notation because the OOXML percentage grammar accepts decimal text only. */
+const plainDecimal = (value: number): string => {
+  const text = String(value);
+  const match = /^(\d+)(?:\.(\d+))?e([+-]?\d+)$/iu.exec(text);
+  if (!match) return text;
+  const whole = match[1]!;
+  const fraction = match[2] ?? '';
+  const digits = whole + fraction;
+  const decimalIndex = whole.length + Number(match[3]);
+  if (decimalIndex <= 0) return `0.${'0'.repeat(-decimalIndex)}${digits}`;
+  if (decimalIndex >= digits.length) return `${digits}${'0'.repeat(decimalIndex - digits.length)}`;
+  return `${digits.slice(0, decimalIndex)}.${digits.slice(decimalIndex)}`;
 };
 
 /** ECMA-376 §20.1.10.39 `ST_LineEndType`. */
