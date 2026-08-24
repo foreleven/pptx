@@ -175,19 +175,34 @@ export const replaceTextInTree = (root: XmlElement, from: string | RegExp, to: s
  *   - `'none'` — emits `<a:buNone/>`, forcing the paragraph to be bullet-free
  *     even if the layout has a bullet default.
  *   - `{ char }` — custom bullet character (any single grapheme).
- *   - `{ autoNum }` — any ECMA-376 `ST_TextAutonumberScheme` token
- *     (`arabicPeriod`, `romanLcParenR`, `alphaUcPeriod`, ...).
+ *   - `{ autoNum, startAt? }` — any ECMA-376 `ST_TextAutonumberScheme`
+ *     token (`arabicPeriod`, `romanLcParenR`, `alphaUcPeriod`, ...),
+ *     optionally starting from an integer in the native 1–32767 range.
  */
-export type BulletStyle = 'bullet' | 'number' | 'none' | { char: string } | { autoNum: string };
+export type BulletStyle =
+  | 'bullet'
+  | 'number'
+  | 'none'
+  | { char: string }
+  | { autoNum: string; startAt?: number };
 
 const normalizeBulletStyle = (
   s: BulletStyle,
-): { kind: 'char'; char: string } | { kind: 'autoNum'; type: string } | { kind: 'none' } => {
+):
+  | { kind: 'char'; char: string }
+  | { kind: 'autoNum'; type: string; startAt: number }
+  | { kind: 'none' } => {
   if (s === 'bullet') return { kind: 'char', char: '•' };
-  if (s === 'number') return { kind: 'autoNum', type: 'arabicPeriod' };
+  if (s === 'number') return { kind: 'autoNum', type: 'arabicPeriod', startAt: 1 };
   if (s === 'none') return { kind: 'none' };
   if ('char' in s) return { kind: 'char', char: s.char };
-  return { kind: 'autoNum', type: s.autoNum };
+  const startAt = s.startAt ?? 1;
+  if (!Number.isInteger(startAt) || startAt < 1 || startAt > 32767) {
+    throw new RangeError(
+      `automatic-number startAt must be an integer from 1 to 32767; got ${startAt}`,
+    );
+  }
+  return { kind: 'autoNum', type: s.autoNum, startAt };
 };
 
 const buildBulletElement = (style: BulletStyle): XmlElement => {
@@ -199,7 +214,7 @@ const buildBulletElement = (style: BulletStyle): XmlElement => {
       // `startAt="1"` is the default, but PowerPoint and PptxGenJS write it
       // explicitly on an authored numbered list.
       return elem(NAME_BU_AUTO_NUM, {
-        attrs: [attr(ATTR_START_AT, '1'), attr(ATTR_BU_TYPE, n.type)],
+        attrs: [attr(ATTR_START_AT, String(n.startAt)), attr(ATTR_BU_TYPE, n.type)],
       });
     case 'none':
       return elem(NAME_BU_NONE);

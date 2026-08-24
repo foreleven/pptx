@@ -36,7 +36,7 @@ describe('fn API: getParagraphBullet', () => {
     expect(getParagraphBullet(tb, 0)).toBeNull();
   });
 
-  it('round-trips bullet / number / none / custom char / autoNum', async () => {
+  it('round-trips bullet / number / none / custom char / autoNum / explicit start', async () => {
     const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
     const slide = getSlides(pres)[0]!;
     const tb = addSlideTextBox(slide, {
@@ -44,19 +44,44 @@ describe('fn API: getParagraphBullet', () => {
       y: inches(0),
       w: inches(3),
       h: inches(2),
-      text: 'A\nB\nC\nD\nE',
+      text: 'A\nB\nC\nD\nE\nF',
     });
     setParagraphBullet(tb, 0, 'bullet');
     setParagraphBullet(tb, 1, 'number');
     setParagraphBullet(tb, 2, 'none');
     setParagraphBullet(tb, 3, { char: '★' });
     setParagraphBullet(tb, 4, { autoNum: 'romanLcPeriod' });
+    setParagraphBullet(tb, 5, { autoNum: 'arabicPeriod', startAt: 5 });
 
     expect(getParagraphBullet(tb, 0)).toBe('bullet');
     expect(getParagraphBullet(tb, 1)).toBe('number');
     expect(getParagraphBullet(tb, 2)).toBe('none');
     expect(getParagraphBullet(tb, 3)).toEqual({ char: '★' });
     expect(getParagraphBullet(tb, 4)).toEqual({ autoNum: 'romanLcPeriod' });
+    expect(getParagraphBullet(tb, 5)).toEqual({ autoNum: 'arabicPeriod', startAt: 5 });
+
+    const rebuilt = await loadPresentation(await savePresentation(pres));
+    const rebuiltText = findShapeByText(getSlides(rebuilt)[0]!, 'A')!;
+    expect(getParagraphBullet(rebuiltText, 5)).toEqual({ autoNum: 'arabicPeriod', startAt: 5 });
+  });
+
+  it('rejects automatic-number starts outside the DrawingML range', async () => {
+    const pres = createPresentation();
+    const slide = addBlankSlide(pres);
+    const tb = addSlideTextBox(slide, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(3),
+      h: inches(1),
+      text: 'Invalid start',
+    });
+
+    expect(() => setParagraphBullet(tb, 0, { autoNum: 'arabicPeriod', startAt: 0 })).toThrow(
+      'automatic-number startAt must be an integer from 1 to 32767',
+    );
+    expect(() => setParagraphBullet(tb, 0, { autoNum: 'arabicPeriod', startAt: 32768 })).toThrow(
+      'automatic-number startAt must be an integer from 1 to 32767',
+    );
   });
 
   it('resolves marker overrides independently from a direct bullet identity', async () => {

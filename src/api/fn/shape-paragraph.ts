@@ -422,8 +422,12 @@ const parseBulletIdentity = (pPr: XmlElement): ParsedBulletIdentity | undefined 
     if (child.name.localName === 'buAutoNum') {
       const type = getAttrValue(child, qname('', 'type', ''));
       if (type !== null) {
+        const startAt = Number(getAttrValue(child, qname('', 'startAt', '')) ?? '1');
         return {
-          bullet: type === 'arabicPeriod' ? 'number' : { autoNum: type },
+          bullet:
+            type === 'arabicPeriod' && startAt === 1
+              ? 'number'
+              : { autoNum: type, ...(startAt === 1 ? {} : { startAt }) },
           picture: false,
         };
       }

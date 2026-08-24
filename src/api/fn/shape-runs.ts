@@ -837,8 +837,9 @@ export const getParagraphBullet = (
     }
     if (c.name.localName === 'buAutoNum') {
       const t = getAttrValue(c, qname('', 'type', ''));
-      if (t === 'arabicPeriod') return 'number';
-      if (t !== null) return { autoNum: t };
+      const startAt = Number(getAttrValue(c, qname('', 'startAt', '')) ?? '1');
+      if (t === 'arabicPeriod' && startAt === 1) return 'number';
+      if (t !== null) return { autoNum: t, ...(startAt === 1 ? {} : { startAt }) };
     }
   }
   return null;
