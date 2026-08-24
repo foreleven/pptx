@@ -38,6 +38,7 @@ export type {
 export type { SlideChartData } from './fn.ts';
 export type { ShapeClickAction } from './fn.ts';
 export type { ShapeParagraphElementInput } from './fn.ts';
+export type { TextRunState } from './fn.ts';
 export type { IssueSeverity, ValidationIssue } from './fn.ts';
 export type { AnimationEffect, AnimationOptions } from './fn.ts';
 export type { ImageCrop, ImageDuotone } from './fn.ts';
@@ -307,6 +308,7 @@ export {
   getShapeRunCount,
   getShapeRunFormat,
   getShapeRunFormatEffective,
+  getShapeRunState,
   getShapeRunHyperlink,
   getShapeRunHyperlinkTooltip,
   getShapeRunText,

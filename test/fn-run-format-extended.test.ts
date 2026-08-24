@@ -8,11 +8,16 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
+  _internalPackageOf,
   addSlideTextBox,
+  findShapeByText,
   getShapeRunFormat,
+  getShapeRunState,
+  getSlidePartName,
   getSlides,
   inches,
   loadPresentation,
+  savePresentation,
   setShapeRunFormat,
 } from '../src/api/index.ts';
 
@@ -64,5 +69,39 @@ describe('fn API: extended run-format properties', () => {
     expect(getShapeRunFormat(tb, 0, 0)!.strike).toBe('dblStrike');
     setShapeRunFormat(tb, 0, 0, { strike: false });
     expect(getShapeRunFormat(tb, 0, 0)!.strike).toBe(false);
+  });
+
+  it('reads direct normalize, proofing, dirty, error, and smart-tag run state', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    addSlideTextBox(slide, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(4),
+      h: inches(2),
+      text: 'diagnostic state',
+    });
+
+    const pkg = _internalPackageOf(pres);
+    const slidePartName = getSlidePartName(slide) as Parameters<typeof pkg.getPart>[0];
+    const slidePart = pkg.getPart(slidePartName)!;
+    const xml = new TextDecoder().decode(slidePart.data);
+    const withState = xml.replace(
+      /<a:r>(?:<a:rPr[^>]*\/>)?<a:t>diagnostic state<\/a:t><\/a:r>/u,
+      '<a:r><a:rPr normalizeH="1" noProof="1" dirty="1" err="1" smtClean="1" smtId="42"/><a:t>diagnostic state</a:t></a:r>',
+    );
+    expect(withState).not.toBe(xml);
+    slidePart.data = new TextEncoder().encode(withState);
+
+    const reloaded = await loadPresentation(await savePresentation(pres));
+    const reloadedShape = findShapeByText(getSlides(reloaded)[0]!, 'diagnostic state')!;
+    expect(getShapeRunState(reloadedShape, 0, 0)).toEqual({
+      normalizeHeight: true,
+      noProof: true,
+      dirty: true,
+      error: true,
+      smartTagClean: true,
+      smartTagId: 42,
+    });
   });
 });

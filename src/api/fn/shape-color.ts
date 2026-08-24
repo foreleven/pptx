@@ -11,6 +11,27 @@ import {
 } from '../../internal/xml/index.ts';
 import { type SlideShapeData } from '../_internal-symbols.ts';
 import { type PresentationTheme } from './theme.ts';
+
+/**
+ * Direct, non-inherited DrawingML run state that does not describe visual CSS formatting.
+ * These values are exposed so importers can diagnose proofing and smart-tag metadata
+ * instead of silently flattening it into ordinary text.
+ */
+export interface TextRunState {
+  readonly normalizeHeight?: boolean;
+  readonly noProof?: boolean;
+  readonly dirty?: boolean;
+  readonly error?: boolean;
+  readonly smartTagClean?: boolean;
+  readonly smartTagId?: number;
+}
+
+const optionalOnOffAttr = (element: XmlElement, localName: string): boolean | undefined => {
+  const value = getAttrValue(element, qname('', localName, ''));
+  if (value === '1' || value === 'true') return true;
+  if (value === '0' || value === 'false') return false;
+  return undefined;
+};
 // -- Color transforms (ECMA-376 §20.1.2.3.x) --------------------------------
 //
 // DrawingML color elements (`<a:srgbClr>`, `<a:schemeClr>`, `<a:sysClr>`,
@@ -446,4 +467,37 @@ export const getShapeRunFormat = (
   const rPr = firstChildElement(run, NAME_A_RPR);
   if (rPr === null) return null;
   return parseRPrLikeElement(rPr) as TextFormat;
+};
+
+/**
+ * Reads direct CT_TextCharacterProperties state that is intentionally excluded
+ * from the inherited visual `TextFormat` cascade. Returns `null` when the run
+ * has no `<a:rPr>` or none of these state attributes is authored.
+ */
+export const getShapeRunState = (
+  shape: SlideShapeData,
+  paragraphIndex: number,
+  runIndex: number,
+): TextRunState | null => {
+  const run = requireRun(shape, paragraphIndex, runIndex);
+  const rPr = firstChildElement(run, NAME_A_RPR);
+  if (rPr === null) return null;
+  const normalizeHeight = optionalOnOffAttr(rPr, 'normalizeH');
+  const noProof = optionalOnOffAttr(rPr, 'noProof');
+  const dirty = optionalOnOffAttr(rPr, 'dirty');
+  const error = optionalOnOffAttr(rPr, 'err');
+  const smartTagClean = optionalOnOffAttr(rPr, 'smtClean');
+  const smartTagIdValue = getAttrValue(rPr, qname('', 'smtId', ''));
+  const smartTagId = smartTagIdValue === null ? Number.NaN : Number(smartTagIdValue);
+  const state: TextRunState = {
+    ...(normalizeHeight !== undefined ? { normalizeHeight } : {}),
+    ...(noProof !== undefined ? { noProof } : {}),
+    ...(dirty !== undefined ? { dirty } : {}),
+    ...(error !== undefined ? { error } : {}),
+    ...(smartTagClean !== undefined ? { smartTagClean } : {}),
+    ...(Number.isInteger(smartTagId) && smartTagId >= 0 && smartTagId <= 0xffffffff
+      ? { smartTagId }
+      : {}),
+  };
+  return Object.keys(state).length > 0 ? state : null;
 };
