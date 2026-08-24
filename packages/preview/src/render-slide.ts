@@ -2682,6 +2682,8 @@ export const resolveTextBodyModel = (
         spcBefPts: null,
         spcAftPts: null,
         rtl: null,
+        defaultTabSize: null,
+        tabStops: null,
         bullet: null,
       };
     }

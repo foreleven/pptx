@@ -4,6 +4,8 @@ import {
   ATTR_LVL,
   NAME_A_PPR,
   NAME_A_RPR,
+  type ParagraphTabStop,
+  parseParagraphTabStops,
   ensureRPr,
   requireParagraph,
   requireRun,
@@ -386,6 +388,10 @@ export interface ParagraphProperties {
   spcAftPts: number | null;
   /** Right-to-left paragraph (`<a:pPr rtl="1"/>`). */
   rtl: boolean | null;
+  /** Default tab interval in EMU (`defTabSz`). */
+  defaultTabSize: number | null;
+  /** Custom tab stops (`<a:tabLst>`), or `null` when no list is authored. */
+  tabStops: readonly ParagraphTabStop[] | null;
   /**
    * Bullet resolved through the cascade (`<a:buChar>` / `<a:buAutoNum>` /
    * `<a:buNone>`). Master `bodyStyle` levels author the PowerPoint default
@@ -475,6 +481,13 @@ const parsePPrLikeElement = (pPr: XmlElement): Partial<ParagraphProperties> => {
   }
   const rtl = getAttrValue(pPr, qname('', 'rtl', ''));
   if (rtl !== null) out.rtl = rtl === '1' || rtl === 'true';
+  const defaultTabSize = getAttrValue(pPr, qname('', 'defTabSz', ''));
+  if (defaultTabSize !== null) {
+    const parsed = Number.parseInt(defaultTabSize, 10);
+    if (Number.isFinite(parsed)) out.defaultTabSize = parsed;
+  }
+  const tabStops = parseParagraphTabStops(pPr);
+  if (tabStops !== null) out.tabStops = tabStops;
   const lnSpc = firstChildElement(pPr, qname('a', 'lnSpc', NS.dml));
   if (lnSpc) {
     const pct = firstChildElement(lnSpc, qname('a', 'spcPct', NS.dml));
@@ -526,6 +539,10 @@ const mergePPrLayer = (
   if (base.marR === undefined && layer.marR !== undefined) base.marR = layer.marR;
   if (base.indent === undefined && layer.indent !== undefined) base.indent = layer.indent;
   if (base.rtl === undefined && layer.rtl !== undefined) base.rtl = layer.rtl;
+  if (base.defaultTabSize === undefined && layer.defaultTabSize !== undefined) {
+    base.defaultTabSize = layer.defaultTabSize;
+  }
+  if (base.tabStops === undefined && layer.tabStops !== undefined) base.tabStops = layer.tabStops;
   if (base.lineSpacing === undefined && layer.lineSpacing !== undefined) {
     base.lineSpacing = layer.lineSpacing;
   }
@@ -634,6 +651,8 @@ export const getParagraphPropertiesEffective = (
     spcBefPts: result.spcBefPts ?? null,
     spcAftPts: result.spcAftPts ?? null,
     rtl: result.rtl ?? null,
+    defaultTabSize: result.defaultTabSize ?? null,
+    tabStops: result.tabStops ?? null,
     bullet: result.bullet ?? null,
   };
 };

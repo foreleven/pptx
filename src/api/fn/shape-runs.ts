@@ -34,7 +34,7 @@ import { commitAndRefresh, requireTxBody } from './_helpers.ts';
 import { getPresentationTheme } from './theme.ts';
 import { getSlides } from './slide-query.ts';
 import { findCNvPr, NAME_HLINK_CLICK_FN, type ShapeClickAction } from './embedded.ts';
-import { emuCoordinate32, emuPositiveCoordinate32 } from '../../internal/bounds.ts';
+import { emuCoordinate32, emuPositiveCoordinate32, oneOf } from '../../internal/bounds.ts';
 
 const NAME_TX_BODY = qname('p', 'txBody', NS.pml);
 
@@ -585,6 +585,138 @@ const PPR_CHILD_RANK: Record<string, number> = {
 };
 const pPrChildRank = (el: XmlElement): number =>
   el.name.namespaceURI === NS.dml ? (PPR_CHILD_RANK[el.name.localName] ?? 99) : 99;
+
+/** Alignment of one DrawingML paragraph tab stop. */
+export type ParagraphTabAlignment = 'left' | 'center' | 'right' | 'decimal';
+
+/** One paragraph tab stop. Positions use DrawingML EMU coordinates. */
+export interface ParagraphTabStop {
+  readonly positionEmu: number;
+  readonly alignment: ParagraphTabAlignment;
+}
+
+const TAB_ALIGNMENT_TO_TOKEN: Record<ParagraphTabAlignment, string> = {
+  left: 'l',
+  center: 'ctr',
+  right: 'r',
+  decimal: 'dec',
+};
+
+const TAB_TOKEN_TO_ALIGNMENT: Readonly<Record<string, ParagraphTabAlignment>> = {
+  l: 'left',
+  ctr: 'center',
+  r: 'right',
+  dec: 'decimal',
+};
+
+const PARAGRAPH_TAB_ALIGNMENTS = ['left', 'center', 'right', 'decimal'] as const;
+
+/** @internal Parses one pPr layer while preserving authored-empty versus inherited tab lists. */
+export const parseParagraphTabStops = (pPr: XmlElement): readonly ParagraphTabStop[] | null => {
+  const tabList = firstChildElement(pPr, qname('a', 'tabLst', NS.dml));
+  if (!tabList) return null;
+  const stops: ParagraphTabStop[] = [];
+  for (const child of tabList.children) {
+    if (child.kind !== 'element' || child.name.namespaceURI !== NS.dml) continue;
+    if (child.name.localName !== 'tab') continue;
+    const position = getAttrValue(child, qname('', 'pos', ''));
+    const token = getAttrValue(child, qname('', 'algn', ''));
+    const alignment = token === null ? undefined : TAB_TOKEN_TO_ALIGNMENT[token];
+    if (position === null || alignment === undefined) continue;
+    const positionEmu = Number.parseInt(position, 10);
+    if (Number.isFinite(positionEmu)) stops.push({ positionEmu, alignment });
+  }
+  return stops;
+};
+
+/** Reads the literal paragraph default-tab interval in EMU, or `null` when it inherits. */
+export const getParagraphDefaultTabSize = (
+  shape: SlideShapeData,
+  paragraphIndex: number,
+): number | null => {
+  const paragraph = requireParagraph(shape, paragraphIndex);
+  const pPr = firstChildElement(paragraph, NAME_A_PPR);
+  if (!pPr) return null;
+  const raw = getAttrValue(pPr, qname('', 'defTabSz', ''));
+  if (raw === null) return null;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+/** Authors a paragraph default-tab interval in EMU; `null` restores inheritance. */
+export const setParagraphDefaultTabSize = (
+  shape: SlideShapeData,
+  paragraphIndex: number,
+  sizeEmu: number | null,
+): void => {
+  const normalized =
+    sizeEmu === null ? null : emuPositiveCoordinate32(sizeEmu, 'paragraph default tab size');
+  const paragraph = requireParagraph(shape, paragraphIndex);
+  const pPr = ensurePPr(paragraph);
+  pPr.attrs = pPr.attrs.filter(
+    (candidate) => !(candidate.name.namespaceURI === '' && candidate.name.localName === 'defTabSz'),
+  );
+  if (normalized !== null) {
+    pPr.attrs.push(attr(qname('', 'defTabSz', ''), String(normalized)));
+  }
+  commitAndRefresh(shape);
+};
+
+/** Reads the literal custom paragraph tab-stop list, or `null` when no list is authored. */
+export const getParagraphTabStops = (
+  shape: SlideShapeData,
+  paragraphIndex: number,
+): readonly ParagraphTabStop[] | null => {
+  const paragraph = requireParagraph(shape, paragraphIndex);
+  const pPr = firstChildElement(paragraph, NAME_A_PPR);
+  if (!pPr) return null;
+  return parseParagraphTabStops(pPr);
+};
+
+/** Authors up to 32 custom paragraph tab stops; `null` removes the authored list. */
+export const setParagraphTabStops = (
+  shape: SlideShapeData,
+  paragraphIndex: number,
+  stops: readonly ParagraphTabStop[] | null,
+): void => {
+  if (stops !== null && stops.length > 32) {
+    throw new RangeError(
+      `paragraph tab stops must contain at most 32 entries, got ${stops.length}`,
+    );
+  }
+  const normalized = stops?.map((stop, index) => ({
+    positionEmu: emuCoordinate32(stop.positionEmu, `paragraph tab stop ${index} position`),
+    alignment: oneOf(
+      stop.alignment,
+      PARAGRAPH_TAB_ALIGNMENTS,
+      `paragraph tab stop ${index} alignment`,
+    ),
+  }));
+  const paragraph = requireParagraph(shape, paragraphIndex);
+  const pPr = ensurePPr(paragraph);
+  pPr.children = pPr.children.filter(
+    (candidate) =>
+      !(
+        candidate.kind === 'element' &&
+        candidate.name.namespaceURI === NS.dml &&
+        candidate.name.localName === 'tabLst'
+      ),
+  );
+  if (normalized !== undefined) {
+    const tabList = elem(qname('a', 'tabLst', NS.dml), {
+      children: normalized.map((stop) =>
+        elem(qname('a', 'tab', NS.dml), {
+          attrs: [
+            attr(qname('', 'pos', ''), String(stop.positionEmu)),
+            attr(qname('', 'algn', ''), TAB_ALIGNMENT_TO_TOKEN[stop.alignment]),
+          ],
+        }),
+      ),
+    });
+    insertChildByRank(pPr, tabList, pPrChildRank);
+  }
+  commitAndRefresh(shape);
+};
 
 /**
  * Sets the spacing before and/or after a paragraph, in points (where
