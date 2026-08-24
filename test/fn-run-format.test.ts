@@ -17,7 +17,7 @@ import {
   loadPresentation,
   savePresentation,
   setShapeRunFormat,
-  setShapeParagraphRuns,
+  setShapeParagraphElements,
   setShapeRunText,
   setShapeText,
 } from '../src/api/index.ts';
@@ -60,13 +60,17 @@ describe('fn API: per-run text editing', () => {
     expect(xml).toMatch(/<a:r>\s*<a:t>two<\/a:t>/);
   });
 
-  it('setShapeParagraphRuns replaces one paragraph with ordered formatted runs', async () => {
+  it('setShapeParagraphElements replaces one paragraph with ordered formatted runs', async () => {
     const pres = await loadPresentation(await readFile(fixture('one-text-slide.pptx')));
     const slide = getSlides(pres)[0]!;
     const shape = getSlideShapes(slide)[0]!;
-    setShapeParagraphRuns(shape, 0, [
-      { text: '3,309', format: { font: 'Arial', size: 32, bold: true } },
-      { text: ' 亿港元', format: { fontEastAsian: 'PingFang SC', size: 17, baseline: -0.08 } },
+    setShapeParagraphElements(shape, 0, [
+      { kind: 'r', text: '3,309', format: { font: 'Arial', size: 32, bold: true } },
+      {
+        kind: 'r',
+        text: ' 亿港元',
+        format: { fontEastAsian: 'PingFang SC', size: 17, baseline: -0.08 },
+      },
     ]);
 
     expect(getShapeRunCount(shape, 0)).toBe(2);

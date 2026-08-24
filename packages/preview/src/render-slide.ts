@@ -115,6 +115,7 @@ import {
   getTableCellFill,
   getTableCellParagraphs,
   getTableCellSpan,
+  getTableCellTextDirection,
   getTableCells,
   getTableStyleFlags,
   getTableColumnWidths,
@@ -2301,6 +2302,24 @@ export const verticalLayoutOf = (
   }
 };
 
+const verticalTextCss = (vert: ReturnType<typeof getShapeTextDirection>): string => {
+  switch (vert) {
+    case 'vert':
+    case 'eaVert':
+      return 'writing-mode:vertical-rl;';
+    case 'vert270':
+      return 'writing-mode:vertical-lr;transform:rotate(180deg);';
+    case 'mongolianVert':
+      return 'writing-mode:vertical-lr;';
+    case 'wordArtVert':
+      return 'writing-mode:vertical-rl;text-orientation:upright;';
+    case 'wordArtVertRtl':
+      return 'writing-mode:vertical-rl;text-orientation:upright;direction:rtl;';
+    case null:
+      return '';
+  }
+};
+
 // Build the px-native engine input from the resolved paraData (at a.autoFitScale).
 export const buildSvgTextInput = (a: SvgTextArgs): TextBodyInput => {
   const scale = a.autoFitScale;
@@ -3175,18 +3194,6 @@ const renderTextBody = (
   // wordArtVert / wordArtVertRtl stack characters without rotation
   // which writing-mode also covers via "vertical-lr".
   const vert = effectiveBody.vert ?? getShapeTextDirection(shape);
-  let writingMode = '';
-  let extraTransform = '';
-  if (vert === 'vert' || vert === 'eaVert') {
-    writingMode = 'writing-mode:vertical-rl';
-  } else if (vert === 'vert270' || vert === 'mongolianVert') {
-    writingMode = 'writing-mode:vertical-lr';
-    if (vert === 'vert270') extraTransform = ';transform:rotate(180deg)';
-  } else if (vert === 'wordArtVert') {
-    writingMode = 'writing-mode:vertical-rl;text-orientation:upright';
-  } else if (vert === 'wordArtVertRtl') {
-    writingMode = 'writing-mode:vertical-rl;text-orientation:upright;direction:rtl';
-  }
   // B4 — multi-column text bodies. `<a:bodyPr numCol="N" spcCol="EMU"/>`
   // splits the text body into N equal columns separated by `spcCol`.
   // CSS `column-count` / `column-gap` map directly.
@@ -3196,7 +3203,8 @@ const renderTextBody = (
     const gapPx = cols.gapEmu !== undefined ? (cols.gapEmu / EMU_PER_PX).toFixed(2) : '12';
     colStyles = `;column-count:${cols.count};column-gap:${gapPx}px`;
   }
-  const vertStyles = (writingMode ? `;${writingMode}${extraTransform}` : '') + colStyles;
+  const verticalStyles = verticalTextCss(vert);
+  const vertStyles = (verticalStyles ? `;${verticalStyles}` : '') + colStyles;
   // `<a:bodyPr wrap="none"/>` forces a single line (no word-wrap).
   // Default (`'square'` or absent) wraps on word boundaries via
   // `word-break:break-word`.
@@ -5518,6 +5526,7 @@ const renderTableCellText = (
     top: number | null;
     bottom: number | null;
   },
+  textDirection: ReturnType<typeof getTableCellTextDirection>,
 ): string => {
   const { paraData, hasText } = cellParaData(paragraphs);
   if (!hasText) return '';
@@ -5556,9 +5565,7 @@ const renderTableCellText = (
       innerW: innerW * EMU_PER_PX,
       innerH: innerH * EMU_PER_PX,
       measure: ctx.measure,
-      // Cell-level vertical text (<a:tcPr vert>) isn't modeled yet; cells lay
-      // out horizontally, single-column.
-      vert: 'none',
+      vert: verticalLayoutOf(textDirection),
       columns: null,
     });
   }
@@ -5567,6 +5574,7 @@ const renderTableCellText = (
   // rendered through renderRun so the browser lays the styled text out.
   const justify = vAnchor === 'top' ? 'flex-start' : vAnchor === 'bottom' ? 'flex-end' : 'center';
   const familyFont = themeFace ? `${escapeXml(themeFace)}, ${DEFAULT_FONT}` : DEFAULT_FONT;
+  const verticalStyles = verticalTextCss(textDirection);
   const body = paraData
     .map((para) => {
       const runHtml = para.runs
@@ -5576,7 +5584,7 @@ const renderTableCellText = (
       return `<p style="margin:0;padding:0;text-align:${textAlign};line-height:1.2">${runHtml || '&#8203;'}</p>`;
     })
     .join('');
-  return `<foreignObject x="${px(innerX)}" y="${px(innerY)}" width="${px(innerW)}" height="${px(innerH)}"><div xmlns="http://www.w3.org/1999/xhtml" style="display:flex;flex-direction:column;justify-content:${justify};width:100%;height:100%;box-sizing:border-box;overflow:hidden;font-family:${familyFont};color:${color};word-break:break-word">${body}</div></foreignObject>`;
+  return `<foreignObject x="${px(innerX)}" y="${px(innerY)}" width="${px(innerW)}" height="${px(innerH)}"><div xmlns="http://www.w3.org/1999/xhtml" style="display:flex;flex-direction:column;justify-content:${justify};width:100%;height:100%;box-sizing:border-box;overflow:hidden;font-family:${familyFont};color:${color};word-break:break-word;${verticalStyles}">${body}</div></foreignObject>`;
 };
 
 const renderTable = (
@@ -5798,6 +5806,7 @@ const renderTable = (
           ctx,
           vAnchor,
           cellMargins,
+          getTableCellTextDirection(typedCell),
         ),
       );
     }

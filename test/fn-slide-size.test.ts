@@ -11,10 +11,12 @@ import {
   SLIDE_SIZE_16_9,
   SLIDE_SIZE_4_3,
   emu,
+  getNotesPageSize,
   getSlideSize,
   loadPresentation,
   savePresentation,
   setSlideSize,
+  setNotesPageSize,
 } from '../src/api/index.ts';
 
 const fixture = (name: string): string =>
@@ -57,5 +59,38 @@ describe('fn API: slide size', () => {
   it('SLIDE_SIZE_4_3 + SLIDE_SIZE_16_9 use the canonical EMU constants', () => {
     expect(SLIDE_SIZE_4_3).toEqual({ width: 9144000, height: 6858000, type: 'screen4x3' });
     expect(SLIDE_SIZE_16_9).toEqual({ width: 12192000, height: 6858000, type: 'screen16x9' });
+  });
+
+  it('gets and sets the notes-page canvas independently of the slide canvas', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slideBefore = getSlideSize(pres);
+
+    setNotesPageSize(pres, {
+      width: emu(7_315_200),
+      height: emu(10_972_800),
+    });
+
+    expect(getNotesPageSize(pres)).toEqual({ width: 7_315_200, height: 10_972_800 });
+    expect(getSlideSize(pres)).toEqual(slideBefore);
+
+    const reloaded = await loadPresentation(await savePresentation(pres));
+    expect(getNotesPageSize(reloaded)).toEqual({ width: 7_315_200, height: 10_972_800 });
+  });
+
+  it('rejects notes-page extents outside the DrawingML EMU range', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+
+    expect(() => setNotesPageSize(pres, { width: emu(-1), height: emu(10_972_800) })).toThrow(
+      RangeError,
+    );
+    expect(() =>
+      setNotesPageSize(pres, { width: emu(27_273_042_316_901), height: emu(10_972_800) }),
+    ).toThrow(RangeError);
+    expect(() =>
+      setNotesPageSize(pres, { width: emu(Number.POSITIVE_INFINITY), height: emu(10_972_800) }),
+    ).toThrow(RangeError);
+    expect(() =>
+      setNotesPageSize(pres, { width: emu(7_315_200), height: emu(Number.NaN) }),
+    ).toThrow(RangeError);
   });
 });

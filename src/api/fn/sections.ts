@@ -20,6 +20,7 @@ import {
 } from '../_internal-symbols.ts';
 import { PRES_PART_NAME, decode, encode } from './_helpers.ts';
 import { readPresentationPart } from '../../internal/presentationml/index.ts';
+import { GuidAllocator } from '../../internal/id-allocator.ts';
 import { getSlides } from './slide-query.ts';
 
 // ---------------------------------------------------------------------------
@@ -32,6 +33,13 @@ import { getSlides } from './slide-query.ts';
 
 /** One section in the deck. `slides` is a snapshot at read time. */
 export interface SlideSection {
+  readonly id: string;
+  readonly name: string;
+  readonly slides: ReadonlyArray<SlideData>;
+}
+
+export interface SlideSectionInput {
+  readonly id?: string;
   readonly name: string;
   readonly slides: ReadonlyArray<SlideData>;
 }
@@ -118,6 +126,7 @@ export const getSlideSections = (pres: PresentationData): ReadonlyArray<SlideSec
 
   const out: SlideSection[] = [];
   for (const sec of allChildElements(sectionLst, NAME_P14_SECTION)) {
+    const id = getAttrValue(sec, ATTR_ID_SEC) ?? '';
     const name = getAttrValue(sec, ATTR_NAME_SEC) ?? '';
     const sldIdLst = firstChildElement(sec, NAME_P14_SLD_ID_LST);
     const slides: SlideData[] = [];
@@ -130,23 +139,22 @@ export const getSlideSections = (pres: PresentationData): ReadonlyArray<SlideSec
         }
       }
     }
-    out.push({ name, slides });
+    out.push({ id, name, slides });
   }
   return out;
 };
 
 /**
- * Replaces the deck's section list with `sections`. Each section is
- * given a fresh GUID `id` attribute (PowerPoint generates one per
- * section; we synthesize a deterministic-ish one based on index +
- * timestamp for v1).
+ * Replaces the deck's section list with `sections`. A section without an
+ * explicit `id` receives a deterministic GUID derived from its name and slide
+ * membership, so rebuilding or reordering the deck retains its identity.
  *
  * Pass `[]` to clear all sections — the helper drops the
  * `<p14:sectionLst>` extension entirely when no sections remain.
  */
 export const setSlideSections = (
   pres: PresentationData,
-  sections: ReadonlyArray<{ name: string; slides: ReadonlyArray<SlideData> }>,
+  sections: ReadonlyArray<SlideSectionInput>,
 ): void => {
   const pkg = pres[INTERNAL_PACKAGE];
   const presPart = pkg.getPart(PRES_PART_NAME);
@@ -204,10 +212,8 @@ export const setSlideSections = (
   }
 
   const sectionLst = ensureSectionLst(doc.root);
-  sectionLst.children = sections.map((section, i) => {
-    // Synthesize a GUID-shaped id from index + timestamp.
-    const ts = Date.now().toString(16).padStart(8, '0').slice(-8).toUpperCase();
-    const id = `{${ts.slice(0, 8)}-${String(i).padStart(4, '0')}-4000-8000-000000000000}`;
+  const ids = new GuidAllocator();
+  sectionLst.children = sections.map((section) => {
     const sldIds: XmlElement[] = [];
     for (const slide of section.slides) {
       const sldId = sldIdFor(slide);
@@ -215,6 +221,13 @@ export const setSlideSections = (
         sldIds.push(elem(NAME_P14_SLD_ID, { attrs: [attr(ATTR_SLD_ID_REF, sldId)] }));
       }
     }
+    const stableKey = `${section.name}\u0000${sldIds
+      .map((slide) => getAttrValue(slide, ATTR_SLD_ID_REF) ?? '')
+      .join(',')}`;
+    const id =
+      section.id === undefined
+        ? ids.allocateStable(stableKey)
+        : ids.reserve(section.id, 'setSlideSections: section id');
     return elem(NAME_P14_SECTION, {
       attrs: [attr(ATTR_NAME_SEC, section.name), attr(ATTR_ID_SEC, id)],
       children: [elem(NAME_P14_SLD_ID_LST, { children: sldIds })],

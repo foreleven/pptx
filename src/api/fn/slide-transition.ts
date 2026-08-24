@@ -60,9 +60,8 @@ export const getSlideTransition = (slide: SlideData): TransitionOptions | null =
     if (tb !== null) thruBlack = tb === '1';
     break;
   }
-  if (effect === null) return null;
   return {
-    effect,
+    effect: effect ?? 'none',
     ...(speed !== null ? { speed } : {}),
     ...(direction !== null ? { direction } : {}),
     ...(orientation !== null ? { orientation } : {}),

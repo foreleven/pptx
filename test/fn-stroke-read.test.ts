@@ -7,6 +7,7 @@ import {
   addSlideShape,
   clearShapeStroke,
   getShapeStroke,
+  getShapeStrokeSource,
   getSlides,
   inches,
   loadPresentation,
@@ -29,6 +30,7 @@ describe('fn API: getShapeStroke', () => {
       h: inches(2),
     });
     expect(getShapeStroke(shape).kind).toBe('inherit');
+    expect(getShapeStrokeSource(shape)).toBe('none');
   });
 
   it('reads back a solid color outline + width', async () => {
@@ -44,6 +46,7 @@ describe('fn API: getShapeStroke', () => {
     setShapeStroke(shape, { color: '#ABCDEF', widthEmu: 12700 });
     const s = getShapeStroke(shape);
     expect(s).toEqual({ kind: 'solid', color: '#ABCDEF', widthEmu: 12700 });
+    expect(getShapeStrokeSource(shape)).toBe('direct');
   });
 
   it('reports none for setShapeNoStroke', async () => {
@@ -58,6 +61,7 @@ describe('fn API: getShapeStroke', () => {
     });
     setShapeNoStroke(shape);
     expect(getShapeStroke(shape).kind).toBe('none');
+    expect(getShapeStrokeSource(shape)).toBe('direct');
   });
 
   it('returns inherit after clearShapeStroke', async () => {
@@ -73,5 +77,6 @@ describe('fn API: getShapeStroke', () => {
     setShapeStroke(shape, { color: '#000000' });
     clearShapeStroke(shape);
     expect(getShapeStroke(shape).kind).toBe('inherit');
+    expect(getShapeStrokeSource(shape)).toBe('none');
   });
 });

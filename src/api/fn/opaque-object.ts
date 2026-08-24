@@ -11,6 +11,7 @@ import {
   NS,
   type XmlElement,
   parseFragment,
+  rewriteAttributeValuesLossless,
   serializeFragment,
   walkElements,
 } from '../../internal/xml/index.ts';
@@ -67,10 +68,34 @@ interface OpaqueFragmentManifest {
 export const extractOpaqueObjectFragment = (shape: SlideShapeData): Uint8Array => {
   const slide = shape[SHAPE_SLIDE];
   const pkg = slide[INTERNAL_PACKAGE];
-  const directIds = relationshipIds(shape[SHAPE_ELEMENT]);
   const slideRels = pkg.getRels(slide[SLIDE_PART_NAME]);
+  const directIds = relationshipIds(shape[SHAPE_ELEMENT]);
+  const directIdSet = new Set(directIds);
+  const slideRelationshipsById = new Map(
+    (slideRels?.items ?? []).map((relationship) => [relationship.id, relationship] as const),
+  );
+  if (opaqueObjectKind(shape[SHAPE_ELEMENT]) === 'smartart') {
+    const diagramDataRelationship = slideRels?.items.find(
+      (relationship) =>
+        directIdSet.has(relationship.id) && relationship.type.endsWith('/diagramData'),
+    );
+    if (diagramDataRelationship && diagramDataRelationship.targetMode !== 'External') {
+      const diagramDataPart = pkg.getPart(
+        resolveTarget(slide[SLIDE_PART_NAME], diagramDataRelationship.target),
+      );
+      if (diagramDataPart) {
+        const diagramData = parseFragment(decoder.decode(diagramDataPart.data));
+        for (const id of embeddedSlideRelationshipIds(diagramData)) {
+          if (!directIdSet.has(id) && slideRelationshipsById.has(id)) {
+            directIds.push(id);
+            directIdSet.add(id);
+          }
+        }
+      }
+    }
+  }
   const relationships = directIds.map((id) => {
-    const relationship = slideRels?.items.find((item) => item.id === id);
+    const relationship = slideRelationshipsById.get(id);
     if (!relationship)
       throw new Error(`extractOpaqueObjectFragment: missing slide relationship ${id}`);
     return fragmentRelationship(slide[SLIDE_PART_NAME], relationship);
@@ -153,6 +178,14 @@ export const addSlideOpaqueObject = (
   }
 
   const pkg = slide[INTERNAL_PACKAGE];
+  const slideRels = pkg.getRels(slide[SLIDE_PART_NAME]) ?? emptyRels();
+  const usedIds = slideRels.items.map((relationship) => relationship.id);
+  const idMap = new Map<string, string>();
+  for (const relationship of manifest.relationships) {
+    const id = nextRelId(usedIds);
+    usedIds.push(id);
+    idMap.set(relationship.id, id);
+  }
   const partMap = new Map<string, PartName>();
   for (const entry of manifest.parts) {
     const original = partName(entry.originalName);
@@ -162,7 +195,11 @@ export const addSlideOpaqueObject = (
     );
     const data = files[entry.file];
     if (!data) throw new Error(`addSlideOpaqueObject: missing payload ${entry.file}`);
-    pkg.addPart(allocated, entry.contentType, new Uint8Array(data));
+    pkg.addPart(
+      allocated,
+      entry.contentType,
+      rewriteEmbeddedSlideRelationshipIds(new Uint8Array(data), entry.contentType, idMap),
+    );
     partMap.set(original.toLowerCase(), allocated);
   }
   const availableParts = new Set(pkg.parts.map((part) => part.name.toLowerCase()));
@@ -178,16 +215,10 @@ export const addSlideOpaqueObject = (
     pkg.setRels(source, rels);
   }
 
-  const slideRels = pkg.getRels(slide[SLIDE_PART_NAME]) ?? emptyRels();
-  const usedIds = slideRels.items.map((relationship) => relationship.id);
-  const idMap = new Map<string, string>();
   for (const relationship of manifest.relationships) {
-    const id = nextRelId(usedIds);
-    usedIds.push(id);
-    idMap.set(relationship.id, id);
     slideRels.items.push({
       ...reboundRelationship(slide[SLIDE_PART_NAME], relationship, partMap, availableParts),
-      id,
+      id: idMap.get(relationship.id)!,
     });
   }
   pkg.setRels(slide[SLIDE_PART_NAME], slideRels);
@@ -252,9 +283,21 @@ function relationshipIds(root: XmlElement): string[] {
   const ids = new Set<string>();
   walkElements(root, (element) => {
     for (const attribute of element.attrs) {
+      if (attribute.name.namespaceURI === NS.officeDocRels && attribute.value) {
+        ids.add(attribute.value);
+      }
+    }
+  });
+  return [...ids];
+}
+
+function embeddedSlideRelationshipIds(root: XmlElement): string[] {
+  const ids = new Set<string>();
+  walkElements(root, (element) => {
+    for (const attribute of element.attrs) {
       if (
-        attribute.name.namespaceURI === NS.officeDocRels &&
-        ['id', 'embed', 'link'].includes(attribute.name.localName) &&
+        attribute.name.namespaceURI === '' &&
+        attribute.name.localName === 'relId' &&
         attribute.value
       ) {
         ids.add(attribute.value);
@@ -262,6 +305,15 @@ function relationshipIds(root: XmlElement): string[] {
     }
   });
   return [...ids];
+}
+
+function rewriteEmbeddedSlideRelationshipIds(
+  bytes: Uint8Array,
+  contentType: string,
+  ids: ReadonlyMap<string, string>,
+): Uint8Array {
+  if (!contentType.endsWith('drawingml.diagramData+xml')) return bytes;
+  return encoder.encode(rewriteAttributeValuesLossless(decoder.decode(bytes), 'relId', ids));
 }
 
 function selfContainedShape(source: XmlElement): XmlElement {

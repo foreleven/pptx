@@ -47,14 +47,15 @@ const NAME_TX_BODY = qname('p', 'txBody', NS.pml);
 
 const NAME_A_P = qname('a', 'p', NS.dml);
 const NAME_A_R = qname('a', 'r', NS.dml);
+const NAME_A_BR = qname('a', 'br', NS.dml);
 export const NAME_A_RPR = qname('a', 'rPr', NS.dml);
 const NAME_A_T = qname('a', 't', NS.dml);
 const NAME_A_END_PARA_RPR = qname('a', 'endParaRPr', NS.dml);
 
-export interface ShapeParagraphRun {
-  text: string;
-  format?: TextFormat;
-}
+/** One authorable inline paragraph element. Fields are read-only until field authoring is supported. */
+export type ShapeParagraphElementInput =
+  | { readonly kind: 'r'; readonly text: string; readonly format?: TextFormat }
+  | { readonly kind: 'br' };
 
 const paragraphsOf = (txBody: XmlElement): XmlElement[] =>
   txBody.children.filter(
@@ -128,17 +129,22 @@ const writeRunText = (run: XmlElement, value: string): void => {
   tEl.children = [{ kind: 'text', data: value }];
 };
 
-/** Replace one paragraph's inline text with ordered native runs and optional per-run formatting. */
-export const setShapeParagraphRuns = (
+/** Replace one paragraph's ordered runs and native line breaks. */
+export const setShapeParagraphElements = (
   shape: SlideShapeData,
   paragraphIndex: number,
-  runs: readonly ShapeParagraphRun[],
+  elements: readonly ShapeParagraphElementInput[],
 ): void => {
-  if (runs.length === 0) throw new RangeError('setShapeParagraphRuns requires at least one run.');
+  if (elements.length === 0) {
+    throw new RangeError('setShapeParagraphElements requires at least one element.');
+  }
   const paragraph = requireParagraph(shape, paragraphIndex);
   const paragraphProperties = firstChildElement(paragraph, NAME_A_PPR);
   const endProperties = firstChildElement(paragraph, NAME_A_END_PARA_RPR);
-  const authoredRuns = runs.map((value) => {
+  const authoredElements = elements.map((value) => {
+    if (value.kind === 'br') {
+      return elem(NAME_A_BR);
+    }
     const runProperties = value.format ? elem(NAME_A_RPR) : null;
     if (runProperties && value.format) applyRunFormat(runProperties, value.format);
     const textElement = elem(NAME_A_T, {
@@ -150,7 +156,7 @@ export const setShapeParagraphRuns = (
   });
   paragraph.children = [
     ...(paragraphProperties ? [paragraphProperties] : []),
-    ...authoredRuns,
+    ...authoredElements,
     ...(endProperties ? [endProperties] : []),
   ];
   commitAndRefresh(shape);

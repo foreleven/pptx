@@ -11,11 +11,13 @@ import {
   getSlideShapes,
   getTableCell,
   getTableCellAnchor,
+  getTableCellAnchorCentering,
   getTableCellMargins,
   inches,
   loadPresentation,
   savePresentation,
   setTableCellAnchor,
+  setTableCellAnchorCentering,
   setTableCellMargins,
 } from '../src/api/index.ts';
 
@@ -64,6 +66,30 @@ describe('fn API: setTableCellAnchor', () => {
     setTableCellAnchor(cell, 'top');
     setTableCellAnchor(cell, null);
     expect(getTableCellAnchor(cell)).toBeNull();
+  });
+});
+
+describe('fn API: setTableCellAnchorCentering', () => {
+  it('round-trips explicit true and false values', async () => {
+    const { table } = await addDemo();
+    const cell = getTableCell(table, 0, 0);
+    expect(getTableCellAnchorCentering(cell)).toBeNull();
+    setTableCellAnchorCentering(cell, true);
+    expect(getTableCellAnchorCentering(cell)).toBe(true);
+    setTableCellAnchorCentering(cell, false);
+    expect(getTableCellAnchorCentering(cell)).toBe(false);
+  });
+
+  it('survives save/reload and can be cleared', async () => {
+    const { pres, table } = await addDemo();
+    setTableCellAnchorCentering(getTableCell(table, 1, 0), true);
+    const bytes = await savePresentation(pres);
+    const reloaded = await loadPresentation(bytes);
+    const tbl = getSlideShapes(getSlides(reloaded)[0]!).at(-1)!;
+    const cell = getTableCell(tbl, 1, 0);
+    expect(getTableCellAnchorCentering(cell)).toBe(true);
+    setTableCellAnchorCentering(cell, null);
+    expect(getTableCellAnchorCentering(cell)).toBeNull();
   });
 });
 

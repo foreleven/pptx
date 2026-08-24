@@ -19,6 +19,7 @@ import {
   inches,
   loadPresentation,
   setTableCellAlignment,
+  setTableCellTextDirection,
   setTableCellTextFormat,
 } from '../src/api/index.ts';
 import { renderSlideToSvg } from '../packages/preview/src/index.ts';
@@ -121,5 +122,39 @@ describe('table cell text rendering', () => {
     // The styled cell's run still carries its bold weight and red color.
     expect(svg).toContain('font-weight:700');
     expect(svg).toMatch(/color:#[Cc][Cc]0+0+/);
+  });
+
+  it('svg mode: cell vertical text uses the shared clockwise layout engine', async () => {
+    const { pres, slide } = await blankSlide();
+    const table = addSlideTable(slide, {
+      x: inches(1),
+      y: inches(1),
+      w: inches(2),
+      h: inches(3),
+      rows: [['Vertical']],
+    });
+    setTableCellTextDirection(getTableCell(table, 0, 0), 'vert');
+
+    const svg = renderSlideToSvg(pres, slide, { textLayout: 'svg' });
+
+    expect(svg).toContain('transform="rotate(90');
+    expect(textContentOf(svg)).toContain('Vertical');
+  });
+
+  it('foreignObject mode: cell upright text emits standard CSS writing mode', async () => {
+    const { pres, slide } = await blankSlide();
+    const table = addSlideTable(slide, {
+      x: inches(1),
+      y: inches(1),
+      w: inches(2),
+      h: inches(3),
+      rows: [['Stack']],
+    });
+    setTableCellTextDirection(getTableCell(table, 0, 0), 'wordArtVert');
+
+    const svg = renderSlideToSvg(pres, slide, { textLayout: 'foreignObject' });
+
+    expect(svg).toContain('writing-mode:vertical-rl');
+    expect(svg).toContain('text-orientation:upright');
   });
 });

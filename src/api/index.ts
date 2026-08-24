@@ -21,7 +21,7 @@ export type {
   CommentPosition,
   SlideComment,
 } from '../internal/presentationml/index.ts';
-export type { PresentationInput, PresentationSize, SlideSize } from './fn.ts';
+export type { NotesPageSize, PresentationInput, PresentationSize, SlideSize } from './fn.ts';
 export { SLIDE_SIZE_4_3, SLIDE_SIZE_16_9, SLIDE_SIZE_16_10 } from './fn.ts';
 export type { ImageFormat } from '../internal/opc/index.ts';
 export type {
@@ -37,7 +37,7 @@ export type {
 } from '../internal/chartml/index.ts';
 export type { SlideChartData } from './fn.ts';
 export type { ShapeClickAction } from './fn.ts';
-export type { ShapeParagraphRun } from './fn.ts';
+export type { ShapeParagraphElementInput } from './fn.ts';
 export type { IssueSeverity, ValidationIssue } from './fn.ts';
 export type { AnimationEffect, AnimationOptions } from './fn.ts';
 export type { ImageCrop, ImageDuotone } from './fn.ts';
@@ -92,6 +92,7 @@ export type {
   SlideLayoutPlaceholder,
   SlideOutlineEntry,
   SlideSection,
+  SlideSectionInput,
   TextAnchor,
   TextAutoFit,
   TextWrap,
@@ -308,6 +309,7 @@ export {
   getShapesBounds,
   getShapeSlide,
   getShapeStroke,
+  getShapeStrokeSource,
   getShapeStrokeEffective,
   getShapeStrokeArrow,
   getShapeStrokeCap,
@@ -333,6 +335,9 @@ export {
   getSlideBackgroundGradientFill,
   getSlideBackgroundImageBytes,
   getSlideBackgroundPatternFill,
+  getSlideName,
+  getSlideShowMasterPlaceholderAnimations,
+  getSlideShowMasterShapes,
   getSlideBody,
   getSlideCharts,
   getSlideColorMapOverride,
@@ -368,6 +373,7 @@ export {
   getSlideMasterPartNames,
   getSlideMasterUsageCounts,
   getSlideMediaPartNames,
+  getNotesPageSize,
   getSlideNotes,
   getSlideNotesLength,
   getSlideOutline,
@@ -395,6 +401,7 @@ export {
   getTableCell,
   getTableCellAlignment,
   getTableCellAnchor,
+  getTableCellAnchorCentering,
   getTableCellBorders,
   getTableCellFill,
   getTableCellMargins,
@@ -499,7 +506,7 @@ export {
   setShapeRotation,
   setShapeRunFormat,
   setShapeRunHyperlink,
-  setShapeParagraphRuns,
+  setShapeParagraphElements,
   setShapeRunText,
   setShapeSize,
   setShapeStroke,
@@ -524,7 +531,11 @@ export {
   setSlideBackgroundImage,
   setSlideBody,
   setSlideHidden,
+  setSlideName,
+  setSlideShowMasterPlaceholderAnimations,
+  setSlideShowMasterShapes,
   setSlideLayout,
+  setNotesPageSize,
   setSlideNotes,
   setSlidePlaceholders,
   setSlideSections,
@@ -533,6 +544,7 @@ export {
   setSlideTransition,
   setTableCellAlignment,
   setTableCellAnchor,
+  setTableCellAnchorCentering,
   setTableCellBorders,
   setTableCellFill,
   setTableCellMargins,

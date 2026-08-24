@@ -45,6 +45,23 @@ export type ShapeStroke =
   | { readonly kind: 'inherit' };
 
 /**
+ * Identifies where a shape's outline semantics are declared.
+ *
+ * `direct` means `<a:ln>` exists in the shape properties; `style` means
+ * the shape owns a DrawingML line-style reference; `none` means neither
+ * declaration exists. Placeholder inheritance is intentionally reported by
+ * `getShapeStrokeEffective` instead of this predicate.
+ */
+export const getShapeStrokeSource = (shape: SlideShapeData): 'direct' | 'style' | 'none' => {
+  const root = shape[SHAPE_ELEMENT];
+  const spPr = firstChildElement(root, qname('p', 'spPr', NS.pml));
+  if (spPr && firstChildElement(spPr, qname('a', 'ln', NS.dml))) return 'direct';
+  const style = firstChildElement(root, qname('p', 'style', NS.pml));
+  if (style && firstChildElement(style, qname('a', 'lnRef', NS.dml))) return 'style';
+  return 'none';
+};
+
+/**
  * Convenience over `getShapeStroke(shape)`: returns the solid-
  * stroke color (`#RRGGBB` / `scheme:<token>`) or `null` when the
  * stroke is inherited / removed.

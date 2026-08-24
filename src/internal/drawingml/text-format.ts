@@ -44,7 +44,6 @@ const ATTR_KERN = qname('', 'kern', '');
 const ATTR_BASELINE = qname('', 'baseline', '');
 const ATTR_CAP = qname('', 'cap', '');
 const ATTR_TYPEFACE = qname('', 'typeface', '');
-const ATTR_VAL = qname('', 'val', '');
 const NAME_HIGHLIGHT = qname('a', 'highlight', NS.dml);
 
 // CT_TextCharacterProperties (a:rPr) is an xsd:sequence: children must appear

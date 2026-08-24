@@ -15,10 +15,37 @@ import {
   qname,
   serializeFragment,
   serializeXml,
+  rewriteAttributeValuesLossless,
   text,
   textContent,
   walkElements,
 } from './index.ts';
+
+describe('lossless XML attribute rewriting', () => {
+  it('rewrites exact attributes once without changing surrounding lexical XML', () => {
+    const source =
+      '<?xml version="1.0"?><dgm:dataModel xmlns:dgm="urn:dgm"><dgm:ext relId = \'rId1\' other="rId1"/><dgm:ext relId="rId2"/></dgm:dataModel>';
+    const rewritten = rewriteAttributeValuesLossless(
+      source,
+      'relId',
+      new Map([
+        ['rId1', 'rId2'],
+        ['rId2', 'rId3'],
+      ]),
+    );
+    expect(rewritten).toBe(
+      '<?xml version="1.0"?><dgm:dataModel xmlns:dgm="urn:dgm"><dgm:ext relId = \'rId2\' other="rId1"/><dgm:ext relId="rId3"/></dgm:dataModel>',
+    );
+  });
+
+  it('ignores matching text in comments, CDATA, element text, and other attribute names', () => {
+    const source =
+      '<root other=\'relId="rId1"\'><!-- relId="rId1" --><![CDATA[relId="rId1"]]><child relationshipId="rId1">relId="rId1"</child></root>';
+    expect(rewriteAttributeValuesLossless(source, 'relId', new Map([['rId1', 'rId9']]))).toBe(
+      source,
+    );
+  });
+});
 
 describe('parseXml', () => {
   it('parses the XML declaration', () => {

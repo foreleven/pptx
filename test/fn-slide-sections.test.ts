@@ -30,6 +30,10 @@ describe('fn API: slide sections', () => {
     ]);
     const sections = getSlideSections(pres);
     expect(sections.map((s) => s.name)).toEqual(['Intro', 'Main']);
+    expect(sections.map((s) => s.id)).toEqual([
+      '{625B007C-F2BA-51F0-8F2F-F5F2C8B573EC}',
+      '{9E366A52-986F-5FA6-8DE1-65DC565CE9E2}',
+    ]);
     expect(sections[0]!.slides).toHaveLength(1);
     expect(sections[1]!.slides).toHaveLength(1);
 
@@ -37,6 +41,43 @@ describe('fn API: slide sections', () => {
     const bytes = await savePresentation(pres);
     const reloaded = await loadPresentation(bytes);
     expect(getSlideSections(reloaded).map((s) => s.name)).toEqual(['Intro', 'Main']);
+
+    setSlideSections(reloaded, [
+      { name: 'Main', slides: [getSlides(reloaded)[1]!] },
+      { name: 'Intro', slides: [getSlides(reloaded)[0]!] },
+    ]);
+    expect(getSlideSections(reloaded).map((s) => s.id)).toEqual([sections[1]!.id, sections[0]!.id]);
+  });
+
+  it('preserves caller-supplied section IDs', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slides = getSlides(pres);
+    const id = '{12345678-1234-4ABC-8DEF-1234567890AB}';
+    setSlideSections(pres, [{ id, name: 'Stable', slides }]);
+    expect(getSlideSections(await loadPresentation(await savePresentation(pres)))[0]!.id).toBe(id);
+  });
+
+  it('normalizes explicit IDs and resolves generated-ID collisions deterministically', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slides = getSlides(pres);
+    setSlideSections(pres, [
+      { id: '{12345678-1234-4abc-8def-1234567890ab}', name: 'Explicit', slides },
+      { name: 'Repeated', slides: [] },
+      { name: 'Repeated', slides: [] },
+    ]);
+
+    const sections = getSlideSections(pres);
+    expect(sections[0]!.id).toBe('{12345678-1234-4ABC-8DEF-1234567890AB}');
+    expect(sections[1]!.id).not.toBe(sections[2]!.id);
+
+    const second = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    setSlideSections(second, [
+      { name: 'Repeated', slides: [] },
+      { name: 'Repeated', slides: [] },
+    ]);
+    expect(getSlideSections(second).map((section) => section.id)).toEqual(
+      sections.slice(1).map((section) => section.id),
+    );
   });
 
   it('empty section list drops the extension entirely', async () => {

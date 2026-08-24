@@ -39,3 +39,4 @@ export {
   walkElements,
 } from './query.ts';
 export { serializeFragment, serializeXml } from './serialize.ts';
+export { rewriteAttributeValuesLossless } from './rewrite.ts';

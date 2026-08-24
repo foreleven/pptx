@@ -1,6 +1,7 @@
 // Slide size.
 
 import type { Emu } from '../units.ts';
+import { emuExtent } from '../../internal/bounds.ts';
 import {
   NS,
   attr,
@@ -27,6 +28,12 @@ export interface SlideSize {
   readonly type?: string;
 }
 
+/** Width × height of the notes-page canvas, in EMU. */
+export interface NotesPageSize {
+  readonly width: Emu;
+  readonly height: Emu;
+}
+
 /** Returns the slide canvas size, or `null` if `presentation.xml` omits it. */
 export const getSlideSize = (pres: PresentationData): SlideSize | null => {
   const pkg = pres[INTERNAL_PACKAGE];
@@ -42,7 +49,22 @@ export const getSlideSize = (pres: PresentationData): SlideSize | null => {
   };
 };
 
+/** Returns the notes-page canvas size, or `null` when it is absent. */
+export const getNotesPageSize = (pres: PresentationData): NotesPageSize | null => {
+  const pkg = pres[INTERNAL_PACKAGE];
+  const presPart = pkg.getPart(PRES_PART_NAME);
+  if (presPart === null) return null;
+  const root = parseXml(decode(presPart.data)).root;
+  const model = readPresentationPart(root);
+  if (model.notesSize === null) return null;
+  return {
+    width: model.notesSize.cx as Emu,
+    height: model.notesSize.cy as Emu,
+  };
+};
+
 const NAME_SLD_SZ_FN = qname('p', 'sldSz', NS.pml);
+const NAME_NOTES_SZ_FN = qname('p', 'notesSz', NS.pml);
 const ATTR_CX = qname('', 'cx', '');
 const ATTR_CY = qname('', 'cy', '');
 const ATTR_TYPE = qname('', 'type', '');
@@ -76,6 +98,34 @@ export const setSlideSize = (pres: PresentationData, opts: SlideSize): void => {
   sldSz.attrs = [attr(ATTR_CX, String(opts.width)), attr(ATTR_CY, String(opts.height))];
   if (opts.type !== undefined) sldSz.attrs.push(attr(ATTR_TYPE, opts.type));
 
+  presPart.data = encode(serializeXml(doc));
+};
+
+/**
+ * Sets the notes-page canvas size without changing the slide canvas.
+ * `<p:notesSz>` follows `<p:sldSz>` in the presentation schema.
+ */
+export const setNotesPageSize = (pres: PresentationData, opts: NotesPageSize): void => {
+  const width = emuExtent(opts.width, 'setNotesPageSize: width');
+  const height = emuExtent(opts.height, 'setNotesPageSize: height');
+  const pkg = pres[INTERNAL_PACKAGE];
+  const presPart = pkg.getPart(PRES_PART_NAME);
+  if (!presPart) throw new Error('presentation.xml is missing');
+  const doc = parseXml(decode(presPart.data));
+
+  let notesSz = firstChildElement(doc.root, NAME_NOTES_SZ_FN);
+  if (notesSz === null) {
+    notesSz = elem(NAME_NOTES_SZ_FN);
+    const sldSz = firstChildElement(doc.root, NAME_SLD_SZ_FN);
+    if (sldSz !== null) {
+      const idx = doc.root.children.indexOf(sldSz);
+      doc.root.children.splice(idx + 1, 0, notesSz);
+    } else {
+      doc.root.children.push(notesSz);
+    }
+  }
+
+  notesSz.attrs = [attr(ATTR_CX, String(width)), attr(ATTR_CY, String(height))];
   presPart.data = encode(serializeXml(doc));
 };
 

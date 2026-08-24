@@ -112,7 +112,7 @@ describe('renderSlideToRgba (Node)', () => {
     const centerX = 64;
     const centerY = 48;
     const offset = (centerY * image.width + centerX) * 4;
-    expect([...image.data.slice(offset, offset + 4)]).toEqual([38, 52, 82, 255]);
+    expect(Array.from(image.data.slice(offset, offset + 4))).toEqual([38, 52, 82, 255]);
   });
 
   it('applies bi-level threshold to luminance instead of individual RGB channels', async () => {
@@ -131,7 +131,7 @@ describe('renderSlideToRgba (Node)', () => {
 
     const { image } = renderSlideToRgba(pres, slide, { width: 320 });
     const offset = (48 * image.width + 64) * 4;
-    const pixel = [...image.data.slice(offset, offset + 4)];
+    const pixel = Array.from(image.data.slice(offset, offset + 4));
     // Coral has luminance below 65%, so DrawingML biLevel maps it to black.
     // Per-channel thresholding would incorrectly preserve it as bright red.
     expect(pixel).toEqual([0, 0, 0, 255]);

@@ -2,7 +2,7 @@
 // animates from this slide to the next.
 //
 // Per ECMA-376 Part 1 §19.5.51 the transition carries:
-//   - `spd` attribute: `slow` | `med` | `fast` (default `med`)
+//   - `spd` attribute: `slow` | `med` | `fast` (default `fast`)
 //   - `advClick` attribute: `1` to advance on click (default), `0` to disable
 //   - `advTm` attribute: auto-advance time in milliseconds
 //   - Exactly one child element from the effect catalog (fade, push,
@@ -26,34 +26,38 @@ const ATTR_DIR = qname('', 'dir', '');
 const ATTR_ORIENT = qname('', 'orient', '');
 const ATTR_THRU_BLK = qname('', 'thruBlk', '');
 
-/**
- * Transition effect token. Maps to a `<p:{token}/>` child of
- * `<p:transition>`. The list covers the effects all current PowerPoint
- * versions emit; pass any other ECMA-376-permitted local name as a raw
- * string for forward compatibility.
- */
-export type TransitionEffect =
-  | 'none'
-  | 'fade'
-  | 'push'
-  | 'cover'
-  | 'wipe'
-  | 'split'
-  | 'cut'
-  | 'dissolve'
-  | 'checker'
-  | 'blinds'
-  | 'randomBar'
-  | 'zoom'
-  | 'circle'
-  | 'diamond'
-  | 'plus'
-  | 'wedge'
-  | 'newsflash';
+// Every transition effect element name in CT_SlideTransition's choice
+// (ECMA-376 pml.xsd). `none` is the authoring sentinel for no effect child.
+const TRANSITION_EFFECTS = [
+  'blinds',
+  'checker',
+  'circle',
+  'dissolve',
+  'comb',
+  'cover',
+  'cut',
+  'diamond',
+  'fade',
+  'newsflash',
+  'plus',
+  'pull',
+  'push',
+  'random',
+  'randomBar',
+  'split',
+  'strips',
+  'wedge',
+  'wheel',
+  'wipe',
+  'zoom',
+] as const;
+
+/** Known base transition token, plus the no-effect authoring sentinel. */
+export type TransitionEffect = 'none' | (typeof TRANSITION_EFFECTS)[number];
 
 export interface TransitionOptions {
   effect: TransitionEffect | string;
-  /** Effect speed. Defaults to omitted (PowerPoint treats absence as `med`). */
+  /** Effect speed. Defaults to omitted (ECMA-376 defines absence as `fast`). */
   speed?: 'slow' | 'med' | 'fast';
   /**
    * Direction, valid only for effects that carry a `dir` attribute and only
@@ -105,35 +109,6 @@ const DIR_DOMAINS: Readonly<Record<string, ReadonlySet<string>>> = {
 };
 // Effects whose CT type carries `thruBlk` (CT_OptionalBlackTransition).
 const THRU_BLK_EFFECTS = new Set(['fade', 'cut']);
-
-// Every transition effect element name in CT_SlideTransition's choice
-// (ECMA-376 pml.xsd). `effect` is typed `TransitionEffect | string` for
-// forward-compat, so the raw token reaches the wire — validate it against the
-// full spec set, or an empty/unknown string yields non-well-formed or
-// schema-invalid XML. `none` is handled before this and is intentionally absent.
-const TRANSITION_EFFECTS: ReadonlyArray<string> = [
-  'blinds',
-  'checker',
-  'circle',
-  'dissolve',
-  'comb',
-  'cover',
-  'cut',
-  'diamond',
-  'fade',
-  'newsflash',
-  'plus',
-  'pull',
-  'push',
-  'random',
-  'randomBar',
-  'split',
-  'strips',
-  'wedge',
-  'wheel',
-  'wipe',
-  'zoom',
-];
 
 // Returns the single effect child, or null for the "no transition effect"
 // sentinel ('none' is not a valid effect element name — CT_SlideTransition's

@@ -1116,6 +1116,39 @@ export const setTableCellAnchor = (
 };
 
 /**
+ * Reads the cell's explicit text-anchor centering flag (`<a:tcPr
+ * anchorCtr="…"/>`). Returns `null` when the attribute is absent so
+ * callers can distinguish inheritance/default behavior from an authored
+ * `false` value.
+ */
+export const getTableCellAnchorCentering = (cell: TableCellData): boolean | null => {
+  const tcPr = firstChildElement(cell[CELL_ELEMENT], NAME_A_TC_PR);
+  if (!tcPr) return null;
+  const value = getAttrValue(tcPr, qname('', 'anchorCtr', ''));
+  if (value === '1' || value === 'true') return true;
+  if (value === '0' || value === 'false') return false;
+  return null;
+};
+
+/**
+ * Sets the cell's text-anchor centering flag. `null` removes the attribute;
+ * booleans are serialized as schema-valid `1`/`0` values.
+ */
+export const setTableCellAnchorCentering = (
+  cell: TableCellData,
+  centered: boolean | null,
+): void => {
+  const tcPr = ensureCellTcPr(cell);
+  tcPr.attrs = tcPr.attrs.filter(
+    (a) => !(a.name.namespaceURI === '' && a.name.localName === 'anchorCtr'),
+  );
+  if (centered !== null) {
+    tcPr.attrs.push(attr(qname('', 'anchorCtr', ''), centered ? '1' : '0'));
+  }
+  commitTableCell(cell);
+};
+
+/**
  * Reads the cell's inset margins (`<a:tcPr marL marR marT marB>`) in
  * EMU. Each side is `null` when the cell doesn't author it (renderers
  * should fall back to PowerPoint's defaults — 91440 EMU / 0.1 inch

@@ -17,6 +17,8 @@ const allowed: Record<Module, ReadonlyArray<Module> | 'any-internal'> = {
   // Leaf utility: ECMA-376 simple-type bounds validation. Imports nothing, so
   // every authoring layer may depend on it (like internal/xml).
   'internal/bounds': [],
+  // Central stable-ID allocation depends only on GUID bounds normalization.
+  'internal/id-allocator': ['internal/bounds'],
   'internal/opc': ['internal/xml'],
   'internal/parts': ['internal/opc', 'internal/xml'],
   'internal/drawingml': ['internal/bounds', 'internal/xml'],

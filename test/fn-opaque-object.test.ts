@@ -1,5 +1,7 @@
+import { readFile } from 'node:fs/promises';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  _internalPackageOf,
   addBlankSlide,
   addSlideChart,
   addSlideOpaqueObject,
@@ -7,10 +9,12 @@ import {
   createPresentation,
   extractOpaqueObjectFragment,
   getGroupChildren,
+  getOpaqueObjectKind,
   getShapeChartSpec,
   getShapeClickAction,
   getShapeId,
   getSlideTopLevelShapes,
+  getSlidePartName,
   getSlides,
   groupShapes,
   inches,
@@ -78,6 +82,52 @@ describe('fn API: opaque OOXML objects', () => {
       kind: 'url',
       url: 'https://example.com/opaque-chart',
     });
+  });
+
+  it('copies every PowerPoint SmartArt relationship and diagram part', async () => {
+    const source = await loadPresentation(
+      await readFile(
+        new URL(
+          '../references/pptx-automizer/__tests__/pptx-templates/SmartArt.pptx',
+          import.meta.url,
+        ),
+      ),
+    );
+    const smartArt = getSlideTopLevelShapes(getSlides(source)[0]!)[0]!;
+    expect(getOpaqueObjectKind(smartArt)).toBe('smartart');
+
+    const target = createPresentation();
+    const targetSlide = addBlankSlide(target);
+    addSlideShape(targetSlide, {
+      preset: 'rect',
+      x: inches(0.25),
+      y: inches(0.25),
+      w: inches(0.5),
+      h: inches(0.5),
+    });
+    addSlideOpaqueObject(targetSlide, extractOpaqueObjectFragment(smartArt));
+
+    const rebuilt = await loadPresentation(await savePresentation(target));
+    const rebuiltSlide = getSlides(rebuilt)[0]!;
+    expect(getOpaqueObjectKind(getSlideTopLevelShapes(rebuiltSlide)[1]!)).toBe('smartart');
+    const pkg = _internalPackageOf(rebuilt);
+    const diagramRelationships = pkg
+      .getRels(getSlidePartName(rebuiltSlide) as never)!
+      .items.filter((relationship) =>
+        /\/diagram(?:Data|Layout|QuickStyle|Colors|Drawing)$/u.test(relationship.type),
+      );
+    expect(diagramRelationships).toHaveLength(5);
+    expect(pkg.parts.filter((part) => /drawingml\.diagram/u.test(part.contentType))).toHaveLength(
+      5,
+    );
+    const drawingRelationship = diagramRelationships.find((relationship) =>
+      relationship.type.endsWith('/diagramDrawing'),
+    )!;
+    const dataPart = pkg.parts.find((part) =>
+      part.contentType.endsWith('drawingml.diagramData+xml'),
+    );
+    expect(dataPart).toBeDefined();
+    expect(new TextDecoder().decode(dataPart!.data)).toContain(`relId="${drawingRelationship.id}"`);
   });
 
   it('rejects malformed or unsafe fragment archives before insertion', () => {

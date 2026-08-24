@@ -9,7 +9,15 @@ import {
   readSlidePart,
   slideText,
 } from '../../internal/presentationml/index.ts';
-import { NS, attr, getAttrValue, parseXml, qname, serializeXml } from '../../internal/xml/index.ts';
+import {
+  NS,
+  attr,
+  firstChildElement,
+  getAttrValue,
+  parseXml,
+  qname,
+  serializeXml,
+} from '../../internal/xml/index.ts';
 import {
   INTERNAL_PACKAGE,
   LAYOUT_PART,
@@ -539,6 +547,68 @@ export const getAllShapes = (pres: PresentationData): ReadonlyArray<AllShapesEnt
 // without removing it from the deck. `show="1"` (or omission) is visible.
 
 const ATTR_SHOW = qname('', 'show', '');
+const ATTR_SHOW_MASTER_SHAPES = qname('', 'showMasterSp', '');
+const ATTR_SHOW_MASTER_PLACEHOLDER_ANIMATIONS = qname('', 'showMasterPhAnim', '');
+const NAME_COMMON_SLIDE_DATA = qname('p', 'cSld', NS.pml);
+const ATTR_COMMON_SLIDE_NAME = qname('', 'name', '');
+
+/** Returns the optional user-facing name on the slide's common data. */
+export const getSlideName = (slide: SlideData): string => {
+  const commonSlideData = firstChildElement(slide[SLIDE_DOCUMENT].root, NAME_COMMON_SLIDE_DATA);
+  return commonSlideData ? (getAttrValue(commonSlideData, ATTR_COMMON_SLIDE_NAME) ?? '') : '';
+};
+
+/** Sets the user-facing slide name; an empty string restores the schema default. */
+export const setSlideName = (slide: SlideData, name: string): void => {
+  const commonSlideData = firstChildElement(slide[SLIDE_DOCUMENT].root, NAME_COMMON_SLIDE_DATA);
+  if (!commonSlideData) throw new Error('setSlideName: slide has no p:cSld element');
+  commonSlideData.attrs = commonSlideData.attrs.filter(
+    (candidate) =>
+      !(
+        candidate.name.namespaceURI === ATTR_COMMON_SLIDE_NAME.namespaceURI &&
+        candidate.name.localName === ATTR_COMMON_SLIDE_NAME.localName
+      ),
+  );
+  if (name.length > 0) commonSlideData.attrs.push(attr(ATTR_COMMON_SLIDE_NAME, name));
+  commitSlideData(slide);
+};
+
+const readDefaultTrueSlideFlag = (slide: SlideData, attributeName: string): boolean => {
+  const value = getAttrValue(slide[SLIDE_DOCUMENT].root, qname('', attributeName, ''));
+  if (value === null || value === '1' || value === 'true') return true;
+  if (value === '0' || value === 'false') return false;
+  throw new Error(`${attributeName}: invalid xsd:boolean value ${JSON.stringify(value)}`);
+};
+
+const writeDefaultTrueSlideFlag = (
+  slide: SlideData,
+  attributeName: string,
+  value: boolean,
+): void => {
+  const root = slide[SLIDE_DOCUMENT].root;
+  root.attrs = root.attrs.filter(
+    (candidate) =>
+      !(candidate.name.namespaceURI === '' && candidate.name.localName === attributeName),
+  );
+  if (!value) root.attrs.push(attr(qname('', attributeName, ''), '0'));
+  commitSlideData(slide);
+};
+
+/** Whether shapes inherited from the slide master remain visible. Defaults to true. */
+export const getSlideShowMasterShapes = (slide: SlideData): boolean =>
+  readDefaultTrueSlideFlag(slide, ATTR_SHOW_MASTER_SHAPES.localName);
+
+/** Controls visibility of shapes inherited from the slide master. */
+export const setSlideShowMasterShapes = (slide: SlideData, value: boolean): void =>
+  writeDefaultTrueSlideFlag(slide, ATTR_SHOW_MASTER_SHAPES.localName, value);
+
+/** Whether placeholder animations inherited from the slide master are enabled. Defaults to true. */
+export const getSlideShowMasterPlaceholderAnimations = (slide: SlideData): boolean =>
+  readDefaultTrueSlideFlag(slide, ATTR_SHOW_MASTER_PLACEHOLDER_ANIMATIONS.localName);
+
+/** Controls placeholder animations inherited from the slide master. */
+export const setSlideShowMasterPlaceholderAnimations = (slide: SlideData, value: boolean): void =>
+  writeDefaultTrueSlideFlag(slide, ATTR_SHOW_MASTER_PLACEHOLDER_ANIMATIONS.localName, value);
 
 /**
  * Returns `true` when the slide carries `show="0"` on its root
