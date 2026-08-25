@@ -97,6 +97,7 @@ const mergeRPrLayer = (base: Partial<TextFormat>, layer: Partial<TextFormat>): v
     base.underline = layer.underline;
   }
   if (base.strike === undefined && layer.strike !== undefined) base.strike = layer.strike;
+  if (base.outline === undefined && layer.outline !== undefined) base.outline = layer.outline;
   if (base.spc === undefined && layer.spc !== undefined) base.spc = layer.spc;
   if (base.kern === undefined && layer.kern !== undefined) base.kern = layer.kern;
   if (base.baseline === undefined && layer.baseline !== undefined) base.baseline = layer.baseline;

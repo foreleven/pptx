@@ -598,7 +598,12 @@ export {
   validatePresentation,
 } from './fn.ts';
 
-export type { BulletStyle, ParagraphAlignment, TextFormat } from '../internal/drawingml/index.ts';
+export type {
+  BulletStyle,
+  ParagraphAlignment,
+  TextFormat,
+  TextOutline,
+} from '../internal/drawingml/index.ts';
 export type {
   ParagraphBulletPropertiesEffective,
   ParagraphProperties,

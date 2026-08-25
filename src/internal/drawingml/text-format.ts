@@ -27,6 +27,7 @@ import {
 } from '../xml/index.ts';
 import { fontSizeHundredthPt, textNonNegativePoint, textPointSpacing } from '../bounds.ts';
 import { buildColorElement } from './color.ts';
+import { setNoStroke, setSolidStroke } from './stroke.ts';
 
 const NAME_R = qname('a', 'r', NS.dml);
 const NAME_RPR = qname('a', 'rPr', NS.dml);
@@ -123,6 +124,8 @@ export interface TextFormat {
    * `'dblStrike'`, `'noStrike'`) for other styles. `false` clears.
    */
   strike?: boolean | string;
+  /** Direct text outline stored as `<a:rPr><a:ln>…</a:ln></a:rPr>`. */
+  outline?: TextOutline;
   /**
    * Character spacing in 1/100 points (`0` = default). Negative values
    * tighten, positive values loosen. Mirrors `<a:rPr spc="…"/>`.
@@ -151,6 +154,17 @@ export interface TextFormat {
    */
   highlight?: string | null;
 }
+
+/** Common editable text-outline subset plus an importer-only diagnostic carrier. */
+export type TextOutline =
+  | {
+      readonly kind: 'solid';
+      readonly color: string;
+      readonly widthPt?: number;
+      readonly unsupported?: string;
+    }
+  | { readonly kind: 'none'; readonly unsupported?: string }
+  | { readonly kind: 'unsupported'; readonly reason: string };
 
 /** Direct, non-inherited CT_TextCharacterProperties state. */
 export interface TextRunState {
@@ -214,6 +228,12 @@ const setHighlight = (rPr: XmlElement, value: string | null): void => {
   );
 };
 
+/** Ensure the run outline exists in the first CT_TextCharacterProperties child slot. */
+const ensureRunOutline = (rPr: XmlElement): void => {
+  if (firstChildElement(rPr, qname('a', 'ln', NS.dml)) !== null) return;
+  insertChildByRank(rPr, elem(qname('a', 'ln', NS.dml)), rprChildRank);
+};
+
 /** Mutates `rPr` in place per `format`. */
 export const applyRunFormat = (rPr: XmlElement, format: TextFormat): void => {
   let attrs = rPr.attrs;
@@ -271,6 +291,24 @@ export const applyRunFormat = (rPr: XmlElement, format: TextFormat): void => {
   }
   if (format.color !== undefined) setSolidFill(rPr, format.color);
   if (format.highlight !== undefined) setHighlight(rPr, format.highlight);
+  if (format.outline !== undefined) {
+    if (format.outline.kind === 'unsupported') {
+      throw new TypeError('TextFormat.outline kind unsupported is read-only diagnostic state.');
+    }
+    ensureRunOutline(rPr);
+    if (format.outline.kind === 'none') {
+      setNoStroke(rPr);
+    } else {
+      const widthEmu =
+        format.outline.widthPt === undefined
+          ? undefined
+          : Math.round(format.outline.widthPt * 12_700);
+      setSolidStroke(rPr, {
+        color: format.outline.color,
+        ...(widthEmu === undefined ? {} : { widthEmu }),
+      });
+    }
+  }
 };
 
 /** Mutates only the explicitly supplied direct run-state attributes. */

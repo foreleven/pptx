@@ -72,6 +72,35 @@ describe('fn API: extended run-format properties', () => {
     expect(getShapeRunFormat(tb, 0, 0)!.strike).toBe(false);
   });
 
+  it('round-trips solid and explicit no text outlines', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const tb = addSlideTextBox(slide, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(4),
+      h: inches(2),
+      text: 'solidnone',
+    });
+    setShapeParagraphElements(tb, 0, [
+      {
+        kind: 'r',
+        text: 'solid',
+        format: { outline: { kind: 'solid', color: '#3659E3', widthPt: 1.5 } },
+      },
+      { kind: 'r', text: 'none', format: { outline: { kind: 'none' } } },
+    ]);
+
+    const reloaded = await loadPresentation(await savePresentation(pres));
+    const reloadedShape = findShapeByText(getSlides(reloaded)[0]!, 'solidnone')!;
+    expect(getShapeRunFormat(reloadedShape, 0, 0)?.outline).toEqual({
+      kind: 'solid',
+      color: '#3659E3',
+      widthPt: 1.5,
+    });
+    expect(getShapeRunFormat(reloadedShape, 0, 1)?.outline).toEqual({ kind: 'none' });
+  });
+
   it('rejects a kerning threshold outside ST_TextNonNegativePoint', async () => {
     const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
     const slide = getSlides(pres)[0]!;

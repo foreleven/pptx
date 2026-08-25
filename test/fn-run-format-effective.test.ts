@@ -9,6 +9,7 @@
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import {
   addBlankSlide,
   addSlideTextBox,
@@ -95,6 +96,29 @@ describe('fn API: getShapeRunFormatEffective', () => {
     expect(fmt.size).toBeGreaterThan(28);
     // Title-class placeholders should pull the major font.
     expect(fmt.font).toBe('Calibri');
+  });
+
+  it('inherits a text outline from the master title style', async () => {
+    const entries = unzipSync(await readFile(fixture('blank.pptx')));
+    const masterPart = 'ppt/slideMasters/slideMaster1.xml';
+    const masterXml = strFromU8(entries[masterPart]!);
+    const outlinedMasterXml = masterXml.replace(
+      '<a:defRPr sz="4400" kern="1200">',
+      '<a:defRPr sz="4400" kern="1200"><a:ln w="19050"><a:solidFill><a:srgbClr val="3659E3"/></a:solidFill></a:ln>',
+    );
+    expect(outlinedMasterXml).not.toBe(masterXml);
+    entries[masterPart] = strToU8(outlinedMasterXml);
+
+    const pres = await loadPresentation(zipSync(entries));
+    const slide = addTitleSlide(pres, 'Outlined title');
+    const title = findSlidePlaceholder(slide, 'title') ?? findSlidePlaceholder(slide, 'ctrTitle');
+    expect(title).not.toBeNull();
+    expect(getShapeRunFormat(title!, 0, 0)?.outline).toBeUndefined();
+    expect(getShapeRunFormatEffective(pres, title!, 0, 0).outline).toEqual({
+      kind: 'solid',
+      color: '#3659E3',
+      widthPt: 1.5,
+    });
   });
 
   it('resolves +mj-lt / +mn-lt theme tokens authored on the master', async () => {

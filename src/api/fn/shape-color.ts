@@ -10,6 +10,7 @@ import {
   qname,
 } from '../../internal/xml/index.ts';
 import { type SlideShapeData } from '../_internal-symbols.ts';
+import { lineWidthEmu } from '../../internal/bounds.ts';
 import { type PresentationTheme } from './theme.ts';
 
 /**
@@ -23,6 +24,18 @@ const optionalOnOffAttr = (element: XmlElement, localName: string): boolean | un
   if (value === '0' || value === 'false') return false;
   return undefined;
 };
+
+/** Name every attribute outside one element's exact unqualified OOXML vocabulary. */
+const unexpectedAttributes = (
+  element: XmlElement,
+  allowed: ReadonlySet<string>,
+  label: string,
+): string[] =>
+  element.attrs
+    .filter(
+      (attribute) => attribute.name.namespaceURI !== '' || !allowed.has(attribute.name.localName),
+    )
+    .map((attribute) => `${label} attribute ${attribute.name.localName}`);
 // -- Color transforms (ECMA-376 §20.1.2.3.x) --------------------------------
 //
 // DrawingML color elements (`<a:srgbClr>`, `<a:schemeClr>`, `<a:sysClr>`,
@@ -348,6 +361,121 @@ export const parseRPrLikeElement = (
     if (strike === 'noStrike') out.strike = false;
     else if (strike === 'sngStrike') out.strike = true;
     else out.strike = strike;
+  }
+  const outline = firstChildElement(rPr, qname('a', 'ln', NS.dml));
+  if (outline !== null) {
+    const widthRaw = getAttrValue(outline, qname('', 'w', ''));
+    const unsupported: string[] = [];
+    unsupported.push(
+      ...unexpectedAttributes(outline, new Set(['w', 'cap', 'cmpd', 'algn']), 'text outline'),
+    );
+    let widthPt: number | undefined;
+    if (widthRaw !== null) {
+      if (!/^\d+$/u.test(widthRaw)) {
+        unsupported.push(`width ${widthRaw}`);
+      } else {
+        try {
+          const widthEmu = lineWidthEmu(Number(widthRaw), 'getShapeRunFormat: outline width');
+          if (widthEmu === 0) unsupported.push('width 0');
+          else widthPt = widthEmu / 12_700;
+        } catch {
+          unsupported.push(`width ${widthRaw}`);
+        }
+      }
+    }
+    const cap = getAttrValue(outline, qname('', 'cap', ''));
+    const compound = getAttrValue(outline, qname('', 'cmpd', ''));
+    const alignment = getAttrValue(outline, qname('', 'algn', ''));
+    if (cap !== null) unsupported.push(`cap ${cap}`);
+    if (compound !== null && compound !== 'sng') unsupported.push(`compound ${compound}`);
+    if (alignment !== null) unsupported.push(`alignment ${alignment}`);
+    const dash = firstChildElement(outline, qname('a', 'prstDash', NS.dml));
+    const dashValue = dash === null ? null : getAttrValue(dash, qname('', 'val', ''));
+    if (dashValue !== null && dashValue !== 'solid') unsupported.push(`dash ${dashValue}`);
+    if (firstChildElement(outline, qname('a', 'custDash', NS.dml))) unsupported.push('custom dash');
+    for (const join of ['round', 'bevel', 'miter']) {
+      if (firstChildElement(outline, qname('a', join, NS.dml))) unsupported.push(`join ${join}`);
+    }
+    const knownChildren = new Set([
+      'noFill',
+      'solidFill',
+      'gradFill',
+      'pattFill',
+      'prstDash',
+      'custDash',
+      'round',
+      'bevel',
+      'miter',
+      'headEnd',
+      'tailEnd',
+      'extLst',
+    ]);
+    for (const child of outline.children) {
+      if (child.kind !== 'element') continue;
+      if (child.name.namespaceURI !== NS.dml) {
+        unsupported.push(`foreign child ${child.name.localName}`);
+      } else if (child.name.localName === 'headEnd' || child.name.localName === 'tailEnd') {
+        unsupported.push(`arrow ${child.name.localName}`);
+      } else if (child.name.localName === 'extLst') {
+        unsupported.push('extensions');
+      } else if (!knownChildren.has(child.name.localName)) {
+        unsupported.push(`child ${child.name.localName}`);
+      }
+    }
+    const noFill = firstChildElement(outline, qname('a', 'noFill', NS.dml));
+    if (noFill) {
+      unsupported.push(...unexpectedAttributes(noFill, new Set(), 'noFill'));
+      const unsupportedText = unsupported.length > 0 ? unsupported.join(', ') : undefined;
+      out.outline = { kind: 'none', ...(unsupportedText ? { unsupported: unsupportedText } : {}) };
+    } else {
+      const solid = firstChildElement(outline, qname('a', 'solidFill', NS.dml));
+      let color: string | null = null;
+      if (solid) {
+        unsupported.push(...unexpectedAttributes(solid, new Set(), 'solidFill'));
+        const colorChild = solid.children.find(
+          (child): child is XmlElement =>
+            child.kind === 'element' && child.name.namespaceURI === NS.dml,
+        );
+        if (colorChild) {
+          unsupported.push(
+            ...unexpectedAttributes(colorChild, new Set(['val']), colorChild.name.localName),
+          );
+          if (colorChild.name.localName !== 'srgbClr') {
+            unsupported.push(`color ${colorChild.name.localName}`);
+          }
+          if (colorChild.children.some((child) => child.kind === 'element')) {
+            unsupported.push('color transforms');
+          }
+          if (ctx) color = resolveDrawingColor(colorChild, ctx.theme);
+          else if (colorChild.name.localName === 'srgbClr') {
+            const value = getAttrValue(colorChild, qname('', 'val', ''));
+            if (value !== null) color = `#${value.toUpperCase()}`;
+          } else if (colorChild.name.localName === 'schemeClr') {
+            color = getAttrValue(colorChild, qname('', 'val', ''));
+          }
+        }
+      }
+      if (color !== null) {
+        const unsupportedText = unsupported.length > 0 ? unsupported.join(', ') : undefined;
+        out.outline = {
+          kind: 'solid',
+          color,
+          ...(widthPt === undefined ? {} : { widthPt }),
+          ...(unsupportedText ? { unsupported: unsupportedText } : {}),
+        };
+      } else {
+        const fill = outline.children.find(
+          (child): child is XmlElement =>
+            child.kind === 'element' &&
+            child.name.namespaceURI === NS.dml &&
+            ['gradFill', 'pattFill'].includes(child.name.localName),
+        );
+        out.outline = {
+          kind: 'unsupported',
+          reason: `text outline ${fill?.name.localName ?? 'without a supported solid/no fill'}`,
+        };
+      }
+    }
   }
   const spc = getAttrValue(rPr, qname('', 'spc', ''));
   if (spc !== null) {
