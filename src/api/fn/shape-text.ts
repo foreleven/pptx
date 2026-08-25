@@ -151,6 +151,12 @@ export interface TextAutoFitParams {
   lnSpcReduction: number;
 }
 
+/** Parsed native `normAutofit` ratios, which Strict percent strings may place outside the safe authoring range. */
+export interface TextAutoFitRawParams {
+  fontScale: number;
+  lnSpcReduction: number;
+}
+
 const AUTO_FIT_LOCALS = new Set(['noAutofit', 'normAutofit', 'spAutoFit']);
 
 const requireBodyPr = (shape: SlideShapeData): XmlElement => {
@@ -333,8 +339,11 @@ export const getShapeTextAutoFit = (shape: SlideShapeData): TextAutoFit | null =
  * When only one attribute exists, the other field uses its schema default.
  * Strict percent strings may parse outside `[0, 1]`; importers use this raw
  * result to diagnose values that the safe authoring contract cannot preserve.
+ * Invalid numeric lexemes also fall back to the corresponding schema default.
  */
-export const getShapeTextAutoFitParamsRaw = (shape: SlideShapeData): TextAutoFitParams | null => {
+export const getShapeTextAutoFitParamsRaw = (
+  shape: SlideShapeData,
+): TextAutoFitRawParams | null => {
   const txBody = firstChildElement(shape[SHAPE_ELEMENT], NAME_TX_BODY);
   if (!txBody) return null;
   const bodyPr = firstChildElement(txBody, NAME_A_BODY_PR);
@@ -360,7 +369,7 @@ export const getShapeTextAutoFitParamsRaw = (shape: SlideShapeData): TextAutoFit
 /**
  * Reads PowerPoint-computed normal-autofit parameters only when both values
  * satisfy the safe public `[0, 1]` ratio contract. Returns `null` for absent,
- * bare, malformed, or out-of-contract native parameters:
+ * bare, or out-of-contract native parameters:
  *
  *   - `fontScale`     — multiply every run's font size by this. Default `1`.
  *   - `lnSpcReduction` — subtract from the line-height ratio. Default `0`.

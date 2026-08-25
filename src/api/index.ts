@@ -99,6 +99,7 @@ export type {
   TextAnchor,
   TextAutoFit,
   TextAutoFitParams,
+  TextAutoFitRawParams,
   TextHorizontalOverflow,
   TextVerticalOverflow,
   TextWrap,
