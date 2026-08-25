@@ -390,13 +390,24 @@ export const getShapeTextAutoFitParams = (shape: SlideShapeData): TextAutoFitPar
 const TEXT_AUTO_FIT_INTEGER = /^[+-]?\d+$/u;
 const TEXT_AUTO_FIT_PERCENT = /^-?\d+(?:\.\d+)?%$/u;
 
+/** Apply the fixed `xsd:int` whitespace-collapse facet without accepting other Unicode whitespace. */
+const collapseXmlSchemaWhitespace = (value: string): string =>
+  value
+    .replaceAll('\t', ' ')
+    .replaceAll('\n', ' ')
+    .replaceAll('\r', ' ')
+    .replace(/ +/gu, ' ')
+    .replace(/^ /u, '')
+    .replace(/ $/u, '');
+
 /** Normalize exact Transitional integers and Strict percent strings to a unit ratio, or use the schema default. */
 const parseTextAutoFitRatio = (value: string | null, fallback: number): number => {
   if (value === null) return fallback;
+  const collapsedInteger = collapseXmlSchemaWhitespace(value);
   const parsed = TEXT_AUTO_FIT_PERCENT.test(value)
     ? Number(value.slice(0, -1)) / 100
-    : TEXT_AUTO_FIT_INTEGER.test(value)
-      ? Number(value) / 100_000
+    : TEXT_AUTO_FIT_INTEGER.test(collapsedInteger)
+      ? Number(collapsedInteger) / 100_000
       : Number.NaN;
   return Number.isFinite(parsed) ? parsed : fallback;
 };

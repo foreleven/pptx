@@ -180,6 +180,32 @@ describe('fn API: setShapeTextAutoFit', () => {
     }
   });
 
+  it('applies XML Schema whitespace collapse only to Transitional integer ratios', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const tb = addSlideTextBox(slide, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(3),
+      h: inches(2),
+      text: 'A',
+    });
+    setShapeTextAutoFit(tb, 'normal', { fontScale: 0.72, lnSpcReduction: 0.18 });
+
+    const entries = unzipSync(await savePresentation(pres));
+    entries['ppt/slides/slide1.xml'] = strToU8(
+      strFromU8(entries['ppt/slides/slide1.xml']!)
+        .replace('fontScale="72000"', 'fontScale=" 72000 "')
+        .replace('lnSpcReduction="18000"', 'lnSpcReduction=" 18% "'),
+    );
+    const loaded = await loadPresentation(zipSync(entries));
+    const loadedShape = getSlideShapes(getSlides(loaded)[0]!).at(-1)!;
+    expect(getShapeTextAutoFitParamsRaw(loadedShape)).toEqual({
+      fontScale: 0.72,
+      lnSpcReduction: 0,
+    });
+  });
+
   it('rejects invalid reduction parameters before mutating the current mode', async () => {
     const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
     const slide = getSlides(pres)[0]!;
