@@ -99,18 +99,30 @@ export const appendShapeText = (shape: SlideShapeData, value: string): void => {
   commitAndRefresh(shape);
 };
 
-/**
- * Sets the vertical text anchor on the shape's text body
- * (`<a:bodyPr anchor="..."/>`). Choices map to ECMA-376 tokens:
- *
- *   - `'top'`    → `anchor="t"`
- *   - `'center'` → `anchor="ctr"`
- *   - `'bottom'` → `anchor="b"`
- *
- * The bodyPr is created if absent. Throws for non-text-bearing shape
- * kinds.
- */
-export type TextAnchor = 'top' | 'center' | 'bottom';
+/** Vertical text-body anchor values stored by `bodyPr@anchor`. */
+export type TextAnchor = 'top' | 'center' | 'bottom' | 'justified' | 'distributed';
+
+const TEXT_ANCHOR_TOKEN_BY_VALUE = {
+  top: 't',
+  center: 'ctr',
+  bottom: 'b',
+  justified: 'just',
+  distributed: 'dist',
+} as const satisfies Readonly<Record<TextAnchor, string>>;
+
+const TEXT_ANCHOR_BY_TOKEN = {
+  t: 'top',
+  ctr: 'center',
+  b: 'bottom',
+  just: 'justified',
+  dist: 'distributed',
+} as const satisfies Readonly<Record<(typeof TEXT_ANCHOR_TOKEN_BY_VALUE)[TextAnchor], TextAnchor>>;
+
+/** Parse one native anchor token without widening unknown XML values into the public union. */
+const textAnchorFromToken = (token: string | null): TextAnchor | null =>
+  token === null
+    ? null
+    : (TEXT_ANCHOR_BY_TOKEN[token as keyof typeof TEXT_ANCHOR_BY_TOKEN] ?? null);
 
 const NAME_A_BODY_PR = qname('a', 'bodyPr', NS.dml);
 
@@ -120,6 +132,12 @@ const NAME_A_BODY_PR = qname('a', 'bodyPr', NS.dml);
  * overflow horizontally.
  */
 export type TextWrap = 'none' | 'square';
+
+/** Horizontal text overflow stored by `bodyPr@horzOverflow`. */
+export type TextHorizontalOverflow = 'overflow' | 'clip';
+
+/** Vertical text overflow stored by `bodyPr@vertOverflow`. */
+export type TextVerticalOverflow = 'overflow' | 'ellipsis' | 'clip';
 
 /** Auto-fit mode on a text body. */
 export type TextAutoFit =
@@ -167,6 +185,56 @@ export const getShapeTextWrap = (shape: SlideShapeData): TextWrap | null => {
   if (v === 'none' || v === 'square') return v;
   return null;
 };
+
+/** Writes or clears one enumerated text-body attribute. */
+const setShapeTextBodyToken = (
+  shape: SlideShapeData,
+  localName: 'horzOverflow' | 'vertOverflow',
+  value: string | null,
+): void => {
+  const bodyPr = requireBodyPr(shape);
+  bodyPr.attrs = bodyPr.attrs.filter(
+    (candidate) => !(candidate.name.namespaceURI === '' && candidate.name.localName === localName),
+  );
+  if (value !== null) bodyPr.attrs.push(attr(qname('', localName, ''), value));
+  commitAndRefresh(shape);
+};
+
+/** Reads horizontal text overflow, or `null` when it is not authored directly. */
+export const getShapeTextHorizontalOverflow = (
+  shape: SlideShapeData,
+): TextHorizontalOverflow | null => {
+  const txBody = firstChildElement(shape[SHAPE_ELEMENT], NAME_TX_BODY);
+  if (!txBody) return null;
+  const bodyPr = firstChildElement(txBody, NAME_A_BODY_PR);
+  if (!bodyPr) return null;
+  const value = getAttrValue(bodyPr, qname('', 'horzOverflow', ''));
+  return value === 'overflow' || value === 'clip' ? value : null;
+};
+
+/** Sets or clears horizontal text overflow (`bodyPr@horzOverflow`). */
+export const setShapeTextHorizontalOverflow = (
+  shape: SlideShapeData,
+  value: TextHorizontalOverflow | null,
+): void => setShapeTextBodyToken(shape, 'horzOverflow', value);
+
+/** Reads vertical text overflow, or `null` when it is not authored directly. */
+export const getShapeTextVerticalOverflow = (
+  shape: SlideShapeData,
+): TextVerticalOverflow | null => {
+  const txBody = firstChildElement(shape[SHAPE_ELEMENT], NAME_TX_BODY);
+  if (!txBody) return null;
+  const bodyPr = firstChildElement(txBody, NAME_A_BODY_PR);
+  if (!bodyPr) return null;
+  const value = getAttrValue(bodyPr, qname('', 'vertOverflow', ''));
+  return value === 'overflow' || value === 'ellipsis' || value === 'clip' ? value : null;
+};
+
+/** Sets or clears vertical text overflow (`bodyPr@vertOverflow`). */
+export const setShapeTextVerticalOverflow = (
+  shape: SlideShapeData,
+  value: TextVerticalOverflow | null,
+): void => setShapeTextBodyToken(shape, 'vertOverflow', value);
 
 /**
  * Sets the text-body auto-fit mode:
@@ -254,7 +322,8 @@ export const getShapeTextAutoFitParams = (
  * Reads back the vertical text anchor on the shape's `<a:bodyPr>`.
  * Maps the ECMA-376 tokens back to the public union:
  *
- *   `'t'` → `'top'`, `'ctr'` → `'center'`, `'b'` → `'bottom'`
+ *   `'t'` → `'top'`, `'ctr'` → `'center'`, `'b'` → `'bottom'`,
+ *   `'just'` → `'justified'`, `'dist'` → `'distributed'`
  *
  * Returns `null` when the bodyPr is absent or has no anchor attribute.
  */
@@ -263,11 +332,7 @@ export const getShapeTextAnchor = (shape: SlideShapeData): TextAnchor | null => 
   if (!txBody) return null;
   const bodyPr = firstChildElement(txBody, NAME_A_BODY_PR);
   if (!bodyPr) return null;
-  const v = getAttrValue(bodyPr, qname('', 'anchor', ''));
-  if (v === 't') return 'top';
-  if (v === 'ctr') return 'center';
-  if (v === 'b') return 'bottom';
-  return null;
+  return textAnchorFromToken(getAttrValue(bodyPr, qname('', 'anchor', '')));
 };
 
 /**
@@ -338,10 +403,10 @@ export const setShapeTextColumns = (
   commitAndRefresh(shape);
 };
 
-/** Reads an explicit text-column flow flag from `<a:bodyPr>`. */
+/** Reads one explicit boolean attribute from `<a:bodyPr>`. */
 const getShapeTextBodyBoolean = (
   shape: SlideShapeData,
-  localName: 'rtlCol' | 'upright',
+  localName: 'rtlCol' | 'upright' | 'anchorCtr' | 'compatLnSpc',
 ): boolean | null => {
   const txBody = firstChildElement(shape[SHAPE_ELEMENT], NAME_TX_BODY);
   if (!txBody) return null;
@@ -356,7 +421,7 @@ const getShapeTextBodyBoolean = (
 /** Writes or clears one explicit boolean attribute on `<a:bodyPr>`. */
 const setShapeTextBodyBoolean = (
   shape: SlideShapeData,
-  localName: 'rtlCol' | 'upright',
+  localName: 'rtlCol' | 'upright' | 'anchorCtr' | 'compatLnSpc',
   value: boolean | null,
 ): void => {
   const bodyPr = requireBodyPr(shape);
@@ -382,6 +447,24 @@ export const getShapeTextUpright = (shape: SlideShapeData): boolean | null =>
 /** Sets or clears PowerPoint's keep-text-upright flag (`bodyPr@upright`). */
 export const setShapeTextUpright = (shape: SlideShapeData, value: boolean | null): void =>
   setShapeTextBodyBoolean(shape, 'upright', value);
+
+/** Reads whether each anchored line is centered within the text body (`bodyPr@anchorCtr`). */
+export const getShapeTextAnchorCentering = (shape: SlideShapeData): boolean | null =>
+  getShapeTextBodyBoolean(shape, 'anchorCtr');
+
+/** Sets or clears per-line anchor centering (`bodyPr@anchorCtr`). */
+export const setShapeTextAnchorCentering = (shape: SlideShapeData, value: boolean | null): void =>
+  setShapeTextBodyBoolean(shape, 'anchorCtr', value);
+
+/** Reads the legacy compatible line-spacing flag (`bodyPr@compatLnSpc`). */
+export const getShapeTextCompatibilityLineSpacing = (shape: SlideShapeData): boolean | null =>
+  getShapeTextBodyBoolean(shape, 'compatLnSpc');
+
+/** Sets or clears the legacy compatible line-spacing flag (`bodyPr@compatLnSpc`). */
+export const setShapeTextCompatibilityLineSpacing = (
+  shape: SlideShapeData,
+  value: boolean | null,
+): void => setShapeTextBodyBoolean(shape, 'compatLnSpc', value);
 
 /**
  * Reads the shape's text-body rotation from `<a:bodyPr rot="N"/>`.
@@ -521,11 +604,12 @@ export const getShapeTextMargins = (
 };
 
 /**
- * Resolves the effective `<a:bodyPr>` properties — anchor, wrap, vertical
- * direction, and inset margins — by walking the layout / master cascade
- * the same way `getShapeRunFormatEffective` walks rPr. Returns the
- * innermost value that the cascade supplies, or `null` for properties
- * neither the shape nor any inherited placeholder authors.
+ * Resolves the effective `<a:bodyPr>` properties — anchor, wrap, overflow,
+ * anchor centering, compatibility line spacing, vertical direction, and
+ * inset margins — by walking the layout / master cascade the same way
+ * `getShapeRunFormatEffective` walks rPr. Returns the innermost value that
+ * the cascade supplies, or `null` for properties neither the shape nor any
+ * inherited placeholder authors.
  *
  * Companion to `getShapeTextAnchor` / `getShapeTextWrap` /
  * `getShapeTextDirection` / `getShapeTextMargins`, which only report the
@@ -536,12 +620,20 @@ export const getShapeBodyPrEffective = (
   shape: SlideShapeData,
 ): {
   anchor: TextAnchor | null;
+  anchorCentering: boolean | null;
+  compatibilityLineSpacing: boolean | null;
+  horizontalOverflow: TextHorizontalOverflow | null;
+  verticalOverflow: TextVerticalOverflow | null;
   wrap: TextWrap | null;
   vert: ReturnType<typeof getShapeTextDirection>;
   margins: { left: number | null; top: number | null; right: number | null; bottom: number | null };
 } => {
   const result = {
     anchor: null as TextAnchor | null,
+    anchorCentering: null as boolean | null,
+    compatibilityLineSpacing: null as boolean | null,
+    horizontalOverflow: null as TextHorizontalOverflow | null,
+    verticalOverflow: null as TextVerticalOverflow | null,
     wrap: null as TextWrap | null,
     vert: null as ReturnType<typeof getShapeTextDirection>,
     margins: {
@@ -552,11 +644,28 @@ export const getShapeBodyPrEffective = (
     },
   };
   const parseBodyPr = (bodyPr: XmlElement): void => {
+    const bodyBoolean = (localName: 'anchorCtr' | 'compatLnSpc'): boolean | null => {
+      const value = getAttrValue(bodyPr, qname('', localName, ''));
+      if (value === '1' || value === 'true') return true;
+      if (value === '0' || value === 'false') return false;
+      return null;
+    };
     if (result.anchor === null) {
-      const a = getAttrValue(bodyPr, qname('', 'anchor', ''));
-      if (a === 't') result.anchor = 'top';
-      else if (a === 'ctr') result.anchor = 'center';
-      else if (a === 'b') result.anchor = 'bottom';
+      result.anchor = textAnchorFromToken(getAttrValue(bodyPr, qname('', 'anchor', '')));
+    }
+    if (result.anchorCentering === null) result.anchorCentering = bodyBoolean('anchorCtr');
+    if (result.compatibilityLineSpacing === null) {
+      result.compatibilityLineSpacing = bodyBoolean('compatLnSpc');
+    }
+    if (result.horizontalOverflow === null) {
+      const value = getAttrValue(bodyPr, qname('', 'horzOverflow', ''));
+      if (value === 'overflow' || value === 'clip') result.horizontalOverflow = value;
+    }
+    if (result.verticalOverflow === null) {
+      const value = getAttrValue(bodyPr, qname('', 'vertOverflow', ''));
+      if (value === 'overflow' || value === 'ellipsis' || value === 'clip') {
+        result.verticalOverflow = value;
+      }
     }
     if (result.wrap === null) {
       const w = getAttrValue(bodyPr, qname('', 'wrap', ''));
@@ -638,6 +747,7 @@ export const getShapeBodyPrEffective = (
   return result;
 };
 
+/** Set the vertical text-body anchor, creating `bodyPr` when the shape can bear text and none exists. */
 export const setShapeTextAnchor = (shape: SlideShapeData, anchor: TextAnchor): void => {
   const txBody = requireTxBody(shape);
   let bodyPr = firstChildElement(txBody, NAME_A_BODY_PR);
@@ -645,7 +755,7 @@ export const setShapeTextAnchor = (shape: SlideShapeData, anchor: TextAnchor): v
     bodyPr = elem(NAME_A_BODY_PR);
     txBody.children.unshift(bodyPr);
   }
-  const token = anchor === 'top' ? 't' : anchor === 'center' ? 'ctr' : 'b';
+  const token = TEXT_ANCHOR_TOKEN_BY_VALUE[anchor];
   const ATTR_ANCHOR = qname('', 'anchor', '');
   // Replace any existing anchor attribute.
   bodyPr.attrs = bodyPr.attrs.filter(

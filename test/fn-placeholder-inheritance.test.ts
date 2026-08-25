@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { matchPlaceholderShape, placeholderTypeCandidates } from '../src/api/fn/shape-read-base.ts';
 import {
+  _internalPackageOf,
   addTitleSlide,
   getShapeBodyPrEffective,
   getShapePlaceholderType,
@@ -62,13 +63,30 @@ describe('matchPlaceholderShape', () => {
 });
 
 describe('ctrTitle inherits the master title bodyPr', () => {
-  it('resolves the centered-title vertical anchor from the master title placeholder', async () => {
+  it('resolves body-layout properties from the master title placeholder', async () => {
     const pres = await loadPresentation(await readFile(fixture('blank.pptx')));
     const slide = addTitleSlide(pres, 'Hello');
     const ctr = getSlideShapes(slide).find((s) => getShapePlaceholderType(s) === 'ctrTitle');
     expect(ctr).toBeDefined();
+    const masterPart = _internalPackageOf(pres).parts.find(
+      (part) => part.name === '/ppt/slideMasters/slideMaster1.xml',
+    );
+    expect(masterPart).toBeDefined();
+    const xml = new TextDecoder().decode(masterPart!.data);
+    const bodyLayout = xml.replace(
+      'rtlCol="0" anchor="ctr"',
+      'rtlCol="0" anchor="ctr" anchorCtr="1" horzOverflow="clip" vertOverflow="ellipsis" compatLnSpc="0"',
+    );
+    expect(bodyLayout).not.toBe(xml);
+    masterPart!.data = new TextEncoder().encode(bodyLayout);
     // The master title placeholder carries anchor="ctr"; a ctrTitle must inherit
     // it (it returned null before the placeholder-type equivalence fix).
-    expect(getShapeBodyPrEffective(pres, ctr!).anchor).toBe('center');
+    expect(getShapeBodyPrEffective(pres, ctr!)).toMatchObject({
+      anchor: 'center',
+      anchorCentering: true,
+      horizontalOverflow: 'clip',
+      verticalOverflow: 'ellipsis',
+      compatibilityLineSpacing: false,
+    });
   });
 });

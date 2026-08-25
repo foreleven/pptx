@@ -2597,6 +2597,10 @@ export const resolveTextBodyModel = (
   } catch {
     effectiveBody = {
       anchor: getShapeTextAnchor(shape),
+      anchorCentering: null,
+      compatibilityLineSpacing: null,
+      horizontalOverflow: null,
+      verticalOverflow: null,
       wrap: null,
       vert: getShapeTextDirection(shape),
       margins: getShapeTextMargins(shape) ?? { left: null, top: null, right: null, bottom: null },
@@ -2610,7 +2614,12 @@ export const resolveTextBodyModel = (
   const isAutoshape = !isShapePlaceholder(shape) && !isShapeTextBox(shape);
   const defaultAlign = isAutoshape ? 'center' : 'left';
   const defaultAnchor: 'top' | 'center' | 'bottom' = isAutoshape ? 'center' : 'top';
-  const anchor = effectiveBody.anchor ?? defaultAnchor;
+  const authoredAnchor = effectiveBody.anchor ?? defaultAnchor;
+  // The preview layout engine currently models positional anchors only;
+  // justified/distributed remain top-origin while the editable PPTX retains
+  // their exact bodyPr tokens for native PowerPoint rendering.
+  const anchor: 'top' | 'center' | 'bottom' =
+    authoredAnchor === 'center' || authoredAnchor === 'bottom' ? authoredAnchor : 'top';
   const margins = effectiveBody.margins;
   const lIns = margins.left ?? DEFAULT_INSET_X;
   const tIns = margins.top ?? DEFAULT_INSET_Y;

@@ -24,7 +24,7 @@ const slideXml = async (bytes: Uint8Array, slideIndex: number): Promise<string> 
 };
 
 describe('fn API: setShapeTextAnchor', () => {
-  it('writes anchor="t" / "ctr" / "b" to <a:bodyPr>', async () => {
+  it('writes every DrawingML anchor token to <a:bodyPr>', async () => {
     const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
     const slide = getSlides(pres)[0]!;
     const a = addSlideTextBox(slide, {
@@ -48,13 +48,31 @@ describe('fn API: setShapeTextAnchor', () => {
       h: inches(2),
       text: 'C',
     });
+    const d = addSlideTextBox(slide, {
+      x: inches(6),
+      y: inches(0),
+      w: inches(2),
+      h: inches(2),
+      text: 'D',
+    });
+    const e = addSlideTextBox(slide, {
+      x: inches(8),
+      y: inches(0),
+      w: inches(2),
+      h: inches(2),
+      text: 'E',
+    });
     setShapeTextAnchor(a, 'top');
     setShapeTextAnchor(b, 'center');
     setShapeTextAnchor(c, 'bottom');
+    setShapeTextAnchor(d, 'justified');
+    setShapeTextAnchor(e, 'distributed');
     const xml = await slideXml(await savePresentation(pres), 0);
     expect(xml).toContain('anchor="t"');
     expect(xml).toContain('anchor="ctr"');
     expect(xml).toContain('anchor="b"');
+    expect(xml).toContain('anchor="just"');
+    expect(xml).toContain('anchor="dist"');
   });
 
   it('replaces an existing anchor on subsequent calls', async () => {

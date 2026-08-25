@@ -60,6 +60,10 @@ describe('fn API: getShapeTextAnchor / getShapeTextMargins', () => {
     expect(getShapeTextAnchor(tb)).toBe('center');
     setShapeTextAnchor(tb, 'bottom');
     expect(getShapeTextAnchor(tb)).toBe('bottom');
+    setShapeTextAnchor(tb, 'justified');
+    expect(getShapeTextAnchor(tb)).toBe('justified');
+    setShapeTextAnchor(tb, 'distributed');
+    expect(getShapeTextAnchor(tb)).toBe('distributed');
   });
 
   it('round-trips margins (per side)', async () => {
