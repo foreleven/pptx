@@ -1085,7 +1085,7 @@ const unsupportedFieldParagraphSemantics = (pPr: XmlElement): string[] => {
   const unsupported: string[] = [];
   for (const attribute of pPr.attrs) {
     if (
-      attribute.name.namespaceURI !== '' ||
+      attribute.name.namespaceURI === '' &&
       !FIELD_PARAGRAPH_SUPPORTED_ATTRIBUTES.has(attribute.name.localName)
     ) {
       unsupported.push(`text field paragraph attribute ${attribute.name.localName}`);
@@ -1152,10 +1152,8 @@ const unsupportedFieldParagraphSemantics = (pPr: XmlElement): string[] => {
 
   for (const child of pPr.children) {
     if (child.kind !== 'element') continue;
-    if (
-      child.name.namespaceURI !== NS.dml ||
-      !FIELD_PARAGRAPH_SUPPORTED_CHILDREN.has(child.name.localName)
-    ) {
+    if (child.name.namespaceURI !== NS.dml || child.name.localName === 'extLst') continue;
+    if (!FIELD_PARAGRAPH_SUPPORTED_CHILDREN.has(child.name.localName)) {
       unsupported.push(`text field paragraph child ${child.name.localName}`);
       continue;
     }
@@ -1201,7 +1199,7 @@ const unsupportedFieldSemantics = (field: XmlElement, pPr: XmlElement | null): s
   const unsupported = field.attrs
     .filter(
       (attribute) =>
-        attribute.name.namespaceURI !== '' || !['id', 'type'].includes(attribute.name.localName),
+        attribute.name.namespaceURI === '' && !['id', 'type'].includes(attribute.name.localName),
     )
     .map((attribute) => `text field attribute ${attribute.name.localName}`);
   const fieldId = getAttrValue(field, qname('', 'id', ''));
@@ -1216,7 +1214,8 @@ const unsupportedFieldSemantics = (field: XmlElement, pPr: XmlElement | null): s
   for (const child of field.children) {
     if (child.kind !== 'element') continue;
     childCounts.set(child.name.localName, (childCounts.get(child.name.localName) ?? 0) + 1);
-    if (child.name.namespaceURI !== NS.dml || !['rPr', 'pPr', 't'].includes(child.name.localName)) {
+    if (child.name.namespaceURI !== NS.dml || child.name.localName === 'extLst') continue;
+    if (!['rPr', 'pPr', 't'].includes(child.name.localName)) {
       unsupported.push(`text field child ${child.name.localName}`);
     }
   }

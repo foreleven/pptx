@@ -43,6 +43,13 @@ export type {
   ShapeRunHyperlinkDescriptor,
   ShapeRunHyperlinkSound,
   ShapeRunHyperlinkTarget,
+  ShapeTextExtensionAttribute,
+  ShapeTextExtensionContent,
+  ShapeTextExtensionName,
+  ShapeTextExtensionNamespace,
+  ShapeTextExtensionNode,
+  ShapeTextExtensionPayload,
+  ShapeTextExtensionTarget,
 } from './fn.ts';
 export type { TextRunState } from '../internal/drawingml/index.ts';
 export type { IssueSeverity, ValidationIssue } from './fn.ts';
@@ -285,6 +292,7 @@ export {
   getShapePatternFill,
   getShapeParagraphCount,
   getShapeParagraphElements,
+  getShapeTextExtensionPayloads,
   getShapePlaceholderIdx,
   getShapePreset,
   getMaxShapeId,
@@ -540,6 +548,7 @@ export {
   setShapeRunHyperlink,
   setShapeRunHyperlinkDescriptor,
   setShapeParagraphElements,
+  setShapeTextExtensionPayloads,
   setShapeRunText,
   setShapeSize,
   setShapeStroke,

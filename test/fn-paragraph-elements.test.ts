@@ -10,12 +10,15 @@ import { describe, expect, it } from 'vitest';
 import {
   addSlideTextBox,
   getShapeParagraphElements,
+  getShapeTextExtensionPayloads,
   getSlideShapes,
   getSlides,
   inches,
   loadPresentation,
   savePresentation,
+  setParagraphAlignment,
   setShapeParagraphElements,
+  setShapeTextExtensionPayloads,
 } from '../src/api/index.ts';
 
 const fixture = (name: string): string =>
@@ -249,12 +252,183 @@ describe('fn API: getShapeParagraphElements', () => {
       expect.objectContaining({
         kind: 'fld',
         unsupported: expect.arrayContaining([
-          'text field attribute opaque',
-          'text field child payload',
           'text field paragraph attribute hangingPunct',
           'text field paragraph child buNone',
         ]),
       }),
     );
+  });
+
+  it('preserves scoped unknown text extensions across a visible text replacement', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const tb = addSlideTextBox(slide, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(3),
+      h: inches(2),
+      text: 'KnownField',
+    });
+    setShapeParagraphElements(tb, 0, [
+      { kind: 'r', text: 'Known', format: { bold: true } },
+      {
+        kind: 'fld',
+        id: '{11111111-2222-3333-4444-555555555555}',
+        type: 'slidenum',
+        text: 'Field',
+        paragraph: { align: 'left' },
+      },
+    ]);
+    setParagraphAlignment(tb, 0, 'center');
+
+    const entries = unzipSync(await savePresentation(pres));
+    const slidePart = 'ppt/slides/slide1.xml';
+    const original = strFromU8(entries[slidePart]!);
+    const changed = original
+      .replace('<p:sld xmlns:a=', '<p:sld xmlns:rootTextExt="urn:office-kit:text-root" xmlns:a=')
+      .replace(
+        '<a:bodyPr wrap="square" rtlCol="0"/>',
+        '<a:bodyPr wrap="square" rtlCol="0" xmlns:futureBody="urn:office-kit:text-body" futureBody:opaque="body"><a:extLst><a:ext uri="{00000000-0000-0000-0000-000000000001}"><futureBody:payload>body payload</futureBody:payload></a:ext></a:extLst></a:bodyPr>',
+      )
+      .replace(
+        '<a:pPr algn="ctr"/>',
+        '<a:pPr algn="ctr" xmlns:futureParagraph="urn:office-kit:text-paragraph" futureParagraph:opaque="paragraph"><a:extLst><a:ext uri="{00000000-0000-0000-0000-000000000002}"><futureParagraph:payload/></a:ext></a:extLst></a:pPr>',
+      )
+      .replace(
+        '<a:rPr b="1"/>',
+        '<a:rPr b="1" rootTextExt:root-opaque="run-root" xmlns:futureRun="urn:office-kit:text-run" futureRun:opaque="run"><a:extLst><a:ext uri="{00000000-0000-0000-0000-000000000003}"><futureRun:payload><![CDATA[run payload]]></futureRun:payload></a:ext></a:extLst></a:rPr>',
+      )
+      .replace(
+        'type="slidenum"',
+        'type="slidenum" xmlns:futureField="urn:office-kit:text-field" futureField:opaque="field"',
+      )
+      .replace(
+        '<a:pPr algn="l"/>',
+        '<a:pPr algn="l" xmlns:futureFieldParagraph="urn:office-kit:text-field-paragraph" futureFieldParagraph:opaque="field-paragraph"><a:extLst><a:ext uri="{00000000-0000-0000-0000-000000000004}"><futureFieldParagraph:payload/></a:ext></a:extLst></a:pPr>',
+      )
+      .replace('</a:fld>', '<futureField:payload value="field payload"/></a:fld>');
+    expect(changed).not.toBe(original);
+    entries[slidePart] = strToU8(changed);
+
+    const imported = await loadPresentation(zipSync(entries));
+    const importedShape = getSlideShapes(getSlides(imported)[0]!).at(-1)!;
+    const payloads = getShapeTextExtensionPayloads(importedShape);
+    expect(payloads.map((payload) => payload.target.kind)).toEqual([
+      'bodyProperties',
+      'paragraphProperties',
+      'runProperties',
+      'field',
+      'fieldParagraphProperties',
+    ]);
+
+    setShapeParagraphElements(importedShape, 0, [
+      { kind: 'r', text: 'Edited', format: { bold: true } },
+      {
+        kind: 'fld',
+        id: '{11111111-2222-3333-4444-555555555555}',
+        type: 'slidenum',
+        text: 'Field',
+        paragraph: { align: 'left' },
+      },
+    ]);
+    setShapeTextExtensionPayloads(importedShape, payloads);
+
+    const rebuiltEntries = unzipSync(await savePresentation(imported));
+    const rebuilt = strFromU8(rebuiltEntries[slidePart]!);
+    expect(rebuilt).toContain('<a:t>Edited</a:t>');
+    expect(rebuilt).toContain('xmlns:futureBody="urn:office-kit:text-body"');
+    expect(rebuilt).toContain('futureBody:opaque="body"');
+    expect(rebuilt).toContain('<futureBody:payload>body payload</futureBody:payload>');
+    expect(rebuilt).toContain('xmlns:futureParagraph="urn:office-kit:text-paragraph"');
+    expect(rebuilt).toContain('futureParagraph:opaque="paragraph"');
+    expect(rebuilt).toContain('<futureParagraph:payload/>');
+    expect(rebuilt).toContain('xmlns:futureRun="urn:office-kit:text-run"');
+    expect(rebuilt).toContain('xmlns:rootTextExt="urn:office-kit:text-root"');
+    expect(rebuilt).toContain('futureRun:opaque="run"');
+    expect(rebuilt).toContain('rootTextExt:root-opaque="run-root"');
+    expect(rebuilt).toContain('<futureRun:payload><![CDATA[run payload]]></futureRun:payload>');
+    expect(rebuilt).toContain('xmlns:futureField="urn:office-kit:text-field"');
+    expect(rebuilt).toContain('futureField:opaque="field"');
+    expect(rebuilt).toContain('<futureField:payload value="field payload"/>');
+    expect(rebuilt).toContain('xmlns:futureFieldParagraph="urn:office-kit:text-field-paragraph"');
+    expect(rebuilt).toContain('futureFieldParagraph:opaque="field-paragraph"');
+    expect(rebuilt).toContain('<futureFieldParagraph:payload/>');
+  });
+
+  it('validates every scoped text extension before mutating the shape', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const tb = addSlideTextBox(slide, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(3),
+      h: inches(2),
+      text: 'Atomic',
+    });
+    const slidePart = 'ppt/slides/slide1.xml';
+    const before = strFromU8(unzipSync(await savePresentation(pres))[slidePart]!);
+
+    expect(() =>
+      setShapeTextExtensionPayloads(tb, [
+        {
+          target: { kind: 'paragraphProperties', paragraphIndex: 0 },
+          content: {
+            namespaces: [{ prefix: 'future', uri: 'urn:office-kit:atomic' }],
+            attributes: [
+              {
+                name: {
+                  prefix: 'future',
+                  localName: 'opaque',
+                  namespaceUri: 'urn:office-kit:atomic',
+                },
+                value: '1',
+              },
+            ],
+          },
+        },
+        {
+          target: { kind: 'runProperties', paragraphIndex: 0, elementIndex: 99 },
+          content: {},
+        },
+      ]),
+    ).toThrow('elementIndex 99 is out of range');
+    const after = strFromU8(unzipSync(await savePresentation(pres))[slidePart]!);
+    expect(after).toBe(before);
+
+    expect(() =>
+      setShapeTextExtensionPayloads(tb, [
+        {
+          target: { kind: 'bodyProperties' },
+          content: {
+            attributes: [
+              {
+                name: { prefix: '', localName: 'wrap', namespaceUri: '' },
+                value: 'none',
+              },
+            ],
+          },
+        },
+      ]),
+    ).toThrow('ordinary DrawingML attributes are not extensions');
+
+    expect(() =>
+      setShapeTextExtensionPayloads(tb, [
+        {
+          target: { kind: 'bodyProperties' },
+          content: {
+            children: [
+              {
+                kind: 'element',
+                name: {
+                  prefix: 'future',
+                  localName: 'payload',
+                  namespaceUri: 'urn:office-kit:unbound',
+                },
+              },
+            ],
+          },
+        },
+      ]),
+    ).toThrow('without a matching namespace declaration');
   });
 });

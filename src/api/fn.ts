@@ -29,6 +29,7 @@ export * from './fn/shape-fill-stroke.ts';
 export * from './fn/shape-effects.ts';
 export * from './fn/shape-text.ts';
 export * from './fn/shape-runs.ts';
+export * from './fn/shape-text-extensions.ts';
 export * from './fn/shape-color.ts';
 export * from './fn/shape-paragraph.ts';
 export * from './fn/shape-removal-zorder.ts';
