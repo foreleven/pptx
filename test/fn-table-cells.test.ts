@@ -106,6 +106,7 @@ describe('fn API: table cell access', () => {
     setTableCellParagraphs(cell, [
       {
         alignment: 'center',
+        rtl: true,
         beforePts: 4,
         indent: { leftEmu: 12700, firstLineEmu: -6350 },
         runs: [
@@ -122,6 +123,7 @@ describe('fn API: table cell access', () => {
     expect(getTableCellText(cell)).toBe('Revenue 42');
     expect(getTableCellParagraphs(cell)[0]).toMatchObject({
       align: 'center',
+      rtl: true,
       elements: [
         { kind: 'r', text: 'Revenue ', format: { bold: true, font: 'Aptos' } },
         { kind: 'r', text: '42', format: { color: '#3659E3', fontEastAsian: 'PingFang SC' } },

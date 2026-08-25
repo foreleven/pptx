@@ -466,6 +466,7 @@ export const getShapeRunClickAction = (
 export const NAME_A_PPR = qname('a', 'pPr', NS.dml);
 export const ATTR_LVL = qname('', 'lvl', '');
 const ATTR_ALGN_FN = qname('', 'algn', '');
+const ATTR_RTL_FN = qname('', 'rtl', '');
 
 const ensurePPr = (paragraph: XmlElement): XmlElement => {
   const existing = firstChildElement(paragraph, NAME_A_PPR);
@@ -553,6 +554,43 @@ export const getParagraphAlignment = (
   if (pPr === null) return null;
   const v = getAttrValue(pPr, ATTR_ALGN_FN);
   return (v as ParagraphAlignment | null) ?? null;
+};
+
+/**
+ * Sets or clears one paragraph's right-to-left flag (`<a:pPr rtl="…"/>`).
+ * `true` and `false` write explicit OOXML booleans; `null` restores inheritance.
+ */
+export const setParagraphRtl = (
+  shape: SlideShapeData,
+  paragraphIndex: number,
+  value: boolean | null,
+): void => {
+  const paragraph = requireParagraph(shape, paragraphIndex);
+  const existing = firstChildElement(paragraph, NAME_A_PPR);
+  // Clearing an inherited value is a no-op when the paragraph has no direct
+  // properties; avoid materialising an empty <a:pPr> solely for that no-op.
+  if (value === null && existing === null) return;
+  const pPr = existing ?? ensurePPr(paragraph);
+  pPr.attrs = pPr.attrs.filter(
+    (candidate) =>
+      !(
+        candidate.name.namespaceURI === ATTR_RTL_FN.namespaceURI &&
+        candidate.name.localName === 'rtl'
+      ),
+  );
+  if (value !== null) pPr.attrs.push(attr(ATTR_RTL_FN, value ? '1' : '0'));
+  commitAndRefresh(shape);
+};
+
+/** Reads a paragraph's direct RTL flag, or `null` when it inherits the value. */
+export const getParagraphRtl = (shape: SlideShapeData, paragraphIndex: number): boolean | null => {
+  const paragraph = requireParagraph(shape, paragraphIndex);
+  const pPr = firstChildElement(paragraph, NAME_A_PPR);
+  if (pPr === null) return null;
+  const value = getAttrValue(pPr, ATTR_RTL_FN);
+  if (value === '1' || value === 'true') return true;
+  if (value === '0' || value === 'false') return false;
+  return null;
 };
 
 /**

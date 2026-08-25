@@ -505,6 +505,7 @@ export interface TableCellRunInput {
 export interface TableCellParagraphInput {
   readonly runs: ReadonlyArray<TableCellRunInput>;
   readonly alignment?: ParagraphAlignment;
+  readonly rtl?: boolean;
   readonly bullet?: BulletStyle;
   readonly level?: number;
   readonly lineSpacing?:
@@ -569,6 +570,7 @@ const buildTableParagraphProperties = (input: TableCellParagraphInput): XmlEleme
   if (input.alignment !== undefined) {
     attrs.push(attr(qname('', 'algn', ''), tableParagraphAlignmentToken(input.alignment)));
   }
+  if (input.rtl !== undefined) attrs.push(attr(qname('', 'rtl', ''), input.rtl ? '1' : '0'));
   if (input.level !== undefined) {
     if (!Number.isInteger(input.level) || input.level < 0 || input.level > 8) {
       throw new RangeError(
@@ -1243,6 +1245,8 @@ export interface TableCellParagraph {
    * cell then inherits PowerPoint's left default).
    */
   readonly align: ParagraphAlignment | null;
+  /** Direct paragraph direction, or `null` when the cell paragraph inherits it. */
+  readonly rtl: boolean | null;
   /** Runs / fields / breaks in document order, with their literal `<a:rPr>` format. */
   readonly elements: ReadonlyArray<ShapeParagraphElement>;
 }
@@ -1270,11 +1274,18 @@ export const getTableCellParagraphs = (cell: TableCellData): ReadonlyArray<Table
       continue;
     const pPr = firstChildElement(p, qname('a', 'pPr', NS.dml));
     const algn = pPr ? getAttrValue(pPr, qname('', 'algn', '')) : null;
+    const rtlToken = pPr ? getAttrValue(pPr, qname('', 'rtl', '')) : null;
     // Normalise the raw OOXML token (`ctr`, `l`, …) to the friendly form the
     // rest of the API uses, mirroring the shape-text alignment cascade. A
     // token outside the map is malformed input and reads as unset.
     const align: ParagraphAlignment | null = algn !== null ? (ALIGN_TOKEN_MAP[algn] ?? null) : null;
-    out.push({ align, elements: readParagraphElements(p) });
+    const rtl =
+      rtlToken === '1' || rtlToken === 'true'
+        ? true
+        : rtlToken === '0' || rtlToken === 'false'
+          ? false
+          : null;
+    out.push({ align, rtl, elements: readParagraphElements(p) });
   }
   return out;
 };

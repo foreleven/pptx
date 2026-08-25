@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   addSlideTextBox,
+  getParagraphRtl,
   getSlideXmlString,
   getSlides,
   inches,
@@ -15,6 +16,7 @@ import {
   savePresentation,
   setParagraphAlignment,
   setParagraphLevel,
+  setParagraphRtl,
   setShapeText,
 } from '../src/api/index.ts';
 
@@ -65,6 +67,28 @@ describe('fn API: per-paragraph control', () => {
     setParagraphLevel(tb, 1, 0);
     const after = await slideXml(await savePresentation(pres), 0);
     expect((after.match(/lvl="1"/g) ?? []).length).toBe(0);
+  });
+
+  it('setParagraphRtl writes explicit booleans and null restores inheritance', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const tb = addSlideTextBox(slide, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(4),
+      h: inches(2),
+      text: 'first\nsecond',
+    });
+
+    const beforeClear = getSlideXmlString(slide);
+    setParagraphRtl(tb, 1, null);
+    expect(getSlideXmlString(slide)).toBe(beforeClear);
+    setParagraphRtl(tb, 1, true);
+    expect(getParagraphRtl(tb, 1)).toBe(true);
+    setParagraphRtl(tb, 1, false);
+    expect(getParagraphRtl(tb, 1)).toBe(false);
+    setParagraphRtl(tb, 1, null);
+    expect(getParagraphRtl(tb, 1)).toBeNull();
   });
 
   it('setParagraphLevel rejects values outside [0, 8]', async () => {
