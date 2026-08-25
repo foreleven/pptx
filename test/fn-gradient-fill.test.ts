@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
+  getShapeGradientFill,
   getSlideShapes,
   getSlideXmlString,
   getSlides,
@@ -70,6 +71,29 @@ describe('fn API: setShapeGradientFill', () => {
     expect(xml).toContain('<a:gs pos="0">');
     expect(xml).toContain('<a:gs pos="50000">');
     expect(xml).toContain('<a:gs pos="100000">');
+  });
+
+  it('preserves CSS-order alpha on individual gradient stops', async () => {
+    const pres = await loadPresentation(await readFile(fixture('one-text-slide.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const shape = getSlideShapes(slide)[0]!;
+    setShapeGradientFill(shape, {
+      stops: [
+        { offset: 0, color: '#11223380' },
+        { offset: 1, color: '#44556600' },
+      ],
+    });
+
+    expect(getShapeGradientFill(shape)).toEqual({
+      stops: [
+        { offset: 0, color: '#11223380' },
+        { offset: 1, color: '#44556600' },
+      ],
+      angleDeg: 90,
+    });
+    const xml = await slideXml(await savePresentation(pres), 0);
+    expect(xml).toContain('<a:alpha val="50196"/>');
+    expect(xml).toContain('<a:alpha val="0"/>');
   });
 
   it('rejects fewer than two stops', async () => {

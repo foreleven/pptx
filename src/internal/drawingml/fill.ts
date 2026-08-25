@@ -94,7 +94,7 @@ export const clearFill = (host: XmlElement): void => {
 export interface GradientStop {
   /** Position on the gradient axis, 0-1. */
   readonly offset: number;
-  /** `#RRGGBB`, bare `RRGGBB`, or a scheme color token. */
+  /** `#RRGGBB`, CSS-order `#RRGGBBAA`, bare equivalents, or a scheme color token. */
   readonly color: string;
 }
 

@@ -41,7 +41,21 @@ export const readColorFromContainer = (parent: XmlElement): string | null => {
     if (c.kind !== 'element' || c.name.namespaceURI !== NS.dml) continue;
     if (c.name.localName === 'srgbClr') {
       const val = getAttrValue(c, qname('', 'val', ''));
-      if (val !== null) return `#${val.toUpperCase()}`;
+      if (val !== null) {
+        const alpha = firstChildElement(c, qname('a', 'alpha', NS.dml));
+        const authoredAlpha = alpha ? getAttrValue(alpha, qname('', 'val', '')) : null;
+        if (authoredAlpha !== null) {
+          const fraction = Number(authoredAlpha) / 100_000;
+          if (Number.isFinite(fraction)) {
+            const byte = Math.round(Math.max(0, Math.min(1, fraction)) * 255)
+              .toString(16)
+              .padStart(2, '0')
+              .toUpperCase();
+            return `#${val.toUpperCase()}${byte}`;
+          }
+        }
+        return `#${val.toUpperCase()}`;
+      }
     }
     if (c.name.localName === 'schemeClr') {
       const val = getAttrValue(c, qname('', 'val', ''));
