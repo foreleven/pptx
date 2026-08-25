@@ -10,7 +10,13 @@ import {
   applyRunFormat,
   applyRunState,
 } from '../../internal/drawingml/index.ts';
-import { emptyRels, nextRelId, partName, resolveTarget } from '../../internal/opc/index.ts';
+import {
+  basename,
+  emptyRels,
+  nextRelId,
+  partName,
+  resolveTarget,
+} from '../../internal/opc/index.ts';
 import { REL_TYPES } from '../../internal/presentationml/index.ts';
 import {
   NS,
@@ -30,6 +36,7 @@ import {
   SHAPE_SLIDE,
   SHAPE_SNAPSHOT,
   SLIDE_PART_NAME,
+  type SlideData,
   type SlideShapeData,
 } from '../_internal-symbols.ts';
 import { commitAndRefresh, requireTxBody } from './_helpers.ts';
@@ -343,6 +350,276 @@ export const getShapeRunText = (
   runIndex: number,
 ): string => readRunText(requireRun(shape, paragraphIndex, runIndex));
 
+/** Which native run interaction element carries the hyperlink payload. */
+export type ShapeRunHyperlinkActivation = 'click' | 'hover';
+
+/** Relationship-backed destination carried by a run hyperlink. */
+export type ShapeRunHyperlinkTarget =
+  | { readonly kind: 'url'; readonly url: string }
+  | { readonly kind: 'slide'; readonly slide: SlideData };
+
+/** Embedded WAV-compatible sound played by a native hyperlink interaction. */
+export interface ShapeRunHyperlinkSound {
+  readonly data: Uint8Array;
+  readonly contentType: 'audio/mpeg' | 'audio/mp4' | 'audio/wav' | 'audio/x-wav';
+  readonly name?: string;
+}
+
+const isShapeRunHyperlinkSoundContentType = (
+  value: string,
+): value is ShapeRunHyperlinkSound['contentType'] =>
+  value === 'audio/mpeg' ||
+  value === 'audio/mp4' ||
+  value === 'audio/wav' ||
+  value === 'audio/x-wav';
+
+/** Editable DrawingML `CT_Hyperlink` attributes for one run interaction. */
+export interface ShapeRunHyperlinkDescriptor {
+  readonly target?: ShapeRunHyperlinkTarget;
+  /** Exact native action URI. Unknown vendor actions are intentionally preserved. */
+  readonly action?: string;
+  readonly invalidUrl?: string;
+  readonly targetFrame?: string;
+  readonly tooltip?: string;
+  readonly history?: boolean;
+  readonly highlightClick?: boolean;
+  readonly endSound?: boolean;
+  readonly sound?: ShapeRunHyperlinkSound;
+}
+
+const hyperlinkElementName = (activation: ShapeRunHyperlinkActivation) =>
+  qname('a', activation === 'click' ? 'hlinkClick' : 'hlinkMouseOver', NS.dml);
+
+const hyperlinkChildRank = (element: XmlElement): number => {
+  if (element.name.namespaceURI !== NS.dml) return 99;
+  if (element.name.localName === 'hlinkClick') return 10;
+  if (element.name.localName === 'hlinkMouseOver') return 11;
+  if (element.name.localName === 'rtl') return 12;
+  if (element.name.localName === 'extLst') return 13;
+  return 9;
+};
+
+const readHyperlinkBoolean = (element: XmlElement, name: string): boolean | undefined => {
+  const value = getAttrValue(element, qname('', name, ''));
+  if (value === null) return undefined;
+  return value === '1' || value === 'true';
+};
+
+const resolveHyperlinkTarget = (
+  shape: SlideShapeData,
+  relationshipId: string | null,
+): ShapeRunHyperlinkTarget | undefined => {
+  if (relationshipId === null || relationshipId === '') return undefined;
+  const slide = shape[SHAPE_SLIDE];
+  const pkg = slide[INTERNAL_PACKAGE];
+  const relationship = pkg
+    .getRels(slide[SLIDE_PART_NAME])
+    ?.items.find((candidate) => candidate.id === relationshipId);
+  if (!relationship) return undefined;
+  if (relationship.type === REL_TYPES.hyperlink && relationship.targetMode === 'External') {
+    return { kind: 'url', url: relationship.target };
+  }
+  if (relationship.type !== REL_TYPES.slide || relationship.targetMode !== 'Internal') {
+    return undefined;
+  }
+  const targetPartName = relationship.target.startsWith('/')
+    ? partName(relationship.target)
+    : resolveTarget(slide[SLIDE_PART_NAME], relationship.target);
+  const presentation: PresentationData = { [INTERNAL_PACKAGE]: pkg, _slidesCache: null };
+  const targetSlide = getSlides(presentation).find(
+    (candidate) => candidate[SLIDE_PART_NAME] === targetPartName,
+  );
+  return targetSlide ? { kind: 'slide', slide: targetSlide } : undefined;
+};
+
+/** Read one complete click or hover `CT_Hyperlink` payload without flattening unknown actions. */
+export const getShapeRunHyperlinkDescriptor = (
+  shape: SlideShapeData,
+  paragraphIndex: number,
+  runIndex: number,
+  activation: ShapeRunHyperlinkActivation,
+): ShapeRunHyperlinkDescriptor | null => {
+  const run = requireRun(shape, paragraphIndex, runIndex);
+  const rPr = firstChildElement(run, NAME_A_RPR);
+  if (!rPr) return null;
+  const hyperlink = firstChildElement(rPr, hyperlinkElementName(activation));
+  if (!hyperlink) return null;
+  const target = resolveHyperlinkTarget(
+    shape,
+    getAttrValue(hyperlink, qname('r', 'id', NS.officeDocRels)),
+  );
+  const read = (name: string): string | undefined =>
+    getAttrValue(hyperlink, qname('', name, '')) ?? undefined;
+  const action = read('action');
+  const invalidUrl = read('invalidUrl');
+  const targetFrame = read('tgtFrame');
+  const tooltip = read('tooltip');
+  const history = readHyperlinkBoolean(hyperlink, 'history');
+  const highlightClick = readHyperlinkBoolean(hyperlink, 'highlightClick');
+  const endSound = readHyperlinkBoolean(hyperlink, 'endSnd');
+  const soundElement = firstChildElement(hyperlink, qname('a', 'snd', NS.dml));
+  const soundRelationshipId = soundElement
+    ? getAttrValue(soundElement, qname('r', 'embed', NS.officeDocRels))
+    : null;
+  const slide = shape[SHAPE_SLIDE];
+  const soundRelationship = soundRelationshipId
+    ? slide[INTERNAL_PACKAGE]
+        .getRels(slide[SLIDE_PART_NAME])
+        ?.items.find((candidate) => candidate.id === soundRelationshipId)
+    : undefined;
+  const soundPartName =
+    soundRelationship?.type === REL_TYPES.audio && soundRelationship.targetMode === 'Internal'
+      ? resolveTarget(slide[SLIDE_PART_NAME], soundRelationship.target)
+      : null;
+  const soundPart = soundPartName ? slide[INTERNAL_PACKAGE].getPart(partName(soundPartName)) : null;
+  const sound =
+    soundPart && isShapeRunHyperlinkSoundContentType(soundPart.contentType)
+      ? {
+          data: soundPart.data,
+          contentType: soundPart.contentType,
+          ...(soundElement && getAttrValue(soundElement, qname('', 'name', '')) !== null
+            ? { name: getAttrValue(soundElement, qname('', 'name', '')) ?? '' }
+            : {}),
+        }
+      : undefined;
+  return {
+    ...(target ? { target } : {}),
+    ...(action === undefined ? {} : { action }),
+    ...(invalidUrl === undefined ? {} : { invalidUrl }),
+    ...(targetFrame === undefined ? {} : { targetFrame }),
+    ...(tooltip === undefined ? {} : { tooltip }),
+    ...(history === undefined ? {} : { history }),
+    ...(highlightClick === undefined ? {} : { highlightClick }),
+    ...(endSound === undefined ? {} : { endSound }),
+    ...(sound === undefined ? {} : { sound }),
+  };
+};
+
+/** Set or clear one complete run-level click/hover hyperlink payload. */
+export const setShapeRunHyperlinkDescriptor = (
+  shape: SlideShapeData,
+  paragraphIndex: number,
+  runIndex: number,
+  activation: ShapeRunHyperlinkActivation,
+  descriptor: ShapeRunHyperlinkDescriptor | null,
+): void => {
+  const run = requireRun(shape, paragraphIndex, runIndex);
+  const rPr = ensureRPr(run);
+  const name = hyperlinkElementName(activation);
+  const oldRelationshipIds = new Set<string>();
+  for (const child of rPr.children) {
+    if (
+      child.kind === 'element' &&
+      child.name.namespaceURI === name.namespaceURI &&
+      child.name.localName === name.localName
+    ) {
+      for (const id of hyperlinkRelationshipIds(child)) oldRelationshipIds.add(id);
+    }
+  }
+  rPr.children = rPr.children.filter(
+    (child) =>
+      !(
+        child.kind === 'element' &&
+        child.name.namespaceURI === name.namespaceURI &&
+        child.name.localName === name.localName
+      ),
+  );
+
+  const slide = shape[SHAPE_SLIDE];
+  if (descriptor !== null) {
+    const attrs = [] as Array<ReturnType<typeof attr>>;
+    const target = descriptor.target;
+    if (target) {
+      const rels = slide[INTERNAL_PACKAGE].getRels(slide[SLIDE_PART_NAME]) ?? emptyRels();
+      const existing = rels.items.find((relationship) =>
+        target.kind === 'url'
+          ? relationship.type === REL_TYPES.hyperlink &&
+            relationship.targetMode === 'External' &&
+            relationship.target === target.url
+          : relationship.type === REL_TYPES.slide &&
+            relationship.targetMode === 'Internal' &&
+            relationship.target === `../slides/${basename(target.slide[SLIDE_PART_NAME])}`,
+      );
+      const relationshipId =
+        existing?.id ?? nextRelId(rels.items.map((relationship) => relationship.id));
+      if (!existing) {
+        rels.items.push(
+          target.kind === 'url'
+            ? {
+                id: relationshipId,
+                type: REL_TYPES.hyperlink,
+                target: target.url,
+                targetMode: 'External',
+              }
+            : {
+                id: relationshipId,
+                type: REL_TYPES.slide,
+                target: `../slides/${basename(target.slide[SLIDE_PART_NAME])}`,
+                targetMode: 'Internal',
+              },
+        );
+        slide[INTERNAL_PACKAGE].setRels(slide[SLIDE_PART_NAME], rels);
+      }
+      attrs.push(attr(qname('r', 'id', NS.officeDocRels), relationshipId));
+    }
+    const addString = (name: string, value: string | undefined): void => {
+      if (value !== undefined) attrs.push(attr(qname('', name, ''), value));
+    };
+    const addBoolean = (name: string, value: boolean | undefined): void => {
+      if (value !== undefined) attrs.push(attr(qname('', name, ''), value ? '1' : '0'));
+    };
+    addString('invalidUrl', descriptor.invalidUrl);
+    addString('action', descriptor.action);
+    addString('tgtFrame', descriptor.targetFrame);
+    addString('tooltip', descriptor.tooltip);
+    addBoolean('history', descriptor.history);
+    addBoolean('highlightClick', descriptor.highlightClick);
+    addBoolean('endSnd', descriptor.endSound);
+    const children: XmlElement[] = [];
+    if (descriptor.sound) {
+      const extension = {
+        'audio/mpeg': 'mp3',
+        'audio/mp4': 'm4a',
+        'audio/wav': 'wav',
+        'audio/x-wav': 'wav',
+      }[descriptor.sound.contentType];
+      let mediaNumber = 1;
+      for (const part of slide[INTERNAL_PACKAGE].parts) {
+        const value = /^\/ppt\/media\/media(\d+)\./u.exec(part.name)?.[1];
+        if (value !== undefined) mediaNumber = Math.max(mediaNumber, Number(value) + 1);
+      }
+      const mediaPartName = partName(`/ppt/media/media${mediaNumber}.${extension}`);
+      slide[INTERNAL_PACKAGE].addPart(
+        mediaPartName,
+        descriptor.sound.contentType,
+        descriptor.sound.data,
+      );
+      const rels = slide[INTERNAL_PACKAGE].getRels(slide[SLIDE_PART_NAME]) ?? emptyRels();
+      const soundRelationshipId = nextRelId(rels.items.map((relationship) => relationship.id));
+      rels.items.push({
+        id: soundRelationshipId,
+        type: REL_TYPES.audio,
+        target: `../media/media${mediaNumber}.${extension}`,
+        targetMode: 'Internal',
+      });
+      slide[INTERNAL_PACKAGE].setRels(slide[SLIDE_PART_NAME], rels);
+      children.push(
+        elem(qname('a', 'snd', NS.dml), {
+          attrs: [
+            attr(qname('r', 'embed', NS.officeDocRels), soundRelationshipId),
+            ...(descriptor.sound.name === undefined
+              ? []
+              : [attr(qname('', 'name', ''), descriptor.sound.name)]),
+          ],
+        }),
+      );
+    }
+    insertChildByRank(rPr, elem(name, { attrs, children }), hyperlinkChildRank);
+  }
+  removeUnreferencedSlideRelationships(slide, oldRelationshipIds);
+  commitAndRefresh(shape);
+};
+
 /**
  * Sets `<a:hlinkClick>` on a single run. Per-run counterpart to
  * `setShapeHyperlink` (which targets every run in the shape). Pass
@@ -357,62 +634,15 @@ export const setShapeRunHyperlink = (
   url: string | null,
   tooltip?: string,
 ): void => {
-  const run = requireRun(shape, paragraphIndex, runIndex);
-  let rPr = firstChildElement(run, qname('a', 'rPr', NS.dml));
-  if (rPr === null) {
-    rPr = elem(qname('a', 'rPr', NS.dml));
-    run.children.unshift(rPr);
-  }
-  const oldRelationshipIds = new Set<string>();
-  for (const child of rPr.children) {
-    if (
-      child.kind === 'element' &&
-      child.name.namespaceURI === NS.dml &&
-      child.name.localName === 'hlinkClick'
-    ) {
-      for (const id of hyperlinkRelationshipIds(child)) oldRelationshipIds.add(id);
-    }
-  }
-  rPr.children = rPr.children.filter(
-    (c) =>
-      !(
-        c.kind === 'element' &&
-        c.name.namespaceURI === NS.dml &&
-        c.name.localName === 'hlinkClick'
-      ),
+  setShapeRunHyperlinkDescriptor(
+    shape,
+    paragraphIndex,
+    runIndex,
+    'click',
+    url === null
+      ? null
+      : { target: { kind: 'url', url }, ...(tooltip === undefined ? {} : { tooltip }) },
   );
-  if (url !== null) {
-    const slide = shape[SHAPE_SLIDE];
-    const pkg = slide[INTERNAL_PACKAGE];
-    const rels = pkg.getRels(slide[SLIDE_PART_NAME]) ?? emptyRels();
-    const existing = rels.items.find(
-      (r) => r.type === REL_TYPES.hyperlink && r.target === url && r.targetMode === 'External',
-    );
-    let rId: string;
-    if (existing) {
-      rId = existing.id;
-    } else {
-      rId = nextRelId(rels.items.map((r) => r.id));
-      rels.items.push({
-        id: rId,
-        type: REL_TYPES.hyperlink,
-        target: url,
-        targetMode: 'External',
-      });
-      pkg.setRels(slide[SLIDE_PART_NAME], rels);
-    }
-    const hlinkAttrs = [attr(qname('r', 'id', NS.officeDocRels), rId)];
-    if (tooltip !== undefined) {
-      hlinkAttrs.push(attr(qname('', 'tooltip', ''), tooltip));
-    }
-    rPr.children.push(
-      elem(qname('a', 'hlinkClick', NS.dml), {
-        attrs: hlinkAttrs,
-      }),
-    );
-  }
-  removeUnreferencedSlideRelationships(shape[SHAPE_SLIDE], oldRelationshipIds);
-  commitAndRefresh(shape);
 };
 
 /**
