@@ -38,6 +38,8 @@ export type {
 export type { SlideChartData } from './fn.ts';
 export type { ShapeClickAction } from './fn.ts';
 export type {
+  ShapeEndParagraphProperties,
+  ShapeEndParagraphPropertiesInput,
   ShapeParagraphElementInput,
   ShapeRunHyperlinkActivation,
   ShapeRunHyperlinkDescriptor,
@@ -288,6 +290,7 @@ export {
   getShapeMediaKind,
   extractOpaqueObjectFragment,
   getOpaqueObjectKind,
+  getShapeEndParagraphProperties,
   getShapeName,
   getShapePatternFill,
   getShapeParagraphCount,
@@ -547,6 +550,7 @@ export {
   setShapeRunFormat,
   setShapeRunHyperlink,
   setShapeRunHyperlinkDescriptor,
+  setShapeEndParagraphProperties,
   setShapeParagraphElements,
   setShapeTextExtensionPayloads,
   setShapeRunText,

@@ -89,6 +89,18 @@ export interface ShapeFieldParagraphProperties {
   readonly tabStops?: readonly ParagraphTabStop[];
 }
 
+/** Direct character properties carried by one paragraph's terminal mark. */
+export interface ShapeEndParagraphProperties {
+  readonly format: TextFormat;
+  readonly state: TextRunState | null;
+}
+
+/** Editable input for one paragraph's terminal character properties. */
+export interface ShapeEndParagraphPropertiesInput {
+  readonly format?: TextFormat;
+  readonly state?: TextRunState | null;
+}
+
 /** One authorable inline paragraph element. */
 export type ShapeParagraphElementInput =
   | {
@@ -284,6 +296,78 @@ export const getShapeParagraphElements = (
   paragraphIndex: number,
 ): ReadonlyArray<ShapeParagraphElement> =>
   readParagraphElements(requireParagraph(shape, paragraphIndex));
+
+/** Read the direct `<a:endParaRPr>` properties, preserving authored-empty presence. */
+export const getShapeEndParagraphProperties = (
+  shape: SlideShapeData,
+  paragraphIndex: number,
+): ShapeEndParagraphProperties | null => {
+  const paragraph = requireParagraph(shape, paragraphIndex);
+  const endProperties = firstChildElement(paragraph, NAME_A_END_PARA_RPR);
+  if (endProperties === null) return null;
+  return {
+    format: parseRPrLikeElement(endProperties) as TextFormat,
+    state: parseTextRunState(endProperties),
+  };
+};
+
+const stableJsonValue = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(stableJsonValue);
+  if (value === null || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => [key, stableJsonValue(item)]),
+  );
+};
+
+const sameEndParagraphProperties = (
+  current: ShapeEndParagraphProperties,
+  requested: ShapeEndParagraphPropertiesInput,
+): boolean =>
+  JSON.stringify(stableJsonValue(current)) ===
+  JSON.stringify(
+    stableJsonValue({
+      format: requested.format ?? {},
+      state: requested.state ?? null,
+    }),
+  );
+
+/** Replace or remove the direct `<a:endParaRPr>` terminal-mark properties. */
+export const setShapeEndParagraphProperties = (
+  shape: SlideShapeData,
+  paragraphIndex: number,
+  properties: ShapeEndParagraphPropertiesInput | null,
+): void => {
+  const paragraph = requireParagraph(shape, paragraphIndex);
+  const previous = firstChildElement(paragraph, NAME_A_END_PARA_RPR);
+  if (previous === null && properties === null) return;
+  if (previous !== null && properties !== null) {
+    const current: ShapeEndParagraphProperties = {
+      format: parseRPrLikeElement(previous) as TextFormat,
+      state: parseTextRunState(previous),
+    };
+    if (sameEndParagraphProperties(current, properties)) return;
+  }
+  const oldRelationshipIds =
+    previous === null ? new Set<string>() : hyperlinkRelationshipIds(previous);
+  paragraph.children = paragraph.children.filter(
+    (child) =>
+      !(
+        child.kind === 'element' &&
+        child.name.namespaceURI === NAME_A_END_PARA_RPR.namespaceURI &&
+        child.name.localName === NAME_A_END_PARA_RPR.localName
+      ),
+  );
+  if (properties !== null) {
+    const endProperties = elem(NAME_A_END_PARA_RPR);
+    if (properties.format) applyRunFormat(endProperties, properties.format);
+    if (properties.state) applyRunState(endProperties, properties.state);
+    paragraph.children.push(endProperties);
+  }
+  removeUnreferencedSlideRelationships(shape[SHAPE_SLIDE], oldRelationshipIds);
+  commitAndRefresh(shape);
+};
 
 /**
  * Walks a single `<a:p>` element and returns its inline children in

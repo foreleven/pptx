@@ -9,14 +9,17 @@ import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
 import {
   addSlideTextBox,
+  getShapeEndParagraphProperties,
   getShapeParagraphElements,
   getShapeTextExtensionPayloads,
+  getShapeXmlString,
   getSlideShapes,
   getSlides,
   inches,
   loadPresentation,
   savePresentation,
   setParagraphAlignment,
+  setShapeEndParagraphProperties,
   setShapeParagraphElements,
   setShapeTextExtensionPayloads,
 } from '../src/api/index.ts';
@@ -25,6 +28,60 @@ const fixture = (name: string): string =>
   fileURLToPath(new URL(`./fixtures/minimal/${name}`, import.meta.url));
 
 describe('fn API: getShapeParagraphElements', () => {
+  it('reads, replaces, persists, and removes direct end-paragraph properties', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const tb = addSlideTextBox(slide, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(3),
+      h: inches(2),
+      text: 'terminal mark',
+    });
+
+    expect(getShapeEndParagraphProperties(tb, 0)).toBeNull();
+    const beforeAbsentNoOp = getShapeXmlString(tb);
+    setShapeEndParagraphProperties(tb, 0, null);
+    expect(getShapeXmlString(tb)).toBe(beforeAbsentNoOp);
+    setShapeEndParagraphProperties(tb, 0, {
+      format: {
+        font: 'Aptos',
+        fontEastAsian: 'Yu Gothic',
+        language: 'en-US',
+        size: 21,
+        color: '#F26B5B',
+        bold: true,
+      },
+      state: { normalizeHeight: true, dirty: false },
+    });
+    expect(getShapeEndParagraphProperties(tb, 0)).toEqual({
+      format: {
+        font: 'Aptos',
+        fontEastAsian: 'Yu Gothic',
+        language: 'en-US',
+        size: 21,
+        color: '#F26B5B',
+        bold: true,
+      },
+      state: { normalizeHeight: true, dirty: false },
+    });
+
+    const reloaded = await loadPresentation(await savePresentation(pres));
+    const reloadedShape = getSlideShapes(getSlides(reloaded)[0]!).at(-1)!;
+    expect(getShapeEndParagraphProperties(reloadedShape, 0)).toEqual(
+      getShapeEndParagraphProperties(tb, 0),
+    );
+    const beforeNoOp = getShapeXmlString(reloadedShape);
+    setShapeEndParagraphProperties(
+      reloadedShape,
+      0,
+      getShapeEndParagraphProperties(reloadedShape, 0)!,
+    );
+    expect(getShapeXmlString(reloadedShape)).toBe(beforeNoOp);
+    setShapeEndParagraphProperties(reloadedShape, 0, null);
+    expect(getShapeEndParagraphProperties(reloadedShape, 0)).toBeNull();
+  });
+
   it('emits a single run for a one-word text box', async () => {
     const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
     const slide = getSlides(pres)[0]!;
