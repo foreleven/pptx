@@ -50,6 +50,10 @@ import {
 } from '../_internal-symbols.ts';
 import { commitAndRefresh, decode, requireTxBody } from './_helpers.ts';
 import { getPresentationFonts, getPresentationTheme } from './theme.ts';
+import {
+  hyperlinkRelationshipIds,
+  removeUnreferencedSlideRelationships,
+} from './hyperlink-relationships.ts';
 // -- Effective rPr cascade (ECMA-376 §21.1.2.4.7) ---------------------------
 //
 // A run's effective character properties are resolved by walking the
@@ -841,6 +845,7 @@ export const setShapeHyperlink = (
 ): void => {
   const slide = shape[SHAPE_SLIDE];
   const txBody = requireTxBody(shape);
+  const oldRelationshipIds = hyperlinkRelationshipIds(txBody);
   if (url === null) {
     applyHyperlinkToAllRuns(txBody, null);
   } else {
@@ -864,5 +869,6 @@ export const setShapeHyperlink = (
       })();
     applyHyperlinkToAllRuns(txBody, rId, tooltip);
   }
+  removeUnreferencedSlideRelationships(slide, oldRelationshipIds);
   commitAndRefresh(shape);
 };

@@ -190,6 +190,7 @@ export const setShapeParagraphElements = (
     throw new RangeError('setShapeParagraphElements requires at least one element.');
   }
   const paragraph = requireParagraph(shape, paragraphIndex);
+  const oldRelationshipIds = hyperlinkRelationshipIds(paragraph);
   const paragraphProperties = firstChildElement(paragraph, NAME_A_PPR);
   const endProperties = firstChildElement(paragraph, NAME_A_END_PARA_RPR);
   const authoredElements = elements.map((value) => {
@@ -231,6 +232,7 @@ export const setShapeParagraphElements = (
     ...authoredElements,
     ...(endProperties ? [endProperties] : []),
   ];
+  removeUnreferencedSlideRelationships(shape[SHAPE_SLIDE], oldRelationshipIds);
   commitAndRefresh(shape);
 };
 

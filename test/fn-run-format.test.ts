@@ -7,16 +7,21 @@
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { partName } from '../src/internal/opc/index.ts';
 import {
+  _internalPackageOf,
+  getMediaParts,
   getShapeParagraphCount,
   getShapeRunCount,
   getShapeRunText,
   getSlideShapes,
+  getSlidePartName,
   getSlideXmlString,
   getSlides,
   loadPresentation,
   savePresentation,
   setShapeRunFormat,
+  setShapeRunHyperlinkDescriptor,
   setShapeParagraphElements,
   setShapeRunText,
   setShapeText,
@@ -86,6 +91,26 @@ describe('fn API: per-run text editing', () => {
     const reloadedShape = getSlideShapes(getSlides(reloaded)[0]!)[0]!;
     expect(getShapeRunText(reloadedShape, 0, 0)).toBe('3,309');
     expect(getShapeRunText(reloadedShape, 0, 1)).toBe(' 亿港元');
+  });
+
+  it('setShapeParagraphElements collects relationships and sound parts owned by replaced runs', async () => {
+    const pres = await loadPresentation(await readFile(fixture('one-text-slide.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const shape = getSlideShapes(slide)[0]!;
+    setShapeRunHyperlinkDescriptor(shape, 0, 0, 'click', {
+      target: { kind: 'url', url: 'https://obsolete.example/' },
+      sound: { data: new Uint8Array([1, 2, 3]), contentType: 'audio/wav' },
+    });
+    expect(getMediaParts(pres).filter((part) => part.contentType === 'audio/wav')).toHaveLength(1);
+
+    setShapeParagraphElements(shape, 0, [{ kind: 'r', text: 'replacement' }]);
+
+    expect(getMediaParts(pres).filter((part) => part.contentType === 'audio/wav')).toHaveLength(0);
+    expect(
+      _internalPackageOf(pres)
+        .getRels(partName(getSlidePartName(slide)))
+        ?.items.some((relationship) => relationship.target === 'https://obsolete.example/'),
+    ).toBe(false);
   });
 
   it('setShapeRunText replaces visible characters but preserves rPr', async () => {
