@@ -87,6 +87,7 @@ import {
   getShapeStrokeDash,
   getShapeStrokeJoin,
   getShapeTextAnchor,
+  getShapeTextAutoFit,
   getShapeTextAutoFitParams,
   getShapeTextMargins,
   getGroupChildren,
@@ -2829,7 +2830,12 @@ export const resolveTextBodyModel = (
   // An earlier heuristic shrank such shapes to fit their authored box, which
   // rendered template placeholders (size inherited from layout/master, box
   // sized by the template author) at up to 0.4× of their PowerPoint size.
-  const authoredAutofit = getShapeTextAutoFitParams(shape);
+  const explicitAutofit = getShapeTextAutoFitParams(shape);
+  // The public parameter reader preserves absent attributes as null. The preview
+  // still needs schema defaults to run its dynamic shrink search for bare normAutofit.
+  const authoredAutofit =
+    explicitAutofit ??
+    (getShapeTextAutoFit(shape) === 'normal' ? { fontScale: 1, lnSpcReduction: 0 } : null);
   let autoFitScale = authoredAutofit?.fontScale ?? 1;
   const lineHeightScale = 1 - (authoredAutofit?.lnSpcReduction ?? 0);
 
