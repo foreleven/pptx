@@ -150,6 +150,36 @@ describe('fn API: setShapeTextAutoFit', () => {
     expect(getShapeTextAutoFitParams(strictShape)).toBeNull();
   });
 
+  it('uses schema defaults for malformed native autofit ratio lexemes', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const tb = addSlideTextBox(slide, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(3),
+      h: inches(2),
+      text: 'A',
+    });
+    setShapeTextAutoFit(tb, 'normal', { fontScale: 0.72, lnSpcReduction: 0.18 });
+    const sourceEntries = unzipSync(await savePresentation(pres));
+
+    for (const malformed of ['', ' ', '0x10', '1e5', '.72%', '72.%']) {
+      const entries = { ...sourceEntries };
+      entries['ppt/slides/slide1.xml'] = strToU8(
+        strFromU8(entries['ppt/slides/slide1.xml']!).replace(
+          'fontScale="72000"',
+          `fontScale="${malformed}"`,
+        ),
+      );
+      const loaded = await loadPresentation(zipSync(entries));
+      const loadedShape = getSlideShapes(getSlides(loaded)[0]!).at(-1)!;
+      expect(getShapeTextAutoFitParamsRaw(loadedShape), malformed).toEqual({
+        fontScale: 1,
+        lnSpcReduction: 0.18,
+      });
+    }
+  });
+
   it('rejects invalid reduction parameters before mutating the current mode', async () => {
     const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
     const slide = getSlides(pres)[0]!;

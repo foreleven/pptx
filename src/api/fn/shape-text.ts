@@ -387,10 +387,17 @@ export const getShapeTextAutoFitParams = (shape: SlideShapeData): TextAutoFitPar
     : null;
 };
 
-/** Normalize Transitional 1/1000-percent integers and Strict percent lexemes to a unit ratio. */
+const TEXT_AUTO_FIT_INTEGER = /^[+-]?\d+$/u;
+const TEXT_AUTO_FIT_PERCENT = /^-?\d+(?:\.\d+)?%$/u;
+
+/** Normalize exact Transitional integers and Strict percent strings to a unit ratio, or use the schema default. */
 const parseTextAutoFitRatio = (value: string | null, fallback: number): number => {
   if (value === null) return fallback;
-  const parsed = value.endsWith('%') ? Number(value.slice(0, -1)) / 100 : Number(value) / 100_000;
+  const parsed = TEXT_AUTO_FIT_PERCENT.test(value)
+    ? Number(value.slice(0, -1)) / 100
+    : TEXT_AUTO_FIT_INTEGER.test(value)
+      ? Number(value) / 100_000
+      : Number.NaN;
   return Number.isFinite(parsed) ? parsed : fallback;
 };
 
