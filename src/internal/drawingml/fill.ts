@@ -222,12 +222,11 @@ export const setPatternFill = (host: XmlElement, options: PatternFillOptions): v
   host.children.splice(fillInsertionIndex(host), 0, pattFill);
 };
 
-/** Sets `<a:gradFill>` on `host`, replacing any previous fill choice. */
-export const setGradientFill = (host: XmlElement, options: GradientFillOptions): void => {
+/** Build one validated `<a:gradFill>` without mutating its eventual host. */
+export const buildGradientFill = (options: GradientFillOptions): XmlElement => {
   if (options.stops.length < 2) {
     throw new Error('gradient fill requires at least two stops');
   }
-  removeAnyFill(host);
 
   const stops = options.stops.map((s) => {
     if (!Number.isFinite(s.offset) || s.offset < 0 || s.offset > 1) {
@@ -274,9 +273,15 @@ export const setGradientFill = (host: XmlElement, options: GradientFillOptions):
                 ],
         });
 
-  const grad = elem(NAME_GRAD_FILL, {
+  return elem(NAME_GRAD_FILL, {
     attrs: [attr(ATTR_FLIP, 'none'), attr(ATTR_ROT_WITH_SHAPE, '1')],
     children: [elem(NAME_GS_LST, { children: stops }), directionEl],
   });
+};
+
+/** Sets `<a:gradFill>` on `host`, replacing any previous fill choice. */
+export const setGradientFill = (host: XmlElement, options: GradientFillOptions): void => {
+  const grad = buildGradientFill(options);
+  removeAnyFill(host);
   host.children.splice(fillInsertionIndex(host), 0, grad);
 };

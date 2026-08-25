@@ -37,6 +37,182 @@ const unexpectedAttributes = (
     )
     .map((attribute) => `${label} attribute ${attribute.name.localName}`);
 
+const RUN_FILL_CHOICES = new Set([
+  'noFill',
+  'solidFill',
+  'gradFill',
+  'blipFill',
+  'pattFill',
+  'grpFill',
+]);
+
+const parseTextGradient = (rPr: XmlElement): NonNullable<TextFormat['gradient']> | undefined => {
+  const fills = rPr.children.filter(
+    (child): child is XmlElement =>
+      child.kind === 'element' &&
+      child.name.namespaceURI === NS.dml &&
+      RUN_FILL_CHOICES.has(child.name.localName),
+  );
+  const gradient = fills.find((fill) => fill.name.localName === 'gradFill');
+  if (!gradient) {
+    const unsupportedFill = fills.find((fill) => fill.name.localName !== 'solidFill');
+    return unsupportedFill
+      ? { unsupported: `text fill ${unsupportedFill.name.localName}` }
+      : undefined;
+  }
+
+  const unsupported: string[] = [];
+  if (fills.length !== 1) unsupported.push('multiple text fill choices');
+  unsupported.push(
+    ...unexpectedAttributes(gradient, new Set(['flip', 'rotWithShape']), 'text gradient'),
+  );
+  const flip = getAttrValue(gradient, qname('', 'flip', ''));
+  if (flip !== null && flip !== 'none') unsupported.push(`text gradient flip ${flip}`);
+  const rotate = getAttrValue(gradient, qname('', 'rotWithShape', ''));
+  if (rotate !== null && rotate !== '1' && rotate !== 'true') {
+    unsupported.push(`text gradient rotWithShape ${rotate}`);
+  }
+
+  const children = gradient.children.filter(
+    (child): child is XmlElement => child.kind === 'element',
+  );
+  const gsLists = children.filter(
+    (child) => child.name.namespaceURI === NS.dml && child.name.localName === 'gsLst',
+  );
+  const linear = children.filter(
+    (child) => child.name.namespaceURI === NS.dml && child.name.localName === 'lin',
+  );
+  if (gsLists.length !== 1) unsupported.push(`text gradient gsLst count ${gsLists.length}`);
+  if (linear.length !== 1) unsupported.push(`text gradient lin count ${linear.length}`);
+  for (const child of children) {
+    if (
+      child.name.namespaceURI !== NS.dml ||
+      (child.name.localName !== 'gsLst' && child.name.localName !== 'lin')
+    ) {
+      unsupported.push(`text gradient child ${child.name.localName}`);
+    }
+  }
+
+  const stops: Array<{ offset: number; color: string }> = [];
+  const gsList = gsLists[0];
+  if (gsList) {
+    unsupported.push(...unexpectedAttributes(gsList, new Set(), 'text gradient stop list'));
+    const stopElements = gsList.children.filter(
+      (child): child is XmlElement => child.kind === 'element',
+    );
+    if (stopElements.length < 2)
+      unsupported.push(`text gradient stop count ${stopElements.length}`);
+    let previousPosition = -1;
+    for (const stop of stopElements) {
+      if (stop.name.namespaceURI !== NS.dml || stop.name.localName !== 'gs') {
+        unsupported.push(`text gradient stop child ${stop.name.localName}`);
+        continue;
+      }
+      unsupported.push(...unexpectedAttributes(stop, new Set(['pos']), 'text gradient stop'));
+      const positionRaw = getAttrValue(stop, qname('', 'pos', '')) ?? '';
+      const position = Number(positionRaw);
+      if (
+        !/^\d+$/u.test(positionRaw) ||
+        !Number.isSafeInteger(position) ||
+        position < 0 ||
+        position > 100_000
+      ) {
+        unsupported.push(`text gradient stop position ${positionRaw || 'missing'}`);
+      } else if (position < previousPosition) {
+        unsupported.push('text gradient stop positions decrease');
+      }
+      previousPosition = position;
+
+      const colors = stop.children.filter((child): child is XmlElement => child.kind === 'element');
+      const color = colors[0];
+      if (
+        colors.length !== 1 ||
+        color?.name.namespaceURI !== NS.dml ||
+        color.name.localName !== 'srgbClr'
+      ) {
+        unsupported.push(`text gradient stop color ${color?.name.localName ?? 'missing'}`);
+        continue;
+      }
+      unsupported.push(
+        ...unexpectedAttributes(color, new Set(['val']), 'text gradient stop color'),
+      );
+      const colorRaw = getAttrValue(color, qname('', 'val', '')) ?? '';
+      if (!/^[\dA-Fa-f]{6}$/u.test(colorRaw)) {
+        unsupported.push(`text gradient stop color ${colorRaw || 'missing'}`);
+        continue;
+      }
+      const transforms = color.children.filter(
+        (child): child is XmlElement => child.kind === 'element',
+      );
+      let alphaHex = '';
+      if (
+        transforms.length > 1 ||
+        (transforms[0] &&
+          (transforms[0].name.namespaceURI !== NS.dml || transforms[0].name.localName !== 'alpha'))
+      ) {
+        unsupported.push('text gradient stop color transforms');
+      } else if (transforms[0]) {
+        const alpha = transforms[0];
+        unsupported.push(
+          ...unexpectedAttributes(alpha, new Set(['val']), 'text gradient stop alpha'),
+        );
+        if (alpha.children.some((child) => child.kind === 'element')) {
+          unsupported.push('text gradient stop alpha children');
+        }
+        const alphaRaw = getAttrValue(alpha, qname('', 'val', '')) ?? '';
+        const alphaValue = Number(alphaRaw);
+        if (
+          !/^\d+$/u.test(alphaRaw) ||
+          !Number.isInteger(alphaValue) ||
+          alphaValue < 0 ||
+          alphaValue > 100_000
+        ) {
+          unsupported.push(`text gradient stop alpha ${alphaRaw || 'missing'}`);
+        } else {
+          const alphaByte = Math.round((alphaValue / 100_000) * 255);
+          const cssAlphaValue = Math.round((alphaByte / 255) * 100_000);
+          if (alphaValue !== cssAlphaValue) {
+            unsupported.push(`text gradient stop alpha ${alphaRaw} exceeds CSS hex-byte precision`);
+          } else {
+            alphaHex = alphaByte.toString(16).padStart(2, '0').toUpperCase();
+          }
+        }
+      }
+      if (/^\d+$/u.test(positionRaw) && position >= 0 && position <= 100_000) {
+        stops.push({ offset: position / 100_000, color: `#${colorRaw.toUpperCase()}${alphaHex}` });
+      }
+    }
+  }
+
+  let angleDeg = 0;
+  const lin = linear[0];
+  if (lin) {
+    unsupported.push(...unexpectedAttributes(lin, new Set(['ang', 'scaled']), 'text gradient lin'));
+    if (lin.children.some((child) => child.kind === 'element')) {
+      unsupported.push('text gradient lin children');
+    }
+    const scaled = getAttrValue(lin, qname('', 'scaled', ''));
+    if (scaled !== null && scaled !== '0' && scaled !== 'false') {
+      unsupported.push(`text gradient scaled ${scaled}`);
+    }
+    const angleRaw = getAttrValue(lin, qname('', 'ang', '')) ?? '';
+    const angle = Number(angleRaw);
+    if (
+      !/^\d+$/u.test(angleRaw) ||
+      !Number.isSafeInteger(angle) ||
+      angle < 0 ||
+      angle >= 21_600_000
+    ) {
+      unsupported.push(`text gradient angle ${angleRaw || 'missing'}`);
+    } else {
+      angleDeg = angle / 60_000;
+    }
+  }
+
+  if (unsupported.length > 0) return { unsupported: unsupported.join(', ') };
+  return { stops, angleDeg };
+};
+
 const parseTextShadow = (rPr: XmlElement): NonNullable<TextFormat['textShadow']> | undefined => {
   if (firstChildElement(rPr, qname('a', 'effectDag', NS.dml))) {
     return { unsupported: 'text effect DAG' };
@@ -678,6 +854,8 @@ export const parseRPrLikeElement = (
   }
   const textShadow = parseTextShadow(rPr);
   if (textShadow !== undefined) out.textShadow = textShadow;
+  const gradient = parseTextGradient(rPr);
+  if (gradient !== undefined) out.gradient = gradient;
   const latin = firstChildElement(rPr, qname('a', 'latin', NS.dml));
   if (latin !== null) {
     const t = getAttrValue(latin, qname('', 'typeface', ''));

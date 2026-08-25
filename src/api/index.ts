@@ -625,6 +625,7 @@ export type {
   BulletStyle,
   ParagraphAlignment,
   TextFormat,
+  TextGradient,
   TextOutline,
   TextShadow,
 } from '../internal/drawingml/index.ts';

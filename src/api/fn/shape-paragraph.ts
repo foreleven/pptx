@@ -97,7 +97,12 @@ const mergeRPrLayer = (base: Partial<TextFormat>, layer: Partial<TextFormat>): v
     base.alternativeLanguage = layer.alternativeLanguage;
   }
   if (base.size === undefined && layer.size !== undefined) base.size = layer.size;
-  if (base.color === undefined && layer.color !== undefined) base.color = layer.color;
+  // Solid and gradient run paint are one DrawingML fill choice. A direct paint
+  // must block the other kind from leaking in from a less-specific layer.
+  if (base.color === undefined && base.gradient === undefined) {
+    if (layer.gradient !== undefined) base.gradient = layer.gradient;
+    else if (layer.color !== undefined) base.color = layer.color;
+  }
   if (base.bold === undefined && layer.bold !== undefined) base.bold = layer.bold;
   if (base.italic === undefined && layer.italic !== undefined) base.italic = layer.italic;
   if (base.underline === undefined && layer.underline !== undefined) {

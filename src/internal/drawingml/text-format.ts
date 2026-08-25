@@ -27,6 +27,7 @@ import {
 } from '../xml/index.ts';
 import { fontSizeHundredthPt, textNonNegativePoint, textPointSpacing } from '../bounds.ts';
 import { buildColorElement } from './color.ts';
+import { buildGradientFill, type GradientFillOptions } from './fill.ts';
 import { setNoStroke, setSolidStroke } from './stroke.ts';
 
 const NAME_R = qname('a', 'r', NS.dml);
@@ -162,6 +163,8 @@ export interface TextFormat {
   highlight?: string | null;
   /** One editable CSS-compatible outer text shadow, or `null` to clear run effects. */
   textShadow?: TextShadow | null;
+  /** One editable linear text gradient, or `null` to clear the direct run fill. */
+  gradient?: TextGradient | null;
 }
 
 /** Common editable text-outline subset plus an importer-only diagnostic carrier. */
@@ -187,6 +190,9 @@ export type TextShadow =
     }
   | { readonly unsupported: string };
 
+/** Common editable gradient subset plus an importer-only diagnostic carrier. */
+export type TextGradient = GradientFillOptions | { readonly unsupported: string };
+
 /** Direct, non-inherited CT_TextCharacterProperties state. */
 export interface TextRunState {
   readonly normalizeHeight?: boolean;
@@ -208,14 +214,54 @@ const setOrRemoveAttr = (
 };
 
 const setSolidFill = (rPr: XmlElement, value: string | null): void => {
-  // Remove any existing solidFill first.
+  // A run may carry exactly one EG_FillProperties choice.
   rPr.children = rPr.children.filter(
     (c) =>
-      !(c.kind === 'element' && c.name.namespaceURI === NS.dml && c.name.localName === 'solidFill'),
+      !(
+        c.kind === 'element' &&
+        c.name.namespaceURI === NS.dml &&
+        ['noFill', 'solidFill', 'gradFill', 'blipFill', 'pattFill', 'grpFill'].includes(
+          c.name.localName,
+        )
+      ),
   );
   if (value === null) return;
   const fill = elem(NAME_SOLID_FILL, { children: [buildColorElement(value)] });
   insertChildByRank(rPr, fill, rprChildRank);
+};
+
+const setTextGradient = (rPr: XmlElement, value: TextGradient | null): void => {
+  const removeRunFill = (): void => {
+    rPr.children = rPr.children.filter(
+      (child) =>
+        !(
+          child.kind === 'element' &&
+          child.name.namespaceURI === NS.dml &&
+          ['noFill', 'solidFill', 'gradFill', 'blipFill', 'pattFill', 'grpFill'].includes(
+            child.name.localName,
+          )
+        ),
+    );
+  };
+  if (value === null) {
+    removeRunFill();
+    return;
+  }
+  if (!('stops' in value)) {
+    throw new TypeError('TextFormat.gradient unsupported diagnostic state is read-only.');
+  }
+  if (value.path !== undefined && value.path !== 'linear') {
+    throw new TypeError('TextFormat.gradient supports linear text gradients only.');
+  }
+  if (value.focus !== undefined) {
+    throw new TypeError('TextFormat.gradient focus is not supported for linear text gradients.');
+  }
+  const gradient = buildGradientFill({
+    stops: value.stops,
+    ...(value.angleDeg === undefined ? {} : { angleDeg: value.angleDeg }),
+  });
+  removeRunFill();
+  insertChildByRank(rPr, gradient, rprChildRank);
 };
 
 /** Replace one script-specific typeface child without disturbing sibling script faces. */
@@ -382,6 +428,7 @@ export const applyRunFormat = (rPr: XmlElement, format: TextFormat): void => {
     setTypeface(rPr, qname('a', 'sym', NS.dml), format.fontSymbol);
   }
   if (format.color !== undefined) setSolidFill(rPr, format.color);
+  if (format.gradient !== undefined) setTextGradient(rPr, format.gradient);
   if (format.highlight !== undefined) setHighlight(rPr, format.highlight);
   if (format.textShadow !== undefined) setTextShadow(rPr, format.textShadow);
   if (format.outline !== undefined) {

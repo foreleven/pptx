@@ -2187,6 +2187,16 @@ const renderRun = (
       `text-shadow:${format.textShadow.offsetXPt}pt ${format.textShadow.offsetYPt}pt ${format.textShadow.blurPt}pt ${format.textShadow.color}${alpha}`,
     );
   }
+  if (format?.gradient && 'stops' in format.gradient) {
+    const cssAngle = ((((format.gradient.angleDeg ?? 0) + 90) % 360) + 360) % 360;
+    const stops = format.gradient.stops
+      .map((stop) => `${stop.color} ${Number((stop.offset * 100).toFixed(4))}%`)
+      .join(', ');
+    styles.push(`background-image:linear-gradient(${cssAngle}deg, ${stops})`);
+    styles.push('background-clip:text');
+    styles.push('-webkit-background-clip:text');
+    styles.push('color:transparent');
+  }
   // Explicit `\n` in the run text comes from <a:br> line breaks; project
   // each to an HTML <br/> so the foreignObject's CSS layout honours it.
   // Everything else is escaped as XML text.
@@ -2377,6 +2387,18 @@ export const buildSvgTextInput = (a: SvgTextArgs): TextBodyInput => {
               offsetYpx: fmt.textShadow.offsetYPt * scale * PX_PER_PT,
             }
           : null;
+      const gradient =
+        fmt?.gradient && 'stops' in fmt.gradient
+          ? {
+              angleDeg: fmt.gradient.angleDeg ?? 0,
+              stops: fmt.gradient.stops.map((stop) => {
+                const alpha = /^#[\dA-Fa-f]{8}$/u.test(stop.color)
+                  ? Number.parseInt(stop.color.slice(7), 16) / 255
+                  : 1;
+                return { offset: stop.offset, color: stop.color.slice(0, 7), opacity: alpha };
+              }),
+            }
+          : null;
       const base: Omit<PieceInput, 'text' | 'isBreak'> = {
         family,
         sizePx,
@@ -2384,6 +2406,7 @@ export const buildSvgTextInput = (a: SvgTextArgs): TextBodyInput => {
         italic: fmt?.italic ?? false,
         letterSpacingPx,
         fillHex,
+        gradient,
         shadow,
         underline: underlineStyleOf(fmt),
         strike: hasStrikeFmt(fmt),
@@ -2475,6 +2498,7 @@ const breakPiece = (): PieceInput => ({
   italic: false,
   letterSpacingPx: 0,
   fillHex: '#000000',
+  gradient: null,
   shadow: null,
   underline: 'none',
   strike: false,

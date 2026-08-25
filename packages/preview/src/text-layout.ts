@@ -147,6 +147,7 @@ export interface PieceInput {
   readonly italic: boolean;
   readonly letterSpacingPx: number;
   readonly fillHex: string;
+  readonly gradient: TextGradientInput | null;
   readonly shadow: TextShadowInput | null;
   /** `'wavy'` covers every `ST_TextUnderlineType` wavy variant (`wavy`,
    *  `wavyDbl`, `wavyHeavy`) — SVG/resvg has no `text-decoration-style`
@@ -164,6 +165,15 @@ export interface TextShadowInput {
   readonly blurPx: number;
   readonly offsetXpx: number;
   readonly offsetYpx: number;
+}
+
+export interface TextGradientInput {
+  readonly angleDeg: number;
+  readonly stops: ReadonlyArray<{
+    readonly offset: number;
+    readonly color: string;
+    readonly opacity: number;
+  }>;
 }
 
 export interface BulletInput {
@@ -689,12 +699,44 @@ const emitLine = (line: Line, baselineY: number, dx: number): string => {
   const content = toks.filter((t) => !t.isBreak);
   if (content.length === 0) return '';
   const groups = groupTokens(content);
+  const gradientDefs = emitGradientDefs(groups);
   const tspans = groups.map((g) => tspan(g)).join('');
   if (tspans === '') return '';
   const x0 = line.anchorX + dx + GRID_NUDGE_X;
   const shadow = emitTextShadows(groups, line.textAnchor, x0, baselineY);
   const text = `<text x="${fmt(x0)}" y="${fmt(baselineY)}" text-anchor="${line.textAnchor}" xml:space="preserve">${tspans}</text>`;
-  return shadow + text + emitWavyUnderlines(groups, line.textAnchor, x0, baselineY);
+  return gradientDefs + shadow + text + emitWavyUnderlines(groups, line.textAnchor, x0, baselineY);
+};
+
+const gradientId = (gradient: TextGradientInput): string => {
+  const signature = JSON.stringify(gradient);
+  let hash = 2_166_136_261;
+  for (let index = 0; index < signature.length; index += 1) {
+    hash ^= signature.charCodeAt(index);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return `text-gradient-${(hash >>> 0).toString(16)}`;
+};
+
+const emitGradientDefs = (groups: readonly Group[]): string => {
+  const gradients = new Map<string, TextGradientInput>();
+  for (const group of groups) {
+    if (group.piece.gradient) gradients.set(gradientId(group.piece.gradient), group.piece.gradient);
+  }
+  if (gradients.size === 0) return '';
+  const definitions = [...gradients.entries()].map(([id, gradient]) => {
+    const radians = (gradient.angleDeg * Math.PI) / 180;
+    const dx = Math.cos(radians) * 50;
+    const dy = Math.sin(radians) * 50;
+    const stops = gradient.stops
+      .map(
+        (stop) =>
+          `<stop offset="${fmt(stop.offset * 100)}%" stop-color="${stop.color}" stop-opacity="${fmt(stop.opacity)}"/>`,
+      )
+      .join('');
+    return `<linearGradient id="${id}" x1="${fmt(50 - dx)}%" y1="${fmt(50 - dy)}%" x2="${fmt(50 + dx)}%" y2="${fmt(50 + dy)}%">${stops}</linearGradient>`;
+  });
+  return `<defs>${definitions.join('')}</defs>`;
 };
 
 interface Group {
@@ -862,6 +904,7 @@ const samePiece = (a: PieceInput, b: PieceInput): boolean =>
   a.italic === b.italic &&
   a.letterSpacingPx === b.letterSpacingPx &&
   a.fillHex === b.fillHex &&
+  JSON.stringify(a.gradient) === JSON.stringify(b.gradient) &&
   JSON.stringify(a.shadow) === JSON.stringify(b.shadow) &&
   a.underline === b.underline &&
   a.strike === b.strike &&
@@ -874,7 +917,7 @@ const tspan = (g: Group): string => {
   const attrs: string[] = [
     `font-family="${escapeXml(p.family)}"`,
     `font-size="${fmt(sizePx)}"`,
-    `fill="${p.fillHex}"`,
+    `fill="${p.gradient ? `url(#${gradientId(p.gradient)})` : p.fillHex}"`,
   ];
   if (p.bold) attrs.push('font-weight="700"');
   if (p.italic) attrs.push('font-style="italic"');

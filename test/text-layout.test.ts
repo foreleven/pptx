@@ -74,6 +74,7 @@ const piece = (text: string, over: Partial<PieceInput> = {}): PieceInput => ({
   italic: false,
   letterSpacingPx: 0,
   fillHex: '#000000',
+  gradient: null,
   shadow: null,
   underline: 'none',
   strike: false,
@@ -187,6 +188,31 @@ describe('layoutTextSvg', () => {
     expect(svg).toContain('<feOffset in="blur" dx="2" dy="3"');
     expect(svg).toContain('flood-color="#3659E3" flood-opacity="0.5"');
     expect(svg.indexOf('<defs>')).toBeLessThan(svg.indexOf('>Shadow</tspan>'));
+  });
+
+  it('renders one run linear gradient as an SVG paint server', () => {
+    const svg = layoutTextSvg(
+      body([
+        para([
+          piece('Gradient', {
+            gradient: {
+              angleDeg: 0,
+              stops: [
+                { offset: 0, color: '#3659E3', opacity: 1 },
+                { offset: 0.45, color: '#35B9C6', opacity: 128 / 255 },
+                { offset: 1, color: '#F26B5B', opacity: 1 },
+              ],
+            },
+          }),
+        ]),
+      ]),
+      stubMeasurer,
+    );
+    expect(svg).toContain('<linearGradient id="text-gradient-');
+    expect(svg).toContain('x1="0%" y1="50%" x2="100%" y2="50%"');
+    expect(svg).toContain('stop-color="#35B9C6"');
+    expect(svg).toContain('stop-opacity="0.5"');
+    expect(svg).toMatch(/fill="url\(#text-gradient-[\da-f]+\)"/u);
   });
 
   it('draws wavy underline as a path, not text-decoration (resvg has no text-decoration-style)', () => {

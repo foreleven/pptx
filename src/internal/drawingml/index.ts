@@ -12,7 +12,7 @@ export {
   replaceTokensInTree,
   setTextBody,
 } from './text-body-mutation.ts';
-export type { TextFormat, TextOutline, TextShadow } from './text-format.ts';
+export type { TextFormat, TextGradient, TextOutline, TextShadow } from './text-format.ts';
 export { applyFormatToAllRuns, applyRunFormat, applyRunState } from './text-format.ts';
 export type { TextRunState } from './text-format.ts';
 export type { ParsedColor } from './color.ts';
@@ -23,7 +23,14 @@ export type {
   PatternFillOptions,
   PatternPreset,
 } from './fill.ts';
-export { clearFill, setGradientFill, setNoFill, setPatternFill, setSolidFill } from './fill.ts';
+export {
+  buildGradientFill,
+  clearFill,
+  setGradientFill,
+  setNoFill,
+  setPatternFill,
+  setSolidFill,
+} from './fill.ts';
 export type { GlowOptions, ShadowOptions, ShapeEffectOptions } from './effects.ts';
 export { clearEffects, setEffects, setGlow, setShadow } from './effects.ts';
 export type {
