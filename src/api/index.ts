@@ -626,6 +626,7 @@ export type {
   ParagraphAlignment,
   TextFormat,
   TextOutline,
+  TextShadow,
 } from '../internal/drawingml/index.ts';
 export type {
   ParagraphBulletPropertiesEffective,

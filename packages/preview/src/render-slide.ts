@@ -2176,6 +2176,17 @@ const renderRun = (
   if (format?.highlight !== undefined && format.highlight !== null) {
     styles.push(`background-color:${resolveColor(format.highlight, theme, '#FFFF00')}`);
   }
+  if (format?.textShadow && 'color' in format.textShadow) {
+    const alpha =
+      format.textShadow.opacity === undefined
+        ? ''
+        : Math.round(format.textShadow.opacity * 255)
+            .toString(16)
+            .padStart(2, '0');
+    styles.push(
+      `text-shadow:${format.textShadow.offsetXPt}pt ${format.textShadow.offsetYPt}pt ${format.textShadow.blurPt}pt ${format.textShadow.color}${alpha}`,
+    );
+  }
   // Explicit `\n` in the run text comes from <a:br> line breaks; project
   // each to an HTML <br/> so the foreignObject's CSS layout honours it.
   // Everything else is escaped as XML text.
@@ -2356,6 +2367,16 @@ export const buildSvgTextInput = (a: SvgTextArgs): TextBodyInput => {
       const letterSpacingPx =
         fmt?.spc !== undefined && fmt.spc !== 0 ? (fmt.spc / 100) * PX_PER_PT : 0;
       const caps = fmt?.cap === 'all' || fmt?.cap === 'small';
+      const shadow =
+        fmt?.textShadow && 'color' in fmt.textShadow
+          ? {
+              color: fmt.textShadow.color,
+              opacity: fmt.textShadow.opacity ?? 1,
+              blurPx: fmt.textShadow.blurPt * scale * PX_PER_PT,
+              offsetXpx: fmt.textShadow.offsetXPt * scale * PX_PER_PT,
+              offsetYpx: fmt.textShadow.offsetYPt * scale * PX_PER_PT,
+            }
+          : null;
       const base: Omit<PieceInput, 'text' | 'isBreak'> = {
         family,
         sizePx,
@@ -2363,6 +2384,7 @@ export const buildSvgTextInput = (a: SvgTextArgs): TextBodyInput => {
         italic: fmt?.italic ?? false,
         letterSpacingPx,
         fillHex,
+        shadow,
         underline: underlineStyleOf(fmt),
         strike: hasStrikeFmt(fmt),
         superSub,
@@ -2453,6 +2475,7 @@ const breakPiece = (): PieceInput => ({
   italic: false,
   letterSpacingPx: 0,
   fillHex: '#000000',
+  shadow: null,
   underline: 'none',
   strike: false,
   superSub: 0,

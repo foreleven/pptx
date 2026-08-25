@@ -36,6 +36,127 @@ const unexpectedAttributes = (
       (attribute) => attribute.name.namespaceURI !== '' || !allowed.has(attribute.name.localName),
     )
     .map((attribute) => `${label} attribute ${attribute.name.localName}`);
+
+const parseTextShadow = (rPr: XmlElement): NonNullable<TextFormat['textShadow']> | undefined => {
+  if (firstChildElement(rPr, qname('a', 'effectDag', NS.dml))) {
+    return { unsupported: 'text effect DAG' };
+  }
+  const effectLst = firstChildElement(rPr, qname('a', 'effectLst', NS.dml));
+  if (!effectLst) return undefined;
+
+  const unsupported = unexpectedAttributes(effectLst, new Set(), 'text effect list');
+  const effects = effectLst.children.filter(
+    (child): child is XmlElement => child.kind === 'element',
+  );
+  if (
+    effects.length !== 1 ||
+    effects[0]?.name.namespaceURI !== NS.dml ||
+    effects[0].name.localName !== 'outerShdw'
+  ) {
+    const names = effects.map((effect) => effect.name.localName).join(', ') || 'empty';
+    unsupported.push(`text effects ${names}`);
+    return { unsupported: unsupported.join(', ') };
+  }
+
+  const shadow = effects[0];
+  unsupported.push(
+    ...unexpectedAttributes(
+      shadow,
+      new Set(['blurRad', 'dist', 'dir', 'algn', 'rotWithShape']),
+      'outer text shadow',
+    ),
+  );
+  const alignment = getAttrValue(shadow, qname('', 'algn', ''));
+  if (alignment !== null && alignment !== 'tl')
+    unsupported.push(`outer text shadow alignment ${alignment}`);
+  const rotate = getAttrValue(shadow, qname('', 'rotWithShape', ''));
+  if (rotate !== null && rotate !== '0' && rotate !== 'false') {
+    unsupported.push(`outer text shadow rotWithShape ${rotate}`);
+  }
+
+  const nonNegativeInteger = (name: string): number => {
+    const raw = getAttrValue(shadow, qname('', name, '')) ?? '0';
+    if (!/^\d+$/u.test(raw)) {
+      unsupported.push(`outer text shadow ${name} ${raw}`);
+      return 0;
+    }
+    const value = Number(raw);
+    if (!Number.isSafeInteger(value)) {
+      unsupported.push(`outer text shadow ${name} ${raw}`);
+      return 0;
+    }
+    return value;
+  };
+  const blurEmu = nonNegativeInteger('blurRad');
+  const distEmu = nonNegativeInteger('dist');
+  const directionRaw = getAttrValue(shadow, qname('', 'dir', '')) ?? '0';
+  if (!/^-?\d+$/u.test(directionRaw) || !Number.isSafeInteger(Number(directionRaw))) {
+    unsupported.push(`outer text shadow dir ${directionRaw}`);
+  }
+  const directionDeg = Number(directionRaw) / 60_000;
+
+  const colorChildren = shadow.children.filter(
+    (child): child is XmlElement => child.kind === 'element',
+  );
+  const color = colorChildren[0];
+  if (
+    colorChildren.length !== 1 ||
+    color?.name.namespaceURI !== NS.dml ||
+    color.name.localName !== 'srgbClr'
+  ) {
+    unsupported.push(`outer text shadow color ${color?.name.localName ?? 'missing'}`);
+  }
+  let colorValue = '';
+  let opacity: number | undefined;
+  if (color?.name.namespaceURI === NS.dml && color.name.localName === 'srgbClr') {
+    unsupported.push(...unexpectedAttributes(color, new Set(['val']), 'outer text shadow color'));
+    const rawColor = getAttrValue(color, qname('', 'val', '')) ?? '';
+    if (!/^[\dA-Fa-f]{6}$/u.test(rawColor))
+      unsupported.push(`outer text shadow color ${rawColor || 'missing'}`);
+    else colorValue = `#${rawColor.toUpperCase()}`;
+    const transforms = color.children.filter(
+      (child): child is XmlElement => child.kind === 'element',
+    );
+    if (transforms.length > 1 || (transforms[0] && transforms[0].name.localName !== 'alpha')) {
+      unsupported.push('outer text shadow color transforms');
+    } else if (transforms[0]) {
+      const alpha = transforms[0];
+      unsupported.push(...unexpectedAttributes(alpha, new Set(['val']), 'outer text shadow alpha'));
+      if (alpha.children.some((child) => child.kind === 'element')) {
+        unsupported.push('outer text shadow alpha children');
+      }
+      const rawAlpha = getAttrValue(alpha, qname('', 'val', '')) ?? '';
+      const alphaValue = Number(rawAlpha);
+      if (
+        !/^\d+$/u.test(rawAlpha) ||
+        !Number.isInteger(alphaValue) ||
+        alphaValue < 0 ||
+        alphaValue > 100_000
+      ) {
+        unsupported.push(`outer text shadow alpha ${rawAlpha || 'missing'}`);
+      } else {
+        const alphaByte = Math.round((alphaValue / 100_000) * 255);
+        const cssAlphaValue = Math.round((alphaByte / 255) * 100_000);
+        if (alphaValue !== cssAlphaValue) {
+          unsupported.push(`outer text shadow alpha ${rawAlpha} exceeds CSS hex-byte precision`);
+        } else {
+          opacity = alphaValue / 100_000;
+        }
+      }
+    }
+  }
+
+  if (unsupported.length > 0) return { unsupported: unsupported.join(', ') };
+  const radians = (directionDeg * Math.PI) / 180;
+  const roundPoint = (value: number): number => Number(value.toFixed(4));
+  return {
+    color: colorValue,
+    ...(opacity === undefined ? {} : { opacity }),
+    blurPt: roundPoint(blurEmu / 12_700),
+    offsetXPt: roundPoint((distEmu * Math.cos(radians)) / 12_700),
+    offsetYPt: roundPoint((distEmu * Math.sin(radians)) / 12_700),
+  };
+};
 // -- Color transforms (ECMA-376 §20.1.2.3.x) --------------------------------
 //
 // DrawingML color elements (`<a:srgbClr>`, `<a:schemeClr>`, `<a:sysClr>`,
@@ -555,6 +676,8 @@ export const parseRPrLikeElement = (
       }
     }
   }
+  const textShadow = parseTextShadow(rPr);
+  if (textShadow !== undefined) out.textShadow = textShadow;
   const latin = firstChildElement(rPr, qname('a', 'latin', NS.dml));
   if (latin !== null) {
     const t = getAttrValue(latin, qname('', 'typeface', ''));

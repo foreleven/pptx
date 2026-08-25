@@ -35,6 +35,8 @@ const NAME_LATIN = qname('a', 'latin', NS.dml);
 const NAME_EA = qname('a', 'ea', NS.dml);
 const NAME_CS = qname('a', 'cs', NS.dml);
 const NAME_SOLID_FILL = qname('a', 'solidFill', NS.dml);
+const NAME_EFFECT_LST = qname('a', 'effectLst', NS.dml);
+const NAME_OUTER_SHDW = qname('a', 'outerShdw', NS.dml);
 const ATTR_SZ = qname('', 'sz', '');
 const ATTR_B = qname('', 'b', '');
 const ATTR_I = qname('', 'i', '');
@@ -53,6 +55,11 @@ const ATTR_SMART_TAG_ID = qname('', 'smtId', '');
 const ATTR_LANGUAGE = qname('', 'lang', '');
 const ATTR_ALTERNATIVE_LANGUAGE = qname('', 'altLang', '');
 const ATTR_TYPEFACE = qname('', 'typeface', '');
+const ATTR_BLUR_RAD = qname('', 'blurRad', '');
+const ATTR_DIST = qname('', 'dist', '');
+const ATTR_DIR = qname('', 'dir', '');
+const ATTR_ALGN = qname('', 'algn', '');
+const ATTR_ROT_WITH_SHAPE = qname('', 'rotWithShape', '');
 const NAME_HIGHLIGHT = qname('a', 'highlight', NS.dml);
 
 // CT_TextCharacterProperties (a:rPr) is an xsd:sequence: children must appear
@@ -153,6 +160,8 @@ export interface TextFormat {
    * format as `color`. Mirrors `<a:rPr><a:highlight>…</a:highlight></a:rPr>`.
    */
   highlight?: string | null;
+  /** One editable CSS-compatible outer text shadow, or `null` to clear run effects. */
+  textShadow?: TextShadow | null;
 }
 
 /** Common editable text-outline subset plus an importer-only diagnostic carrier. */
@@ -165,6 +174,18 @@ export type TextOutline =
     }
   | { readonly kind: 'none'; readonly unsupported?: string }
   | { readonly kind: 'unsupported'; readonly reason: string };
+
+/** Common editable outer-shadow subset plus an importer-only diagnostic carrier. */
+export type TextShadow =
+  | {
+      readonly color: string;
+      readonly opacity?: number;
+      readonly blurPt: number;
+      readonly offsetXPt: number;
+      readonly offsetYPt: number;
+      readonly unsupported?: string;
+    }
+  | { readonly unsupported: string };
 
 /** Direct, non-inherited CT_TextCharacterProperties state. */
 export interface TextRunState {
@@ -226,6 +247,77 @@ const setHighlight = (rPr: XmlElement, value: string | null): void => {
     elem(NAME_HIGHLIGHT, { children: [buildColorElement(value)] }),
     rprChildRank,
   );
+};
+
+const finiteShadowPoint = (value: number, label: string, allowNegative: boolean): number => {
+  if (!Number.isFinite(value) || (!allowNegative && value < 0)) {
+    throw new RangeError(
+      `TextFormat.textShadow ${label} must be a finite${allowNegative ? '' : ' non-negative'} point value.`,
+    );
+  }
+  const emu = Math.round(value * 12_700);
+  if (!Number.isSafeInteger(emu)) {
+    throw new RangeError(
+      `TextFormat.textShadow ${label} is outside the supported DrawingML coordinate range.`,
+    );
+  }
+  return emu;
+};
+
+const setTextShadow = (rPr: XmlElement, value: TextShadow | null): void => {
+  const removeTextEffects = (): void => {
+    rPr.children = rPr.children.filter(
+      (child) =>
+        !(
+          child.kind === 'element' &&
+          child.name.namespaceURI === NS.dml &&
+          (child.name.localName === 'effectLst' || child.name.localName === 'effectDag')
+        ),
+    );
+  };
+  if (value === null) {
+    removeTextEffects();
+    return;
+  }
+  if (!('color' in value)) {
+    throw new TypeError('TextFormat.textShadow unsupported diagnostic state is read-only.');
+  }
+  if (!/^#[\dA-Fa-f]{6}$/u.test(value.color)) {
+    throw new TypeError('TextFormat.textShadow color must be #RRGGBB.');
+  }
+  const blurRad = finiteShadowPoint(value.blurPt, 'blurPt', false);
+  const offsetXEmu = finiteShadowPoint(value.offsetXPt, 'offsetXPt', true);
+  const offsetYEmu = finiteShadowPoint(value.offsetYPt, 'offsetYPt', true);
+  const dist = Math.round(Math.hypot(offsetXEmu, offsetYEmu));
+  const direction = Math.round(
+    (((((Math.atan2(offsetYEmu, offsetXEmu) * 180) / Math.PI) % 360) + 360) % 360) * 60_000,
+  );
+  let color = value.color.toUpperCase();
+  if (value.opacity !== undefined) {
+    if (!Number.isFinite(value.opacity) || value.opacity < 0 || value.opacity > 1) {
+      throw new RangeError('TextFormat.textShadow opacity must be a finite number in [0, 1].');
+    }
+    const alphaByte = Math.round(value.opacity * 255);
+    const cssOpacity = alphaByte / 255;
+    if (Math.abs(value.opacity - cssOpacity) > 0.000_005) {
+      throw new RangeError(
+        'TextFormat.textShadow opacity must be exactly representable as a CSS alpha byte.',
+      );
+    }
+    color += alphaByte.toString(16).padStart(2, '0').toUpperCase();
+  }
+  const shadow = elem(NAME_OUTER_SHDW, {
+    attrs: [
+      attr(ATTR_BLUR_RAD, String(blurRad)),
+      attr(ATTR_DIST, String(dist)),
+      attr(ATTR_DIR, String(direction)),
+      attr(ATTR_ALGN, 'tl'),
+      attr(ATTR_ROT_WITH_SHAPE, '0'),
+    ],
+    children: [buildColorElement(color)],
+  });
+  removeTextEffects();
+  insertChildByRank(rPr, elem(NAME_EFFECT_LST, { children: [shadow] }), rprChildRank);
 };
 
 /** Ensure the run outline exists in the first CT_TextCharacterProperties child slot. */
@@ -291,6 +383,7 @@ export const applyRunFormat = (rPr: XmlElement, format: TextFormat): void => {
   }
   if (format.color !== undefined) setSolidFill(rPr, format.color);
   if (format.highlight !== undefined) setHighlight(rPr, format.highlight);
+  if (format.textShadow !== undefined) setTextShadow(rPr, format.textShadow);
   if (format.outline !== undefined) {
     if (format.outline.kind === 'unsupported') {
       throw new TypeError('TextFormat.outline kind unsupported is read-only diagnostic state.');

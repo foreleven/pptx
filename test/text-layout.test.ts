@@ -74,6 +74,7 @@ const piece = (text: string, over: Partial<PieceInput> = {}): PieceInput => ({
   italic: false,
   letterSpacingPx: 0,
   fillHex: '#000000',
+  shadow: null,
   underline: 'none',
   strike: false,
   superSub: 0,
@@ -163,6 +164,29 @@ describe('layoutTextSvg', () => {
     expect(svg).toContain('font-style="italic"');
     expect(svg).toContain('text-decoration="underline"');
     expect(svg).toContain('fill="#FF0000"');
+  });
+
+  it('renders one run outer shadow behind editable SVG text', () => {
+    const svg = layoutTextSvg(
+      body([
+        para([
+          piece('Shadow', {
+            shadow: {
+              color: '#3659E3',
+              opacity: 0.5,
+              blurPx: 4,
+              offsetXpx: 2,
+              offsetYpx: 3,
+            },
+          }),
+        ]),
+      ]),
+      stubMeasurer,
+    );
+    expect(svg).toContain('<feGaussianBlur in="SourceAlpha" stdDeviation="2"');
+    expect(svg).toContain('<feOffset in="blur" dx="2" dy="3"');
+    expect(svg).toContain('flood-color="#3659E3" flood-opacity="0.5"');
+    expect(svg.indexOf('<defs>')).toBeLessThan(svg.indexOf('>Shadow</tspan>'));
   });
 
   it('draws wavy underline as a path, not text-decoration (resvg has no text-decoration-style)', () => {

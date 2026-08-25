@@ -147,6 +147,7 @@ export interface PieceInput {
   readonly italic: boolean;
   readonly letterSpacingPx: number;
   readonly fillHex: string;
+  readonly shadow: TextShadowInput | null;
   /** `'wavy'` covers every `ST_TextUnderlineType` wavy variant (`wavy`,
    *  `wavyDbl`, `wavyHeavy`) — SVG/resvg has no `text-decoration-style`
    *  support, so the engine draws it as an explicit path (see `wavyPath`). */
@@ -155,6 +156,14 @@ export interface PieceInput {
   readonly superSub: 0 | 1 | -1; // 1 superscript, -1 subscript
   readonly href: string | null;
   readonly isBreak: boolean; // <a:br>
+}
+
+export interface TextShadowInput {
+  readonly color: string;
+  readonly opacity: number;
+  readonly blurPx: number;
+  readonly offsetXpx: number;
+  readonly offsetYpx: number;
 }
 
 export interface BulletInput {
@@ -683,8 +692,9 @@ const emitLine = (line: Line, baselineY: number, dx: number): string => {
   const tspans = groups.map((g) => tspan(g)).join('');
   if (tspans === '') return '';
   const x0 = line.anchorX + dx + GRID_NUDGE_X;
+  const shadow = emitTextShadows(groups, line.textAnchor, x0, baselineY);
   const text = `<text x="${fmt(x0)}" y="${fmt(baselineY)}" text-anchor="${line.textAnchor}" xml:space="preserve">${tspans}</text>`;
-  return text + emitWavyUnderlines(groups, line.textAnchor, x0, baselineY);
+  return shadow + text + emitWavyUnderlines(groups, line.textAnchor, x0, baselineY);
 };
 
 interface Group {
@@ -706,6 +716,56 @@ const groupTokens = (toks: Token[]): Group[] => {
     }
   }
   return groups;
+};
+
+const shadowId = (value: string): string => {
+  let hash = 0x811c9dc5;
+  for (const char of value) {
+    hash ^= char.codePointAt(0) ?? 0;
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `text-shadow-${(hash >>> 0).toString(16)}`;
+};
+
+const emitTextShadows = (
+  groups: readonly Group[],
+  textAnchor: 'start' | 'middle' | 'end',
+  x0: number,
+  baselineY: number,
+): string => {
+  if (!groups.some((group) => group.piece.shadow !== null)) return '';
+  const totalWidth = groups.reduce((sum, group) => sum + group.width, 0);
+  let cursor =
+    textAnchor === 'middle' ? x0 - totalWidth / 2 : textAnchor === 'end' ? x0 - totalWidth : x0;
+  const parts: string[] = [];
+  for (const group of groups) {
+    const shadow = group.piece.shadow;
+    if (shadow !== null && group.text.length > 0) {
+      const signature = `${shadow.color}:${shadow.opacity}:${shadow.blurPx}:${shadow.offsetXpx}:${shadow.offsetYpx}:${cursor}:${baselineY}:${group.text}`;
+      const id = shadowId(signature);
+      const sigma = shadow.blurPx / 2;
+      parts.push(
+        `<defs><filter id="${id}" x="-100%" y="-100%" width="300%" height="300%" color-interpolation-filters="sRGB"><feGaussianBlur in="SourceAlpha" stdDeviation="${fmt(sigma)}" result="blur"/><feOffset in="blur" dx="${fmt(shadow.offsetXpx)}" dy="${fmt(shadow.offsetYpx)}" result="offset"/><feFlood flood-color="${shadow.color}" flood-opacity="${fmt(shadow.opacity)}" result="color"/><feComposite in="color" in2="offset" operator="in"/></filter></defs>`,
+      );
+      const piece = group.piece;
+      const attrs = [
+        `x="${fmt(cursor)}"`,
+        `y="${fmt(baselineY)}"`,
+        `font-family="${escapeXml(piece.family)}"`,
+        `font-size="${fmt(renderedSizePxOf(piece))}"`,
+        `fill="#000000"`,
+        `filter="url(#${id})"`,
+        'xml:space="preserve"',
+      ];
+      if (piece.bold) attrs.push('font-weight="700"');
+      if (piece.italic) attrs.push('font-style="italic"');
+      if (piece.letterSpacingPx !== 0) attrs.push(`letter-spacing="${fmt(piece.letterSpacingPx)}"`);
+      if (piece.superSub !== 0) attrs.push(`baseline-shift="${fmt(baselineShiftPxOf(piece))}"`);
+      parts.push(`<text ${attrs.join(' ')}>${escapeXml(group.text)}</text>`);
+    }
+    cursor += group.width;
+  }
+  return parts.join('');
 };
 
 // SVG baseline-shift sign convention: positive shifts the glyph UP (smaller
@@ -802,6 +862,7 @@ const samePiece = (a: PieceInput, b: PieceInput): boolean =>
   a.italic === b.italic &&
   a.letterSpacingPx === b.letterSpacingPx &&
   a.fillHex === b.fillHex &&
+  JSON.stringify(a.shadow) === JSON.stringify(b.shadow) &&
   a.underline === b.underline &&
   a.strike === b.strike &&
   a.superSub === b.superSub &&

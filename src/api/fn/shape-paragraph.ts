@@ -112,6 +112,9 @@ const mergeRPrLayer = (base: Partial<TextFormat>, layer: Partial<TextFormat>): v
   if (base.highlight === undefined && layer.highlight !== undefined) {
     base.highlight = layer.highlight;
   }
+  if (base.textShadow === undefined && layer.textShadow !== undefined) {
+    base.textShadow = layer.textShadow;
+  }
 };
 
 // `<a:lstStyle>` carries one `<a:lvl{N}pPr>` per outline level (1..9, plus

@@ -12,7 +12,7 @@ export {
   replaceTokensInTree,
   setTextBody,
 } from './text-body-mutation.ts';
-export type { TextFormat, TextOutline } from './text-format.ts';
+export type { TextFormat, TextOutline, TextShadow } from './text-format.ts';
 export { applyFormatToAllRuns, applyRunFormat, applyRunState } from './text-format.ts';
 export type { TextRunState } from './text-format.ts';
 export type { ParsedColor } from './color.ts';
