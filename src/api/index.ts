@@ -221,6 +221,7 @@ export {
   getParagraphBulletStyle,
   getParagraphBulletImageBytes,
   getParagraphDefaultTabSize,
+  getParagraphFontAlignment,
   getParagraphIndent,
   getParagraphLevel,
   getParagraphLineSpacing,
@@ -519,6 +520,7 @@ export {
   setParagraphAlignment,
   setParagraphBullet,
   setParagraphDefaultTabSize,
+  setParagraphFontAlignment,
   setParagraphLevel,
   setParagraphLineSpacing,
   setParagraphIndent,
@@ -607,6 +609,7 @@ export type {
 export type {
   ParagraphBulletPropertiesEffective,
   ParagraphProperties,
+  ParagraphFontAlignment,
   ParagraphTabAlignment,
   ParagraphTabStop,
   ShapeParagraphElement,

@@ -467,6 +467,7 @@ export const NAME_A_PPR = qname('a', 'pPr', NS.dml);
 export const ATTR_LVL = qname('', 'lvl', '');
 const ATTR_ALGN_FN = qname('', 'algn', '');
 const ATTR_RTL_FN = qname('', 'rtl', '');
+const ATTR_FONT_ALGN_FN = qname('', 'fontAlgn', '');
 
 const ensurePPr = (paragraph: XmlElement): XmlElement => {
   const existing = firstChildElement(paragraph, NAME_A_PPR);
@@ -591,6 +592,66 @@ export const getParagraphRtl = (shape: SlideShapeData, paragraphIndex: number): 
   if (value === '1' || value === 'true') return true;
   if (value === '0' || value === 'false') return false;
   return null;
+};
+
+/** DrawingML alignment for differently sized fonts on one paragraph line. */
+export type ParagraphFontAlignment = 'auto' | 'top' | 'center' | 'baseline' | 'bottom';
+
+const PARAGRAPH_FONT_ALIGNMENT_TO_TOKEN: Record<ParagraphFontAlignment, string> = {
+  auto: 'auto',
+  top: 't',
+  center: 'ctr',
+  baseline: 'base',
+  bottom: 'b',
+};
+
+const PARAGRAPH_FONT_TOKEN_TO_ALIGNMENT: Readonly<Record<string, ParagraphFontAlignment>> = {
+  auto: 'auto',
+  t: 'top',
+  ctr: 'center',
+  base: 'baseline',
+  b: 'bottom',
+};
+
+const PARAGRAPH_FONT_ALIGNMENTS = ['auto', 'top', 'center', 'baseline', 'bottom'] as const;
+
+/** @internal Parses a direct or inherited pPr font-alignment token. */
+export const parseParagraphFontAlignment = (pPr: XmlElement): ParagraphFontAlignment | null => {
+  const token = getAttrValue(pPr, ATTR_FONT_ALGN_FN);
+  return token === null ? null : (PARAGRAPH_FONT_TOKEN_TO_ALIGNMENT[token] ?? null);
+};
+
+/** Reads a paragraph's direct font alignment, or `null` when it inherits. */
+export const getParagraphFontAlignment = (
+  shape: SlideShapeData,
+  paragraphIndex: number,
+): ParagraphFontAlignment | null => {
+  const paragraph = requireParagraph(shape, paragraphIndex);
+  const pPr = firstChildElement(paragraph, NAME_A_PPR);
+  return pPr === null ? null : parseParagraphFontAlignment(pPr);
+};
+
+/** Authors one paragraph's font alignment; `null` restores inheritance. */
+export const setParagraphFontAlignment = (
+  shape: SlideShapeData,
+  paragraphIndex: number,
+  alignment: ParagraphFontAlignment | null,
+): void => {
+  const normalized =
+    alignment === null
+      ? null
+      : oneOf(alignment, PARAGRAPH_FONT_ALIGNMENTS, 'paragraph font alignment');
+  const paragraph = requireParagraph(shape, paragraphIndex);
+  const existing = firstChildElement(paragraph, NAME_A_PPR);
+  if (normalized === null && existing === null) return;
+  const pPr = existing ?? ensurePPr(paragraph);
+  pPr.attrs = pPr.attrs.filter(
+    (candidate) => !(candidate.name.namespaceURI === '' && candidate.name.localName === 'fontAlgn'),
+  );
+  if (normalized !== null) {
+    pPr.attrs.push(attr(ATTR_FONT_ALGN_FN, PARAGRAPH_FONT_ALIGNMENT_TO_TOKEN[normalized]));
+  }
+  commitAndRefresh(shape);
 };
 
 /**

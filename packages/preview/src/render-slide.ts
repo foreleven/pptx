@@ -2684,6 +2684,7 @@ export const resolveTextBodyModel = (
     } catch {
       effective = {
         align: getParagraphAlignment(shape, p),
+        fontAlign: null,
         level: getParagraphLevel(shape, p),
         marL: null,
         marR: null,

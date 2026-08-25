@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   addSlideTextBox,
+  getParagraphFontAlignment,
+  getParagraphPropertiesEffective,
   getParagraphRtl,
   getSlideXmlString,
   getSlides,
@@ -15,6 +17,7 @@ import {
   loadPresentation,
   savePresentation,
   setParagraphAlignment,
+  setParagraphFontAlignment,
   setParagraphLevel,
   setParagraphRtl,
   setShapeText,
@@ -44,6 +47,30 @@ describe('fn API: per-paragraph control', () => {
     // Exactly one paragraph carries algn="ctr".
     const matches = xml.match(/<a:pPr[^/]*algn="ctr"/g) ?? [];
     expect(matches.length).toBe(1);
+  });
+
+  it('round-trips every paragraph font-alignment token and clears inheritance', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const tb = addSlideTextBox(slide, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(4),
+      h: inches(3),
+      text: 'auto\ntop\ncenter\nbaseline\nbottom',
+    });
+    const alignments = ['auto', 'top', 'center', 'baseline', 'bottom'] as const;
+    alignments.forEach((alignment, index) => setParagraphFontAlignment(tb, index, alignment));
+
+    expect(alignments.map((_, index) => getParagraphFontAlignment(tb, index))).toEqual(alignments);
+    expect(getParagraphPropertiesEffective(pres, tb, 3).fontAlign).toBe('baseline');
+    expect(getSlideXmlString(slide)).toMatch(
+      /fontAlgn="auto".*fontAlgn="t".*fontAlgn="ctr".*fontAlgn="base".*fontAlgn="b"/su,
+    );
+
+    setParagraphFontAlignment(tb, 3, null);
+    expect(getParagraphFontAlignment(tb, 3)).toBeNull();
+    expect(() => setParagraphFontAlignment(tb, 0, 'middle' as never)).toThrow(RangeError);
   });
 
   it('setParagraphLevel writes lvl="N" for N>0 and omits it for 0', async () => {

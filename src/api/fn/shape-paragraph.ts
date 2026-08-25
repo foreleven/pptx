@@ -4,7 +4,9 @@ import {
   ATTR_LVL,
   NAME_A_PPR,
   NAME_A_RPR,
+  type ParagraphFontAlignment,
   type ParagraphTabStop,
+  parseParagraphFontAlignment,
   parseParagraphTabStops,
   ensureRPr,
   requireParagraph,
@@ -389,6 +391,8 @@ export const getShapeRunFormatEffective = (
 export interface ParagraphProperties {
   /** Horizontal alignment per `ParagraphAlignment`. */
   align: ParagraphAlignment | null;
+  /** Alignment for differently sized fonts on the same line. */
+  fontAlign: ParagraphFontAlignment | null;
   /** Outline level (0..8). 0 = top-level paragraph. */
   level: number;
   /** Left indent in EMU. */
@@ -475,15 +479,17 @@ export const ALIGN_TOKEN_MAP: Record<string, ParagraphProperties['align']> = {
   ctr: 'center',
   r: 'right',
   just: 'justify',
-  justLow: 'justify',
-  dist: 'distribute',
-  thaiDist: 'distribute',
+  justLow: 'justLow',
+  dist: 'dist',
+  thaiDist: 'thaiDist',
 };
 
 const parsePPrLikeElement = (pPr: XmlElement): Partial<ParagraphProperties> => {
   const out: Partial<ParagraphProperties> = {};
   const algn = getAttrValue(pPr, qname('', 'algn', ''));
   if (algn !== null && ALIGN_TOKEN_MAP[algn] !== undefined) out.align = ALIGN_TOKEN_MAP[algn];
+  const fontAlign = parseParagraphFontAlignment(pPr);
+  if (fontAlign !== null) out.fontAlign = fontAlign;
   const marL = getAttrValue(pPr, qname('', 'marL', ''));
   if (marL !== null) {
     const n = Number.parseInt(marL, 10);
@@ -555,6 +561,8 @@ const mergePPrLayer = (
   layer: Partial<ParagraphProperties>,
 ): void => {
   if (base.align === undefined && layer.align !== undefined) base.align = layer.align;
+  if (base.fontAlign === undefined && layer.fontAlign !== undefined)
+    base.fontAlign = layer.fontAlign;
   if (base.marL === undefined && layer.marL !== undefined) base.marL = layer.marL;
   if (base.marR === undefined && layer.marR !== undefined) base.marR = layer.marR;
   if (base.indent === undefined && layer.indent !== undefined) base.indent = layer.indent;
@@ -663,6 +671,7 @@ export const getParagraphPropertiesEffective = (
 
   return {
     align: result.align ?? null,
+    fontAlign: result.fontAlign ?? null,
     level,
     marL: result.marL ?? null,
     marR: result.marR ?? null,
