@@ -607,14 +607,8 @@ export const getShapeRunFormat = (
  * from the inherited visual `TextFormat` cascade. Returns `null` when the run
  * has no `<a:rPr>` or none of these state attributes is authored.
  */
-export const getShapeRunState = (
-  shape: SlideShapeData,
-  paragraphIndex: number,
-  runIndex: number,
-): TextRunState | null => {
-  const run = requireRun(shape, paragraphIndex, runIndex);
-  const rPr = firstChildElement(run, NAME_A_RPR);
-  if (rPr === null) return null;
+/** @internal Reads direct non-visual run state from any CT_TextCharacterProperties element. */
+export const parseTextRunState = (rPr: XmlElement): TextRunState | null => {
   const normalizeHeight = optionalOnOffAttr(rPr, 'normalizeH');
   const noProof = optionalOnOffAttr(rPr, 'noProof');
   const dirty = optionalOnOffAttr(rPr, 'dirty');
@@ -633,4 +627,14 @@ export const getShapeRunState = (
       : {}),
   };
   return Object.keys(state).length > 0 ? state : null;
+};
+
+export const getShapeRunState = (
+  shape: SlideShapeData,
+  paragraphIndex: number,
+  runIndex: number,
+): TextRunState | null => {
+  const run = requireRun(shape, paragraphIndex, runIndex);
+  const rPr = firstChildElement(run, NAME_A_RPR);
+  return rPr === null ? null : parseTextRunState(rPr);
 };

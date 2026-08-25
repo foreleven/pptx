@@ -1,6 +1,6 @@
 // Per-run text accessors.
 
-import { parseRPrLikeElement, resolveDrawingColor } from './shape-color.ts';
+import { parseRPrLikeElement, parseTextRunState, resolveDrawingColor } from './shape-color.ts';
 import {
   type BulletStyle,
   type ParagraphAlignment,
@@ -36,7 +36,12 @@ import { commitAndRefresh, requireTxBody } from './_helpers.ts';
 import { getPresentationTheme } from './theme.ts';
 import { getSlides } from './slide-query.ts';
 import { findCNvPr, NAME_HLINK_CLICK_FN, type ShapeClickAction } from './embedded.ts';
-import { emuCoordinate32, emuPositiveCoordinate32, oneOf } from '../../internal/bounds.ts';
+import {
+  emuCoordinate32,
+  emuPositiveCoordinate32,
+  normalizeGuid,
+  oneOf,
+} from '../../internal/bounds.ts';
 
 const NAME_TX_BODY = qname('p', 'txBody', NS.pml);
 
@@ -50,17 +55,45 @@ const NAME_TX_BODY = qname('p', 'txBody', NS.pml);
 const NAME_A_P = qname('a', 'p', NS.dml);
 const NAME_A_R = qname('a', 'r', NS.dml);
 const NAME_A_BR = qname('a', 'br', NS.dml);
+const NAME_A_FLD = qname('a', 'fld', NS.dml);
 export const NAME_A_RPR = qname('a', 'rPr', NS.dml);
 const NAME_A_T = qname('a', 't', NS.dml);
 const NAME_A_END_PARA_RPR = qname('a', 'endParaRPr', NS.dml);
 
-/** One authorable inline paragraph element. Fields are read-only until field authoring is supported. */
+/** Direct paragraph properties carried inside one DrawingML text field. */
+export interface ShapeFieldParagraphProperties {
+  readonly align?: ParagraphAlignment;
+  readonly fontAlign?: ParagraphFontAlignment;
+  readonly level?: number;
+  readonly marL?: number;
+  readonly marR?: number;
+  readonly indent?: number;
+  readonly lineSpacing?:
+    | { readonly kind: 'pct'; readonly value: number }
+    | { readonly kind: 'pts'; readonly value: number };
+  readonly spcBefPts?: number;
+  readonly spcAftPts?: number;
+  readonly rtl?: boolean;
+  readonly defaultTabSize?: number;
+  readonly tabStops?: readonly ParagraphTabStop[];
+}
+
+/** One authorable inline paragraph element. */
 export type ShapeParagraphElementInput =
   | {
       readonly kind: 'r';
       readonly text: string;
       readonly format?: TextFormat;
       readonly state?: TextRunState;
+    }
+  | {
+      readonly kind: 'fld';
+      readonly id: string;
+      readonly type?: string | null;
+      readonly text: string;
+      readonly format?: TextFormat;
+      readonly state?: TextRunState;
+      readonly paragraph?: ShapeFieldParagraphProperties;
     }
   | { readonly kind: 'br' };
 
@@ -158,6 +191,26 @@ export const setShapeParagraphElements = (
     const textElement = elem(NAME_A_T, {
       children: [text(value.text)],
     });
+    if (value.kind === 'fld') {
+      if (value.type !== undefined && value.type !== null && typeof value.type !== 'string') {
+        throw new TypeError('text field type must be a string, null, or undefined.');
+      }
+      const fieldParagraph =
+        value.paragraph === undefined ? null : buildFieldParagraphProperties(value.paragraph);
+      return elem(NAME_A_FLD, {
+        attrs: [
+          attr(qname('', 'id', ''), normalizeGuid(value.id, 'text field id')),
+          ...(value.type === undefined || value.type === null
+            ? []
+            : [attr(qname('', 'type', ''), value.type)]),
+        ],
+        children: [
+          ...(runProperties ? [runProperties] : []),
+          ...(fieldParagraph ? [fieldParagraph] : []),
+          textElement,
+        ],
+      });
+    }
     return elem(NAME_A_R, {
       children: [...(runProperties ? [runProperties] : []), textElement],
     });
@@ -194,9 +247,14 @@ export type ShapeParagraphElement =
   | { readonly kind: 'r'; readonly text: string; readonly format: TextFormat | null }
   | {
       readonly kind: 'fld';
+      readonly id: string | null;
       readonly text: string;
       readonly format: TextFormat | null;
+      readonly state: TextRunState | null;
+      readonly paragraph: ShapeFieldParagraphProperties | null;
       readonly type: string | null;
+      /** Unsupported or malformed direct field semantics that an editable importer must diagnose. */
+      readonly unsupported?: readonly string[];
     }
   | { readonly kind: 'br'; readonly format: TextFormat | null };
 
@@ -243,8 +301,21 @@ export const readParagraphElements = (
     if (child.name.localName === 'r') {
       out.push({ kind: 'r', text: readT(child), format: readFmt(child) });
     } else if (child.name.localName === 'fld') {
+      const id = getAttrValue(child, qname('', 'id', ''));
       const type = getAttrValue(child, qname('', 'type', ''));
-      out.push({ kind: 'fld', text: readT(child), format: readFmt(child), type });
+      const rPr = firstChildElement(child, NAME_A_RPR);
+      const pPr = firstChildElement(child, NAME_A_PPR);
+      const unsupported = unsupportedFieldSemantics(child, pPr);
+      out.push({
+        kind: 'fld',
+        id,
+        text: readT(child),
+        format: readFmt(child),
+        state: rPr === null ? null : parseTextRunState(rPr),
+        paragraph: pPr === null ? null : parseFieldParagraphProperties(pPr),
+        type,
+        ...(unsupported.length === 0 ? {} : { unsupported }),
+      });
     } else if (child.name.localName === 'br') {
       out.push({ kind: 'br', format: readFmt(child) });
     }
@@ -734,6 +805,406 @@ export const parseParagraphTabStops = (pPr: XmlElement): readonly ParagraphTabSt
     if (Number.isFinite(positionEmu)) stops.push({ positionEmu, alignment });
   }
   return stops;
+};
+
+const FIELD_PARAGRAPH_ALIGNMENT_FROM_TOKEN: Readonly<Record<string, ParagraphAlignment>> = {
+  l: 'left',
+  ctr: 'center',
+  r: 'right',
+  just: 'justify',
+  justLow: 'justLow',
+  dist: 'dist',
+  thaiDist: 'thaiDist',
+};
+
+const FIELD_PARAGRAPH_SUPPORTED_ATTRIBUTES = new Set([
+  'algn',
+  'fontAlgn',
+  'lvl',
+  'marL',
+  'marR',
+  'indent',
+  'rtl',
+  'defTabSz',
+]);
+const FIELD_PARAGRAPH_SUPPORTED_CHILDREN = new Set(['lnSpc', 'spcBef', 'spcAft', 'tabLst']);
+
+const integerLexeme = (value: string): number | null =>
+  /^-?\d+$/u.test(value) && Number.isSafeInteger(Number(value)) ? Number(value) : null;
+
+const unsupportedFieldParagraphSemantics = (pPr: XmlElement): string[] => {
+  const unsupported: string[] = [];
+  for (const attribute of pPr.attrs) {
+    if (
+      attribute.name.namespaceURI !== '' ||
+      !FIELD_PARAGRAPH_SUPPORTED_ATTRIBUTES.has(attribute.name.localName)
+    ) {
+      unsupported.push(`text field paragraph attribute ${attribute.name.localName}`);
+    }
+  }
+  const validateIntegerAttribute = (
+    name: 'lvl' | 'marL' | 'marR' | 'indent' | 'defTabSz',
+    validate: (value: number) => boolean,
+  ): void => {
+    const raw = getAttrValue(pPr, qname('', name, ''));
+    if (raw === null) return;
+    const value = integerLexeme(raw);
+    if (value === null || !validate(value)) {
+      unsupported.push(`text field paragraph ${name} ${raw}`);
+    }
+  };
+  const alignment = getAttrValue(pPr, ATTR_ALGN_FN);
+  if (alignment !== null && FIELD_PARAGRAPH_ALIGNMENT_FROM_TOKEN[alignment] === undefined) {
+    unsupported.push(`text field paragraph alignment ${alignment}`);
+  }
+  const fontAlignment = getAttrValue(pPr, ATTR_FONT_ALGN_FN);
+  if (fontAlignment !== null && PARAGRAPH_FONT_TOKEN_TO_ALIGNMENT[fontAlignment] === undefined) {
+    unsupported.push(`text field paragraph font alignment ${fontAlignment}`);
+  }
+  validateIntegerAttribute('lvl', (value) => value >= 0 && value <= 8);
+  validateIntegerAttribute('marL', (value) => value >= 0 && value <= 2_147_483_647);
+  validateIntegerAttribute('marR', (value) => value >= 0 && value <= 2_147_483_647);
+  validateIntegerAttribute('indent', (value) => value >= -2_147_483_648 && value <= 2_147_483_647);
+  validateIntegerAttribute('defTabSz', (value) => value >= 0 && value <= 2_147_483_647);
+  const rtl = getAttrValue(pPr, ATTR_RTL_FN);
+  if (rtl !== null && !['0', '1', 'false', 'true'].includes(rtl)) {
+    unsupported.push(`text field paragraph rtl ${rtl}`);
+  }
+
+  const spacingChildren = (outer: XmlElement): XmlElement[] =>
+    outer.children.filter((child): child is XmlElement => child.kind === 'element');
+  const validateSpacing = (outer: XmlElement, allowPercent: boolean): void => {
+    const children = spacingChildren(outer);
+    if (children.length !== 1) {
+      unsupported.push(`text field paragraph ${outer.name.localName} structure`);
+      return;
+    }
+    const inner = children[0]!;
+    if (
+      inner.name.namespaceURI !== NS.dml ||
+      (inner.name.localName !== 'spcPts' && !(allowPercent && inner.name.localName === 'spcPct'))
+    ) {
+      unsupported.push(`text field paragraph ${outer.name.localName} ${inner.name.localName}`);
+      return;
+    }
+    if (
+      inner.attrs.some(
+        (attribute) => attribute.name.namespaceURI !== '' || attribute.name.localName !== 'val',
+      )
+    ) {
+      unsupported.push(`text field paragraph ${outer.name.localName} spacing attributes`);
+    }
+    const raw = getAttrValue(inner, qname('', 'val', ''));
+    const value = raw === null ? null : integerLexeme(raw);
+    if (value === null || value < 0) {
+      unsupported.push(`text field paragraph ${outer.name.localName} spacing ${String(raw)}`);
+    }
+  };
+
+  for (const child of pPr.children) {
+    if (child.kind !== 'element') continue;
+    if (
+      child.name.namespaceURI !== NS.dml ||
+      !FIELD_PARAGRAPH_SUPPORTED_CHILDREN.has(child.name.localName)
+    ) {
+      unsupported.push(`text field paragraph child ${child.name.localName}`);
+      continue;
+    }
+    if (child.name.localName === 'lnSpc') validateSpacing(child, true);
+    else if (child.name.localName === 'spcBef' || child.name.localName === 'spcAft') {
+      validateSpacing(child, false);
+    } else if (child.name.localName === 'tabLst') {
+      const tabs = child.children.filter(
+        (candidate): candidate is XmlElement => candidate.kind === 'element',
+      );
+      if (tabs.length > 32) unsupported.push(`text field paragraph tab count ${tabs.length}`);
+      for (const tab of tabs) {
+        if (tab.name.namespaceURI !== NS.dml || tab.name.localName !== 'tab') {
+          unsupported.push(`text field paragraph tab child ${tab.name.localName}`);
+          continue;
+        }
+        if (
+          tab.attrs.some(
+            (attribute) =>
+              attribute.name.namespaceURI !== '' ||
+              !['pos', 'algn'].includes(attribute.name.localName),
+          ) ||
+          tab.children.some((candidate) => candidate.kind === 'element')
+        ) {
+          unsupported.push('text field paragraph tab structure');
+        }
+        const positionRaw = getAttrValue(tab, qname('', 'pos', ''));
+        const position = positionRaw === null ? null : integerLexeme(positionRaw);
+        if (position === null || position < -2_147_483_648 || position > 2_147_483_647) {
+          unsupported.push(`text field paragraph tab position ${String(positionRaw)}`);
+        }
+        const token = getAttrValue(tab, qname('', 'algn', ''));
+        if (token === null || TAB_TOKEN_TO_ALIGNMENT[token] === undefined) {
+          unsupported.push(`text field paragraph tab alignment ${String(token)}`);
+        }
+      }
+    }
+  }
+  return unsupported;
+};
+
+const unsupportedFieldSemantics = (field: XmlElement, pPr: XmlElement | null): string[] => {
+  const unsupported = field.attrs
+    .filter(
+      (attribute) =>
+        attribute.name.namespaceURI !== '' || !['id', 'type'].includes(attribute.name.localName),
+    )
+    .map((attribute) => `text field attribute ${attribute.name.localName}`);
+  const fieldId = getAttrValue(field, qname('', 'id', ''));
+  if (fieldId !== null) {
+    try {
+      normalizeGuid(fieldId, 'text field id');
+    } catch {
+      unsupported.push(`text field identity ${fieldId}`);
+    }
+  }
+  const childCounts = new Map<string, number>();
+  for (const child of field.children) {
+    if (child.kind !== 'element') continue;
+    childCounts.set(child.name.localName, (childCounts.get(child.name.localName) ?? 0) + 1);
+    if (child.name.namespaceURI !== NS.dml || !['rPr', 'pPr', 't'].includes(child.name.localName)) {
+      unsupported.push(`text field child ${child.name.localName}`);
+    }
+  }
+  for (const name of ['rPr', 'pPr', 't']) {
+    const count = childCounts.get(name) ?? 0;
+    if (count > 1) unsupported.push(`text field duplicate ${name}`);
+  }
+  if (pPr !== null) unsupported.push(...unsupportedFieldParagraphSemantics(pPr));
+  return unsupported;
+};
+
+/** Parse one field-local pPr without applying the containing paragraph's inheritance cascade. */
+const parseFieldParagraphProperties = (pPr: XmlElement): ShapeFieldParagraphProperties => {
+  const properties: {
+    -readonly [K in keyof ShapeFieldParagraphProperties]?: ShapeFieldParagraphProperties[K];
+  } = {};
+  const readIntegerAttr = (name: string): number | undefined => {
+    const value = getAttrValue(pPr, qname('', name, ''));
+    if (value === null) return undefined;
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  };
+  const alignment = getAttrValue(pPr, ATTR_ALGN_FN);
+  if (alignment !== null && FIELD_PARAGRAPH_ALIGNMENT_FROM_TOKEN[alignment] !== undefined) {
+    properties.align = FIELD_PARAGRAPH_ALIGNMENT_FROM_TOKEN[alignment];
+  }
+  const fontAlign = parseParagraphFontAlignment(pPr);
+  if (fontAlign !== null) properties.fontAlign = fontAlign;
+  const level = readIntegerAttr('lvl');
+  if (level !== undefined) properties.level = level;
+  const marL = readIntegerAttr('marL');
+  if (marL !== undefined) properties.marL = marL;
+  const marR = readIntegerAttr('marR');
+  if (marR !== undefined) properties.marR = marR;
+  const indent = readIntegerAttr('indent');
+  if (indent !== undefined) properties.indent = indent;
+  const defaultTabSize = readIntegerAttr('defTabSz');
+  if (defaultTabSize !== undefined) properties.defaultTabSize = defaultTabSize;
+  const rtl = getAttrValue(pPr, ATTR_RTL_FN);
+  if (rtl !== null) properties.rtl = rtl === '1' || rtl === 'true';
+  const tabStops = parseParagraphTabStops(pPr);
+  if (tabStops !== null) properties.tabStops = tabStops;
+
+  const readPointSpacing = (name: 'spcBef' | 'spcAft'): number | undefined => {
+    const outer = firstChildElement(pPr, qname('a', name, NS.dml));
+    const inner = outer && firstChildElement(outer, qname('a', 'spcPts', NS.dml));
+    const value = inner && getAttrValue(inner, qname('', 'val', ''));
+    if (value === null || value === undefined) return undefined;
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) ? parsed / 100 : undefined;
+  };
+  const before = readPointSpacing('spcBef');
+  if (before !== undefined) properties.spcBefPts = before;
+  const after = readPointSpacing('spcAft');
+  if (after !== undefined) properties.spcAftPts = after;
+  const lineSpacing = firstChildElement(pPr, qname('a', 'lnSpc', NS.dml));
+  if (lineSpacing) {
+    const pct = firstChildElement(lineSpacing, qname('a', 'spcPct', NS.dml));
+    const pts = firstChildElement(lineSpacing, qname('a', 'spcPts', NS.dml));
+    const pctValue = pct && getAttrValue(pct, qname('', 'val', ''));
+    const ptsValue = pts && getAttrValue(pts, qname('', 'val', ''));
+    if (pctValue !== null && pctValue !== undefined) {
+      const parsed = Number.parseFloat(pctValue);
+      if (Number.isFinite(parsed)) {
+        properties.lineSpacing = {
+          kind: 'pct',
+          value: Math.abs(parsed) > 1 ? parsed / 100000 : parsed,
+        };
+      }
+    } else if (ptsValue !== null && ptsValue !== undefined) {
+      const parsed = Number.parseInt(ptsValue, 10);
+      if (Number.isFinite(parsed)) properties.lineSpacing = { kind: 'pts', value: parsed / 100 };
+    }
+  }
+  return properties;
+};
+
+const FIELD_PARAGRAPH_ALIGNMENTS = [
+  'left',
+  'center',
+  'right',
+  'justify',
+  'distribute',
+  'l',
+  'ctr',
+  'r',
+  'just',
+  'dist',
+  'justLow',
+  'thaiDist',
+] as const;
+
+/** Build one schema-ordered field-local pPr from the public direct-property model. */
+const buildFieldParagraphProperties = (value: ShapeFieldParagraphProperties): XmlElement => {
+  const pPr = elem(NAME_A_PPR);
+  if (value.align !== undefined) {
+    const alignment = oneOf(
+      value.align,
+      FIELD_PARAGRAPH_ALIGNMENTS,
+      'text field paragraph alignment',
+    );
+    pPr.attrs.push(attr(ATTR_ALGN_FN, alignTokenForFn(alignment)));
+  }
+  if (value.fontAlign !== undefined) {
+    const alignment = oneOf(
+      value.fontAlign,
+      PARAGRAPH_FONT_ALIGNMENTS,
+      'text field paragraph font alignment',
+    );
+    pPr.attrs.push(attr(ATTR_FONT_ALGN_FN, PARAGRAPH_FONT_ALIGNMENT_TO_TOKEN[alignment]));
+  }
+  if (value.level !== undefined) {
+    if (!Number.isInteger(value.level) || value.level < 0 || value.level > 8) {
+      throw new RangeError(
+        `text field paragraph level must be an integer in [0, 8], got ${value.level}`,
+      );
+    }
+    if (value.level > 0) pPr.attrs.push(attr(ATTR_LVL, String(value.level)));
+  }
+  if (value.marL !== undefined) {
+    pPr.attrs.push(
+      attr(
+        qname('', 'marL', ''),
+        String(emuPositiveCoordinate32(value.marL, 'text field paragraph marL')),
+      ),
+    );
+  }
+  if (value.marR !== undefined) {
+    pPr.attrs.push(
+      attr(
+        qname('', 'marR', ''),
+        String(emuPositiveCoordinate32(value.marR, 'text field paragraph marR')),
+      ),
+    );
+  }
+  if (value.indent !== undefined) {
+    pPr.attrs.push(
+      attr(
+        qname('', 'indent', ''),
+        String(emuCoordinate32(value.indent, 'text field paragraph indent')),
+      ),
+    );
+  }
+  if (value.rtl !== undefined) {
+    if (typeof value.rtl !== 'boolean')
+      throw new TypeError('text field paragraph rtl must be a boolean.');
+    pPr.attrs.push(attr(ATTR_RTL_FN, value.rtl ? '1' : '0'));
+  }
+  if (value.defaultTabSize !== undefined) {
+    pPr.attrs.push(
+      attr(
+        qname('', 'defTabSz', ''),
+        String(
+          emuPositiveCoordinate32(value.defaultTabSize, 'text field paragraph default tab size'),
+        ),
+      ),
+    );
+  }
+
+  const addPointSpacing = (name: 'spcBef' | 'spcAft', points: number | undefined): void => {
+    if (points === undefined) return;
+    if (!Number.isFinite(points) || points < 0) {
+      throw new RangeError(
+        `text field paragraph ${name} must be a non-negative number, got ${points}`,
+      );
+    }
+    insertChildByRank(
+      pPr,
+      elem(qname('a', name, NS.dml), {
+        children: [
+          elem(qname('a', 'spcPts', NS.dml), {
+            attrs: [attr(qname('', 'val', ''), String(Math.round(points * 100)))],
+          }),
+        ],
+      }),
+      pPrChildRank,
+    );
+  };
+  if (value.lineSpacing !== undefined) {
+    if (!Number.isFinite(value.lineSpacing.value) || value.lineSpacing.value < 0) {
+      throw new RangeError(
+        `text field paragraph line spacing must be a non-negative number, got ${value.lineSpacing.value}`,
+      );
+    }
+    const inner =
+      value.lineSpacing.kind === 'pct'
+        ? elem(qname('a', 'spcPct', NS.dml), {
+            attrs: [
+              attr(qname('', 'val', ''), String(Math.round(value.lineSpacing.value * 100000))),
+            ],
+          })
+        : value.lineSpacing.kind === 'pts'
+          ? elem(qname('a', 'spcPts', NS.dml), {
+              attrs: [
+                attr(qname('', 'val', ''), String(Math.round(value.lineSpacing.value * 100))),
+              ],
+            })
+          : null;
+    if (inner === null)
+      throw new RangeError('text field paragraph line spacing kind must be pct or pts.');
+    insertChildByRank(pPr, elem(qname('a', 'lnSpc', NS.dml), { children: [inner] }), pPrChildRank);
+  }
+  addPointSpacing('spcBef', value.spcBefPts);
+  addPointSpacing('spcAft', value.spcAftPts);
+  if (value.tabStops !== undefined) {
+    if (value.tabStops.length > 32) {
+      throw new RangeError(
+        `text field paragraph tab stops must contain at most 32 entries, got ${value.tabStops.length}`,
+      );
+    }
+    const stops = value.tabStops.map((stop, index) => ({
+      positionEmu: emuCoordinate32(
+        stop.positionEmu,
+        `text field paragraph tab stop ${index} position`,
+      ),
+      alignment: oneOf(
+        stop.alignment,
+        PARAGRAPH_TAB_ALIGNMENTS,
+        `text field paragraph tab stop ${index} alignment`,
+      ),
+    }));
+    insertChildByRank(
+      pPr,
+      elem(qname('a', 'tabLst', NS.dml), {
+        children: stops.map((stop) =>
+          elem(qname('a', 'tab', NS.dml), {
+            attrs: [
+              attr(qname('', 'pos', ''), String(stop.positionEmu)),
+              attr(qname('', 'algn', ''), TAB_ALIGNMENT_TO_TOKEN[stop.alignment]),
+            ],
+          }),
+        ),
+      }),
+      pPrChildRank,
+    );
+  }
+  return pPr;
 };
 
 /** Reads the literal paragraph default-tab interval in EMU, or `null` when it inherits. */
