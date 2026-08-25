@@ -437,6 +437,20 @@ export const parseRPrLikeElement = (
     const t = getAttrValue(ea, qname('', 'typeface', ''));
     if (t !== null) out.fontEastAsian = t;
   }
+  const cs = firstChildElement(rPr, qname('a', 'cs', NS.dml));
+  if (cs !== null) {
+    const t = getAttrValue(cs, qname('', 'typeface', ''));
+    if (t !== null) out.fontComplexScript = t;
+  }
+  const sym = firstChildElement(rPr, qname('a', 'sym', NS.dml));
+  if (sym !== null) {
+    const t = getAttrValue(sym, qname('', 'typeface', ''));
+    if (t !== null) out.fontSymbol = t;
+  }
+  const language = getAttrValue(rPr, qname('', 'lang', ''));
+  if (language !== null) out.language = language;
+  const alternativeLanguage = getAttrValue(rPr, qname('', 'altLang', ''));
+  if (alternativeLanguage !== null) out.alternativeLanguage = alternativeLanguage;
   return out;
 };
 

@@ -49,6 +49,8 @@ const ATTR_DIRTY = qname('', 'dirty', '');
 const ATTR_ERROR = qname('', 'err', '');
 const ATTR_SMART_TAG_CLEAN = qname('', 'smtClean', '');
 const ATTR_SMART_TAG_ID = qname('', 'smtId', '');
+const ATTR_LANGUAGE = qname('', 'lang', '');
+const ATTR_ALTERNATIVE_LANGUAGE = qname('', 'altLang', '');
 const ATTR_TYPEFACE = qname('', 'typeface', '');
 const NAME_HIGHLIGHT = qname('a', 'highlight', NS.dml);
 
@@ -92,6 +94,14 @@ export interface TextFormat {
    * and CJK text and needs a consistent look across the whole run.
    */
   fontEastAsian?: string;
+  /** Complex-script font family (`Arial`, `Noto Naskh Arabic`, ...). Sets `<a:cs>`. */
+  fontComplexScript?: string;
+  /** Symbol font family (`Symbol`, `Wingdings`, ...). Sets `<a:sym>`. */
+  fontSymbol?: string;
+  /** Primary BCP 47 language tag. Mirrors `<a:rPr lang="..."/>`. */
+  language?: string;
+  /** Alternative BCP 47 language tag. Mirrors `<a:rPr altLang="..."/>`. */
+  alternativeLanguage?: string;
   /** Font size in points; fractional values allowed (`12`, `12.5`). */
   size?: number;
   /**
@@ -173,21 +183,22 @@ const setSolidFill = (rPr: XmlElement, value: string | null): void => {
   insertChildByRank(rPr, fill, rprChildRank);
 };
 
-const setLatin = (rPr: XmlElement, font: string | null): void => {
+/** Replace one script-specific typeface child without disturbing sibling script faces. */
+const setTypeface = (
+  rPr: XmlElement,
+  name: ReturnType<typeof qname>,
+  font: string | null,
+): void => {
   rPr.children = rPr.children.filter(
     (c) =>
-      !(c.kind === 'element' && c.name.namespaceURI === NS.dml && c.name.localName === 'latin'),
+      !(
+        c.kind === 'element' &&
+        c.name.namespaceURI === NS.dml &&
+        c.name.localName === name.localName
+      ),
   );
   if (font === null) return;
-  insertChildByRank(rPr, elem(NAME_LATIN, { attrs: [attr(ATTR_TYPEFACE, font)] }), rprChildRank);
-};
-
-const setEastAsian = (rPr: XmlElement, font: string | null): void => {
-  rPr.children = rPr.children.filter(
-    (c) => !(c.kind === 'element' && c.name.namespaceURI === NS.dml && c.name.localName === 'ea'),
-  );
-  if (font === null) return;
-  insertChildByRank(rPr, elem(NAME_EA, { attrs: [attr(ATTR_TYPEFACE, font)] }), rprChildRank);
+  insertChildByRank(rPr, elem(name, { attrs: [attr(ATTR_TYPEFACE, font)] }), rprChildRank);
 };
 
 const setHighlight = (rPr: XmlElement, value: string | null): void => {
@@ -244,14 +255,22 @@ export const applyRunFormat = (rPr: XmlElement, format: TextFormat): void => {
   if (format.cap !== undefined) {
     attrs = setOrRemoveAttr(attrs, ATTR_CAP, format.cap);
   }
+  if (format.language !== undefined) {
+    attrs = setOrRemoveAttr(attrs, ATTR_LANGUAGE, format.language);
+  }
+  if (format.alternativeLanguage !== undefined) {
+    attrs = setOrRemoveAttr(attrs, ATTR_ALTERNATIVE_LANGUAGE, format.alternativeLanguage);
+  }
   rPr.attrs = attrs;
 
-  if (format.font !== undefined) setLatin(rPr, format.font);
-  if (format.fontEastAsian !== undefined) setEastAsian(rPr, format.fontEastAsian);
+  if (format.font !== undefined) setTypeface(rPr, NAME_LATIN, format.font);
+  if (format.fontEastAsian !== undefined) setTypeface(rPr, NAME_EA, format.fontEastAsian);
+  if (format.fontComplexScript !== undefined) setTypeface(rPr, NAME_CS, format.fontComplexScript);
+  if (format.fontSymbol !== undefined) {
+    setTypeface(rPr, qname('a', 'sym', NS.dml), format.fontSymbol);
+  }
   if (format.color !== undefined) setSolidFill(rPr, format.color);
   if (format.highlight !== undefined) setHighlight(rPr, format.highlight);
-
-  void NAME_CS;
 };
 
 /** Mutates only the explicitly supplied direct run-state attributes. */
