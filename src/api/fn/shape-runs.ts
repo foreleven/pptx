@@ -238,10 +238,12 @@ export const getShapeParagraphCount = (shape: SlideShapeData): number =>
  * for `br`). `format` is the literal `<a:rPr>` on the element when
  * present; use `getShapeRunFormatEffective` to walk inheritance.
  *
- * Field kinds (`fld.type`): typical ECMA-376 `ST_TextFieldType` tokens
- * are `slidenum`, `datetime` (variants `1`..`13`), `presentationDate`,
- * `headerfooter`, `footer`, etc. Unrecognised tokens come through
- * unchanged so renderers can decide whether to substitute live values.
+ * Field kinds (`fld.type`): ECMA-376 deliberately types this attribute as
+ * an arbitrary string. PowerPoint 16.111.2 inserts `slidenum`,
+ * `datetime1` through `datetime13`, and `datetimeFigureOut`; its footer and
+ * header UI uses PresentationML placeholders/settings rather than extra
+ * DrawingML field tokens. Unrecognised strings come through unchanged so
+ * renderers can decide whether to substitute live values.
  */
 export type ShapeParagraphElement =
   | { readonly kind: 'r'; readonly text: string; readonly format: TextFormat | null }
