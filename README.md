@@ -349,7 +349,9 @@ shown together.
 
 `setShapeTextAutoFit(shape, "normal", { fontScale, lnSpcReduction })`
 writes PowerPoint's paired normal-autofit reduction ratios; use
-`getShapeTextAutoFitParams` to read them as decimal ratios in `[0, 1]`.
+`getShapeTextAutoFitParams` to read safe decimal ratios in `[0, 1]`, or
+`getShapeTextAutoFitParamsRaw` when an importer must diagnose native values
+outside that authoring contract.
 
 | Capability           | API                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

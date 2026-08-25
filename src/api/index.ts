@@ -334,6 +334,7 @@ export {
   getShapeTextAnchor,
   getShapeTextAnchorCentering,
   getShapeTextAutoFitParams,
+  getShapeTextAutoFitParamsRaw,
   getShapeTextAutoFit,
   getShapeTextBodyRotationDeg,
   getShapeTextColumns,

@@ -8,6 +8,7 @@ import {
   addSlideTextBox,
   getShapeTextAutoFit,
   getShapeTextAutoFitParams,
+  getShapeTextAutoFitParamsRaw,
   getShapeTextWrap,
   getSlideShapes,
   getSlides,
@@ -120,6 +121,33 @@ describe('fn API: setShapeTextAutoFit', () => {
     const zeroXml = strFromU8(zeroEntries['ppt/slides/slide1.xml']!);
     expect(zeroXml).toContain('<a:normAutofit fontScale="0%" lnSpcReduction="0"/>');
     if (isSchemaValidationAvailable()) expectSchemaValid(zeroXml, 'pml');
+  });
+
+  it('separates out-of-contract native ratios from safe authored parameters', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const tb = addSlideTextBox(slide, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(3),
+      h: inches(2),
+      text: 'A',
+    });
+    setShapeTextAutoFit(tb, 'normal', { fontScale: 0.72, lnSpcReduction: 0.18 });
+
+    const entries = unzipSync(await savePresentation(pres));
+    entries['ppt/slides/slide1.xml'] = strToU8(
+      strFromU8(entries['ppt/slides/slide1.xml']!)
+        .replace('fontScale="72000"', 'fontScale="110%"')
+        .replace('lnSpcReduction="18000"', 'lnSpcReduction="120%"'),
+    );
+    const strict = await loadPresentation(zipSync(entries));
+    const strictShape = getSlideShapes(getSlides(strict)[0]!).at(-1)!;
+    expect(getShapeTextAutoFitParamsRaw(strictShape)).toEqual({
+      fontScale: 1.1,
+      lnSpcReduction: 1.2,
+    });
+    expect(getShapeTextAutoFitParams(strictShape)).toBeNull();
   });
 
   it('rejects invalid reduction parameters before mutating the current mode', async () => {

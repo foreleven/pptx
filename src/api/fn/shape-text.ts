@@ -292,10 +292,14 @@ export const setShapeTextAutoFit = (
 
 /** Reject values that cannot be represented by the public normal-autofit ratio contract. */
 const assertTextAutoFitRatio = (value: number, name: keyof TextAutoFitParams): void => {
-  if (!Number.isFinite(value) || value < 0 || value > 1) {
+  if (!isTextAutoFitRatio(value)) {
     throw new RangeError(`Text autofit ${name} must be a finite ratio from 0 through 1.`);
   }
 };
+
+/** Return whether a value satisfies the safe authored normal-autofit ratio contract. */
+const isTextAutoFitRatio = (value: number): boolean =>
+  Number.isFinite(value) && value >= 0 && value <= 1;
 
 /** Use Strict percent syntax where Transitional font-scale integers cannot represent the public zero-based range. */
 const serializeTextAutoFitRatio = (value: number, name: keyof TextAutoFitParams): string => {
@@ -324,20 +328,13 @@ export const getShapeTextAutoFit = (shape: SlideShapeData): TextAutoFit | null =
 };
 
 /**
- * Reads the scale parameters PowerPoint stores on `<a:normAutofit>`
- * once it has shrunk a text body to fit. Returns `null` if the body
- * doesn't carry `<a:normAutofit>` or both attributes are absent. When only
- * one attribute exists, the other field uses its schema default. Both fields
- * are unitless ratios in `[0, 1]`:
- *
- *   - `fontScale`     — multiply every run's font size by this. Default `1`.
- *   - `lnSpcReduction` — subtract from the line-height ratio. Default `0`.
- *
- * Companion to `getShapeTextAutoFit`. Renderers that want to match
- * PowerPoint's actual on-screen text size apply these factors to the
- * authored font sizes; without them, every long title overflows.
+ * Reads the raw scale parameters stored on `<a:normAutofit>`. Returns `null`
+ * if the body doesn't carry normal autofit or both attributes are absent.
+ * When only one attribute exists, the other field uses its schema default.
+ * Strict percent strings may parse outside `[0, 1]`; importers use this raw
+ * result to diagnose values that the safe authoring contract cannot preserve.
  */
-export const getShapeTextAutoFitParams = (shape: SlideShapeData): TextAutoFitParams | null => {
+export const getShapeTextAutoFitParamsRaw = (shape: SlideShapeData): TextAutoFitParams | null => {
   const txBody = firstChildElement(shape[SHAPE_ELEMENT], NAME_TX_BODY);
   if (!txBody) return null;
   const bodyPr = firstChildElement(txBody, NAME_A_BODY_PR);
@@ -358,6 +355,27 @@ export const getShapeTextAutoFitParams = (shape: SlideShapeData): TextAutoFitPar
     }
   }
   return null;
+};
+
+/**
+ * Reads PowerPoint-computed normal-autofit parameters only when both values
+ * satisfy the safe public `[0, 1]` ratio contract. Returns `null` for absent,
+ * bare, malformed, or out-of-contract native parameters:
+ *
+ *   - `fontScale`     — multiply every run's font size by this. Default `1`.
+ *   - `lnSpcReduction` — subtract from the line-height ratio. Default `0`.
+ *
+ * Companion to `getShapeTextAutoFit`. Renderers that want to match
+ * PowerPoint's actual on-screen text size apply these factors to the
+ * authored font sizes; without them, every long title overflows.
+ */
+export const getShapeTextAutoFitParams = (shape: SlideShapeData): TextAutoFitParams | null => {
+  const params = getShapeTextAutoFitParamsRaw(shape);
+  return params !== null &&
+    isTextAutoFitRatio(params.fontScale) &&
+    isTextAutoFitRatio(params.lnSpcReduction)
+    ? params
+    : null;
 };
 
 /** Normalize Transitional 1/1000-percent integers and Strict percent lexemes to a unit ratio. */
