@@ -49,8 +49,8 @@ describe('fn API: getParagraphBullet', () => {
     setParagraphBullet(tb, 0, 'bullet');
     setParagraphBullet(tb, 1, 'number');
     setParagraphBullet(tb, 2, 'none');
-    setParagraphBullet(tb, 3, { char: '★' });
-    setParagraphBullet(tb, 4, { autoNum: 'romanLcPeriod' });
+    setParagraphBullet(tb, 3, { char: '★', font: 'Arial' });
+    setParagraphBullet(tb, 4, { autoNum: 'romanLcPeriod', font: 'Aptos' });
     setParagraphBullet(tb, 5, { autoNum: 'arabicPeriod', startAt: 5 });
 
     expect(getParagraphBullet(tb, 0)).toBe('bullet');
@@ -59,10 +59,14 @@ describe('fn API: getParagraphBullet', () => {
     expect(getParagraphBullet(tb, 3)).toEqual({ char: '★' });
     expect(getParagraphBullet(tb, 4)).toEqual({ autoNum: 'romanLcPeriod' });
     expect(getParagraphBullet(tb, 5)).toEqual({ autoNum: 'arabicPeriod', startAt: 5 });
+    expect(getParagraphBulletPropertiesEffective(pres, tb, 3).font).toBe('Arial');
+    expect(getParagraphBulletPropertiesEffective(pres, tb, 4).font).toBe('Aptos');
 
     const rebuilt = await loadPresentation(await savePresentation(pres));
     const rebuiltText = findShapeByText(getSlides(rebuilt)[0]!, 'A')!;
     expect(getParagraphBullet(rebuiltText, 5)).toEqual({ autoNum: 'arabicPeriod', startAt: 5 });
+    expect(getParagraphBulletPropertiesEffective(rebuilt, rebuiltText, 3).font).toBe('Arial');
+    expect(getParagraphBulletPropertiesEffective(rebuilt, rebuiltText, 4).font).toBe('Aptos');
   });
 
   it('rejects automatic-number starts outside the DrawingML range', async () => {
@@ -82,6 +86,25 @@ describe('fn API: getParagraphBullet', () => {
     expect(() => setParagraphBullet(tb, 0, { autoNum: 'arabicPeriod', startAt: 32768 })).toThrow(
       'automatic-number startAt must be an integer from 1 to 32767',
     );
+  });
+
+  it('rejects an empty marker font before mutating the paragraph', () => {
+    const pres = createPresentation();
+    const slide = addBlankSlide(pres);
+    const tb = addSlideTextBox(slide, {
+      x: inches(1),
+      y: inches(1),
+      w: inches(4),
+      h: inches(2),
+      text: 'A',
+    });
+    setParagraphBullet(tb, 0, { char: '•', font: 'Arial' });
+
+    expect(() => setParagraphBullet(tb, 0, { char: '•', font: '   ' })).toThrow(
+      /bullet font must be a non-empty string/u,
+    );
+    expect(getParagraphBullet(tb, 0)).toBe('bullet');
+    expect(getParagraphBulletPropertiesEffective(pres, tb, 0).font).toBe('Arial');
   });
 
   it('resolves marker overrides independently from a direct bullet identity', async () => {

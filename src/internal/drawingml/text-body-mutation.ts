@@ -174,8 +174,8 @@ export const replaceTextInTree = (root: XmlElement, from: string | RegExp, to: s
  *   - `'number'` — shortcut for `{ autoNum: 'arabicPeriod' }` (1., 2., 3.).
  *   - `'none'` — emits `<a:buNone/>`, forcing the paragraph to be bullet-free
  *     even if the layout has a bullet default.
- *   - `{ char }` — custom bullet character (any single grapheme).
- *   - `{ autoNum, startAt? }` — any ECMA-376 `ST_TextAutonumberScheme`
+ *   - `{ char, font? }` — custom bullet character (any single grapheme) and optional marker typeface.
+ *   - `{ autoNum, startAt?, font? }` — any ECMA-376 `ST_TextAutonumberScheme`
  *     token (`arabicPeriod`, `romanLcParenR`, `alphaUcPeriod`, ...),
  *     optionally starting from an integer in the native 1–32767 range.
  */
@@ -183,8 +183,8 @@ export type BulletStyle =
   | 'bullet'
   | 'number'
   | 'none'
-  | { char: string }
-  | { autoNum: string; startAt?: number };
+  | { char: string; font?: string }
+  | { autoNum: string; startAt?: number; font?: string };
 
 const normalizeBulletStyle = (
   s: BulletStyle,
@@ -321,6 +321,11 @@ const hasAttr = (el: XmlElement, local: string): boolean =>
   el.attrs.some((a) => a.name.namespaceURI === '' && a.name.localName === local);
 
 export const applyBulletToParagraph = (paragraph: XmlElement, style: BulletStyle): void => {
+  const normalized = normalizeBulletStyle(style);
+  const authoredFont = typeof style === 'object' ? style.font : undefined;
+  if (authoredFont !== undefined && authoredFont.trim().length === 0) {
+    throw new TypeError('bullet font must be a non-empty string');
+  }
   let pPr = firstChildElement(paragraph, NAME_PPR_FOR_BULLET);
   if (pPr === null) {
     pPr = elem(NAME_PPR_FOR_BULLET);
@@ -359,8 +364,9 @@ export const applyBulletToParagraph = (paragraph: XmlElement, style: BulletStyle
   // major font) ahead of `<a:buAutoNum>`. A character bullet carries its glyph
   // directly and needs none. `<a:buFont>` precedes the bullet child per the
   // CT_TextParagraphProperties element order.
-  if (normalizeBulletStyle(style).kind === 'autoNum') {
-    pPr.children.push(elem(NAME_BU_FONT, { attrs: [attr(ATTR_TYPEFACE, '+mj-lt')] }));
+  const bulletFont = authoredFont ?? (normalized.kind === 'autoNum' ? '+mj-lt' : undefined);
+  if (bulletFont !== undefined) {
+    pPr.children.push(elem(NAME_BU_FONT, { attrs: [attr(ATTR_TYPEFACE, bulletFont)] }));
   }
   pPr.children.push(buildBulletElement(style));
 };
