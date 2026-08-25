@@ -37,6 +37,10 @@ import { getPresentationTheme } from './theme.ts';
 import { getSlides } from './slide-query.ts';
 import { findCNvPr, NAME_HLINK_CLICK_FN, type ShapeClickAction } from './embedded.ts';
 import {
+  hyperlinkRelationshipIds,
+  removeUnreferencedSlideRelationships,
+} from './hyperlink-relationships.ts';
+import {
   emuCoordinate32,
   emuPositiveCoordinate32,
   normalizeGuid,
@@ -359,6 +363,16 @@ export const setShapeRunHyperlink = (
     rPr = elem(qname('a', 'rPr', NS.dml));
     run.children.unshift(rPr);
   }
+  const oldRelationshipIds = new Set<string>();
+  for (const child of rPr.children) {
+    if (
+      child.kind === 'element' &&
+      child.name.namespaceURI === NS.dml &&
+      child.name.localName === 'hlinkClick'
+    ) {
+      for (const id of hyperlinkRelationshipIds(child)) oldRelationshipIds.add(id);
+    }
+  }
   rPr.children = rPr.children.filter(
     (c) =>
       !(
@@ -397,6 +411,7 @@ export const setShapeRunHyperlink = (
       }),
     );
   }
+  removeUnreferencedSlideRelationships(shape[SHAPE_SLIDE], oldRelationshipIds);
   commitAndRefresh(shape);
 };
 

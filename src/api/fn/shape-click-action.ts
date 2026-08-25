@@ -30,6 +30,10 @@ import {
   type SlideShapeData,
 } from '../_internal-symbols.ts';
 import { commitAndRefresh } from './_helpers.ts';
+import {
+  hyperlinkRelationshipIds,
+  removeUnreferencedSlideRelationships,
+} from './hyperlink-relationships.ts';
 // ---------------------------------------------------------------------------
 // Shape click action — `<a:hlinkClick>` on the shape's cNvPr.
 //
@@ -174,9 +178,20 @@ export const setShapeClickAction = (
     );
   }
 
+  const oldRelationshipIds = new Set<string>();
+  for (const child of cNvPr.children) {
+    if (
+      child.kind === 'element' &&
+      child.name.namespaceURI === NS.dml &&
+      child.name.localName === 'hlinkClick'
+    ) {
+      for (const id of hyperlinkRelationshipIds(child)) oldRelationshipIds.add(id);
+    }
+  }
   removeExistingHlinkClick(cNvPr);
 
   if (action === null) {
+    removeUnreferencedSlideRelationships(shape[SHAPE_SLIDE], oldRelationshipIds);
     commitAndRefresh(shape);
     return;
   }
@@ -257,5 +272,6 @@ export const setShapeClickAction = (
     }),
   );
 
+  removeUnreferencedSlideRelationships(slide, oldRelationshipIds);
   commitAndRefresh(shape);
 };
