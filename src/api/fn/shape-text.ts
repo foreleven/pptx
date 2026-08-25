@@ -279,8 +279,11 @@ export const setShapeTextAutoFit = (
   const autoFit = elem(qname('a', local, NS.dml));
   if (params !== undefined) {
     autoFit.attrs.push(
-      attr(qname('', 'fontScale', ''), String(Math.round(params.fontScale * 100_000))),
-      attr(qname('', 'lnSpcReduction', ''), String(Math.round(params.lnSpcReduction * 100_000))),
+      attr(qname('', 'fontScale', ''), serializeTextAutoFitRatio(params.fontScale, 'fontScale')),
+      attr(
+        qname('', 'lnSpcReduction', ''),
+        serializeTextAutoFitRatio(params.lnSpcReduction, 'lnSpcReduction'),
+      ),
     );
   }
   bodyPr.children.push(autoFit);
@@ -292,6 +295,14 @@ const assertTextAutoFitRatio = (value: number, name: keyof TextAutoFitParams): v
   if (!Number.isFinite(value) || value < 0 || value > 1) {
     throw new RangeError(`Text autofit ${name} must be a finite ratio from 0 through 1.`);
   }
+};
+
+/** Use Strict percent syntax where Transitional font-scale integers cannot represent the public zero-based range. */
+const serializeTextAutoFitRatio = (value: number, name: keyof TextAutoFitParams): string => {
+  const units = Math.round(value * 100_000);
+  if (name !== 'fontScale' || units >= 1_000) return String(units);
+  const percent = (value * 100).toFixed(10).replace(/0+$/u, '').replace(/\.$/u, '');
+  return `${percent}%`;
 };
 
 /**
@@ -315,8 +326,9 @@ export const getShapeTextAutoFit = (shape: SlideShapeData): TextAutoFit | null =
 /**
  * Reads the scale parameters PowerPoint stores on `<a:normAutofit>`
  * once it has shrunk a text body to fit. Returns `null` if the body
- * doesn't carry `<a:normAutofit>` or the attributes are absent. Both
- * fields are unitless ratios in `[0, 1]`:
+ * doesn't carry `<a:normAutofit>` or both attributes are absent. When only
+ * one attribute exists, the other field uses its schema default. Both fields
+ * are unitless ratios in `[0, 1]`:
  *
  *   - `fontScale`     — multiply every run's font size by this. Default `1`.
  *   - `lnSpcReduction` — subtract from the line-height ratio. Default `0`.
@@ -338,15 +350,21 @@ export const getShapeTextAutoFitParams = (shape: SlideShapeData): TextAutoFitPar
     ) {
       const fsRaw = getAttrValue(c, qname('', 'fontScale', ''));
       const lsRaw = getAttrValue(c, qname('', 'lnSpcReduction', ''));
-      const fs = fsRaw === null ? 100_000 : Number.parseInt(fsRaw, 10);
-      const ls = lsRaw === null ? 0 : Number.parseInt(lsRaw, 10);
+      if (fsRaw === null && lsRaw === null) return null;
       return {
-        fontScale: Number.isFinite(fs) ? fs / 100_000 : 1,
-        lnSpcReduction: Number.isFinite(ls) ? ls / 100_000 : 0,
+        fontScale: parseTextAutoFitRatio(fsRaw, 1),
+        lnSpcReduction: parseTextAutoFitRatio(lsRaw, 0),
       };
     }
   }
   return null;
+};
+
+/** Normalize Transitional 1/1000-percent integers and Strict percent lexemes to a unit ratio. */
+const parseTextAutoFitRatio = (value: string | null, fallback: number): number => {
+  if (value === null) return fallback;
+  const parsed = value.endsWith('%') ? Number(value.slice(0, -1)) / 100 : Number(value) / 100_000;
+  return Number.isFinite(parsed) ? parsed : fallback;
 };
 
 /**

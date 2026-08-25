@@ -2,18 +2,22 @@
 
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
 import {
   addSlideTextBox,
   getShapeTextAutoFit,
   getShapeTextAutoFitParams,
   getShapeTextWrap,
+  getSlideShapes,
   getSlides,
   inches,
   loadPresentation,
+  savePresentation,
   setShapeTextAutoFit,
   setShapeTextWrap,
 } from '../src/api/index.ts';
+import { expectSchemaValid, isSchemaValidationAvailable } from './lib/expect-schema-valid.ts';
 
 const fixture = (name: string): string =>
   fileURLToPath(new URL(`./fixtures/minimal/${name}`, import.meta.url));
@@ -51,6 +55,8 @@ describe('fn API: setShapeTextAutoFit', () => {
       setShapeTextAutoFit(tb, mode);
       expect(getShapeTextAutoFit(tb)).toBe(mode);
     }
+    setShapeTextAutoFit(tb, 'normal');
+    expect(getShapeTextAutoFitParams(tb)).toBeNull();
   });
 
   it('replaces the prior auto-fit child each call', async () => {
@@ -82,6 +88,38 @@ describe('fn API: setShapeTextAutoFit', () => {
     setShapeTextAutoFit(tb, 'normal', { fontScale: 0.72, lnSpcReduction: 0.18 });
     expect(getShapeTextAutoFit(tb)).toBe('normal');
     expect(getShapeTextAutoFitParams(tb)).toEqual({ fontScale: 0.72, lnSpcReduction: 0.18 });
+  });
+
+  it('reads Strict percent lexemes and writes the inclusive zero boundary schema-validly', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const tb = addSlideTextBox(slide, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(3),
+      h: inches(2),
+      text: 'A',
+    });
+
+    setShapeTextAutoFit(tb, 'normal', { fontScale: 0.72, lnSpcReduction: 0.18 });
+    const strictEntries = unzipSync(await savePresentation(pres));
+    const slidePart = strictEntries['ppt/slides/slide1.xml']!;
+    strictEntries['ppt/slides/slide1.xml'] = strToU8(
+      strFromU8(slidePart)
+        .replace('fontScale="72000"', 'fontScale="72%"')
+        .replace('lnSpcReduction="18000"', 'lnSpcReduction="18%"'),
+    );
+    const strict = await loadPresentation(zipSync(strictEntries));
+    expect(getShapeTextAutoFitParams(getSlideShapes(getSlides(strict)[0]!).at(-1)!)).toEqual({
+      fontScale: 0.72,
+      lnSpcReduction: 0.18,
+    });
+
+    setShapeTextAutoFit(tb, 'normal', { fontScale: 0, lnSpcReduction: 0 });
+    const zeroEntries = unzipSync(await savePresentation(pres));
+    const zeroXml = strFromU8(zeroEntries['ppt/slides/slide1.xml']!);
+    expect(zeroXml).toContain('<a:normAutofit fontScale="0%" lnSpcReduction="0"/>');
+    if (isSchemaValidationAvailable()) expectSchemaValid(zeroXml, 'pml');
   });
 
   it('rejects invalid reduction parameters before mutating the current mode', async () => {
