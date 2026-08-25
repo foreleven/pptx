@@ -23,6 +23,7 @@ const RANGES = {
   angle: [-2147483648, 2147483647], // ST_Angle (1/60000 degree, xsd:int)
   fontSize: [100, 400000], // ST_TextFontSize (1/100 pt → 1..4000 pt)
   textPoint: [-400000, 400000], // ST_TextPoint (1/100 pt)
+  textNonNegativePoint: [0, 400000], // ST_TextNonNegativePoint (1/100 pt)
   textSpacingPoint: [0, 158400], // ST_TextSpacingPoint (1/100 pt)
   unsignedInt: [0, 4294967295], // xsd:unsignedInt (advTm; ST_TLTime numeric form)
   columnCount: [1, 16], // ST_TextColumnCount
@@ -75,6 +76,9 @@ export const fontSizeHundredthPt = (v: number, field: string): number =>
 /** Character spacing in 1/100 pt — ST_TextPoint. */
 export const textPointSpacing = (v: number, field: string): number =>
   boundedInt(v, 'textPoint', field);
+/** Non-negative kerning threshold in 1/100 pt — ST_TextNonNegativePoint. */
+export const textNonNegativePoint = (v: number, field: string): number =>
+  boundedInt(v, 'textNonNegativePoint', field);
 /** Paragraph spacing in 1/100 pt — ST_TextSpacingPoint. */
 export const textSpacingPoint = (v: number, field: string): number =>
   boundedInt(v, 'textSpacingPoint', field);

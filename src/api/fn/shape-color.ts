@@ -1,7 +1,7 @@
 // Color transforms and rPr-like element parsing.
 
 import { NAME_A_RPR, requireRun } from './shape-runs.ts';
-import { type TextFormat } from '../../internal/drawingml/index.ts';
+import { type TextFormat, type TextRunState } from '../../internal/drawingml/index.ts';
 import {
   NS,
   type XmlElement,
@@ -17,15 +17,6 @@ import { type PresentationTheme } from './theme.ts';
  * These values are exposed so importers can diagnose proofing and smart-tag metadata
  * instead of silently flattening it into ordinary text.
  */
-export interface TextRunState {
-  readonly normalizeHeight?: boolean;
-  readonly noProof?: boolean;
-  readonly dirty?: boolean;
-  readonly error?: boolean;
-  readonly smartTagClean?: boolean;
-  readonly smartTagId?: number;
-}
-
 const optionalOnOffAttr = (element: XmlElement, localName: string): boolean | undefined => {
   const value = getAttrValue(element, qname('', localName, ''));
   if (value === '1' || value === 'true') return true;

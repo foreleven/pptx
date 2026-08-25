@@ -18,6 +18,7 @@ import {
   inches,
   loadPresentation,
   savePresentation,
+  setShapeParagraphElements,
   setShapeRunFormat,
 } from '../src/api/index.ts';
 
@@ -71,6 +72,21 @@ describe('fn API: extended run-format properties', () => {
     expect(getShapeRunFormat(tb, 0, 0)!.strike).toBe(false);
   });
 
+  it('rejects a kerning threshold outside ST_TextNonNegativePoint', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const tb = addSlideTextBox(slide, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(3),
+      h: inches(2),
+      text: 'kern',
+    });
+    expect(() => setShapeRunFormat(tb, 0, 0, { kern: 400001 })).toThrow(
+      /out of range for textNonNegativePoint \(0\.\.400000\)/,
+    );
+  });
+
   it('reads direct normalize, proofing, dirty, error, and smart-tag run state', async () => {
     const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
     const slide = getSlides(pres)[0]!;
@@ -101,6 +117,43 @@ describe('fn API: extended run-format properties', () => {
       dirty: true,
       error: true,
       smartTagClean: true,
+      smartTagId: 42,
+    });
+  });
+
+  it('round-trips authored direct run state while preserving explicit false values', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const tb = addSlideTextBox(slide, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(4),
+      h: inches(2),
+      text: 'authored state',
+    });
+    setShapeParagraphElements(tb, 0, [
+      {
+        kind: 'r',
+        text: 'authored state',
+        state: {
+          normalizeHeight: true,
+          noProof: false,
+          dirty: false,
+          error: true,
+          smartTagClean: false,
+          smartTagId: 42,
+        },
+      },
+    ]);
+
+    const reloaded = await loadPresentation(await savePresentation(pres));
+    const reloadedShape = findShapeByText(getSlides(reloaded)[0]!, 'authored state')!;
+    expect(getShapeRunState(reloadedShape, 0, 0)).toEqual({
+      normalizeHeight: true,
+      noProof: false,
+      dirty: false,
+      error: true,
+      smartTagClean: false,
       smartTagId: 42,
     });
   });

@@ -25,7 +25,7 @@ import {
   insertChildByRank,
   qname,
 } from '../xml/index.ts';
-import { fontSizeHundredthPt, textPointSpacing } from '../bounds.ts';
+import { fontSizeHundredthPt, textNonNegativePoint, textPointSpacing } from '../bounds.ts';
 import { buildColorElement } from './color.ts';
 
 const NAME_R = qname('a', 'r', NS.dml);
@@ -43,6 +43,12 @@ const ATTR_SPC = qname('', 'spc', '');
 const ATTR_KERN = qname('', 'kern', '');
 const ATTR_BASELINE = qname('', 'baseline', '');
 const ATTR_CAP = qname('', 'cap', '');
+const ATTR_NORMALIZE_HEIGHT = qname('', 'normalizeH', '');
+const ATTR_NO_PROOF = qname('', 'noProof', '');
+const ATTR_DIRTY = qname('', 'dirty', '');
+const ATTR_ERROR = qname('', 'err', '');
+const ATTR_SMART_TAG_CLEAN = qname('', 'smtClean', '');
+const ATTR_SMART_TAG_ID = qname('', 'smtId', '');
 const ATTR_TYPEFACE = qname('', 'typeface', '');
 const NAME_HIGHLIGHT = qname('a', 'highlight', NS.dml);
 
@@ -136,6 +142,16 @@ export interface TextFormat {
   highlight?: string | null;
 }
 
+/** Direct, non-inherited CT_TextCharacterProperties state. */
+export interface TextRunState {
+  readonly normalizeHeight?: boolean;
+  readonly noProof?: boolean;
+  readonly dirty?: boolean;
+  readonly error?: boolean;
+  readonly smartTagClean?: boolean;
+  readonly smartTagId?: number;
+}
+
 const setOrRemoveAttr = (
   attrs: XmlAttr[],
   name: ReturnType<typeof qname>,
@@ -216,7 +232,8 @@ export const applyRunFormat = (rPr: XmlElement, format: TextFormat): void => {
     attrs = setOrRemoveAttr(attrs, ATTR_SPC, String(spc));
   }
   if (format.kern !== undefined) {
-    attrs = setOrRemoveAttr(attrs, ATTR_KERN, String(Math.round(format.kern)));
+    const kern = textNonNegativePoint(format.kern, 'setShapeRunFormat: kern');
+    attrs = setOrRemoveAttr(attrs, ATTR_KERN, String(kern));
   }
   if (format.baseline !== undefined) {
     // ST_Percentage; we accept the unit-fraction form on the public API
@@ -235,6 +252,35 @@ export const applyRunFormat = (rPr: XmlElement, format: TextFormat): void => {
   if (format.highlight !== undefined) setHighlight(rPr, format.highlight);
 
   void NAME_CS;
+};
+
+/** Mutates only the explicitly supplied direct run-state attributes. */
+export const applyRunState = (rPr: XmlElement, state: TextRunState): void => {
+  let attrs = rPr.attrs;
+  const booleanAttributes = [
+    ['normalizeHeight', ATTR_NORMALIZE_HEIGHT],
+    ['noProof', ATTR_NO_PROOF],
+    ['dirty', ATTR_DIRTY],
+    ['error', ATTR_ERROR],
+    ['smartTagClean', ATTR_SMART_TAG_CLEAN],
+  ] as const;
+  for (const [key, name] of booleanAttributes) {
+    const value = state[key];
+    if (value === undefined) continue;
+    if (typeof value !== 'boolean') throw new TypeError(`TextRunState.${key} must be a boolean.`);
+    attrs = setOrRemoveAttr(attrs, name, value ? '1' : '0');
+  }
+  if (state.smartTagId !== undefined) {
+    if (
+      !Number.isInteger(state.smartTagId) ||
+      state.smartTagId < 0 ||
+      state.smartTagId > 0xffffffff
+    ) {
+      throw new RangeError('TextRunState.smartTagId must be an unsigned 32-bit integer.');
+    }
+    attrs = setOrRemoveAttr(attrs, ATTR_SMART_TAG_ID, String(state.smartTagId));
+  }
+  rPr.attrs = attrs;
 };
 
 /**

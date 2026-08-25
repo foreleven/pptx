@@ -5,8 +5,10 @@ import {
   type BulletStyle,
   type ParagraphAlignment,
   type TextFormat,
+  type TextRunState,
   applyBulletToParagraph,
   applyRunFormat,
+  applyRunState,
 } from '../../internal/drawingml/index.ts';
 import { emptyRels, nextRelId, partName, resolveTarget } from '../../internal/opc/index.ts';
 import { REL_TYPES } from '../../internal/presentationml/index.ts';
@@ -54,7 +56,12 @@ const NAME_A_END_PARA_RPR = qname('a', 'endParaRPr', NS.dml);
 
 /** One authorable inline paragraph element. Fields are read-only until field authoring is supported. */
 export type ShapeParagraphElementInput =
-  | { readonly kind: 'r'; readonly text: string; readonly format?: TextFormat }
+  | {
+      readonly kind: 'r';
+      readonly text: string;
+      readonly format?: TextFormat;
+      readonly state?: TextRunState;
+    }
   | { readonly kind: 'br' };
 
 const paragraphsOf = (txBody: XmlElement): XmlElement[] =>
@@ -145,8 +152,9 @@ export const setShapeParagraphElements = (
     if (value.kind === 'br') {
       return elem(NAME_A_BR);
     }
-    const runProperties = value.format ? elem(NAME_A_RPR) : null;
+    const runProperties = value.format || value.state ? elem(NAME_A_RPR) : null;
     if (runProperties && value.format) applyRunFormat(runProperties, value.format);
+    if (runProperties && value.state) applyRunState(runProperties, value.state);
     const textElement = elem(NAME_A_T, {
       children: [text(value.text)],
     });

@@ -13,7 +13,8 @@ export {
   setTextBody,
 } from './text-body-mutation.ts';
 export type { TextFormat } from './text-format.ts';
-export { applyFormatToAllRuns, applyRunFormat } from './text-format.ts';
+export { applyFormatToAllRuns, applyRunFormat, applyRunState } from './text-format.ts';
+export type { TextRunState } from './text-format.ts';
 export type { ParsedColor } from './color.ts';
 export { buildColorElement, parseColor, parseSrgbHex } from './color.ts';
 export type {
