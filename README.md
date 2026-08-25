@@ -347,6 +347,10 @@ for (const i of issues) console.error(i.severity, i.message);
 Each row lists the free-function entry points. Read/write pairs are
 shown together.
 
+`setShapeTextAutoFit(shape, "normal", { fontScale, lnSpcReduction })`
+writes PowerPoint's paired normal-autofit reduction ratios; use
+`getShapeTextAutoFitParams` to read them as decimal ratios in `[0, 1]`.
+
 | Capability           | API                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Load / save          | `loadPresentation(input)`, `savePresentation(pres)`, `loadPresentationFile(path)` (node), `savePresentationToFile(pres, path)` (node)                                                                                                                                                                                                                                                                                                                |

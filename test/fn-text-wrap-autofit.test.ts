@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   addSlideTextBox,
   getShapeTextAutoFit,
+  getShapeTextAutoFitParams,
   getShapeTextWrap,
   getSlides,
   inches,
@@ -65,5 +66,49 @@ describe('fn API: setShapeTextAutoFit', () => {
     setShapeTextAutoFit(tb, 'normal');
     setShapeTextAutoFit(tb, 'shape');
     expect(getShapeTextAutoFit(tb)).toBe('shape');
+  });
+
+  it('round-trips normal autofit font and line-spacing reductions', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const tb = addSlideTextBox(slide, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(3),
+      h: inches(2),
+      text: 'A',
+    });
+
+    setShapeTextAutoFit(tb, 'normal', { fontScale: 0.72, lnSpcReduction: 0.18 });
+    expect(getShapeTextAutoFit(tb)).toBe('normal');
+    expect(getShapeTextAutoFitParams(tb)).toEqual({ fontScale: 0.72, lnSpcReduction: 0.18 });
+  });
+
+  it('rejects invalid reduction parameters before mutating the current mode', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const tb = addSlideTextBox(slide, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(3),
+      h: inches(2),
+      text: 'A',
+    });
+    setShapeTextAutoFit(tb, 'normal', { fontScale: 0.72, lnSpcReduction: 0.18 });
+
+    expect(() => setShapeTextAutoFit(tb, 'none', { fontScale: 0.5, lnSpcReduction: 0.1 })).toThrow(
+      /only for normal mode/u,
+    );
+    for (const params of [
+      { fontScale: -0.01, lnSpcReduction: 0.1 },
+      { fontScale: 1.01, lnSpcReduction: 0.1 },
+      { fontScale: 0.5, lnSpcReduction: Number.NaN },
+    ]) {
+      expect(() => setShapeTextAutoFit(tb, 'normal', params)).toThrow(
+        /finite ratio from 0 through 1/u,
+      );
+    }
+    expect(getShapeTextAutoFit(tb)).toBe('normal');
+    expect(getShapeTextAutoFitParams(tb)).toEqual({ fontScale: 0.72, lnSpcReduction: 0.18 });
   });
 });

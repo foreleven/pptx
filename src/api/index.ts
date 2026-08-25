@@ -98,6 +98,7 @@ export type {
   SlideSectionInput,
   TextAnchor,
   TextAutoFit,
+  TextAutoFitParams,
   TextHorizontalOverflow,
   TextVerticalOverflow,
   TextWrap,

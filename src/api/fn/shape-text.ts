@@ -145,6 +145,12 @@ export type TextAutoFit =
   | 'normal' // <a:normAutofit/> — shrink text to fit
   | 'shape'; // <a:spAutoFit/> — resize shape to fit text
 
+/** PowerPoint-computed reduction ratios stored on `normAutofit`; both values use the inclusive `[0, 1]` range. */
+export interface TextAutoFitParams {
+  fontScale: number;
+  lnSpcReduction: number;
+}
+
 const AUTO_FIT_LOCALS = new Set(['noAutofit', 'normAutofit', 'spAutoFit']);
 
 const requireBodyPr = (shape: SlideShapeData): XmlElement => {
@@ -243,10 +249,23 @@ export const setShapeTextVerticalOverflow = (
  *   - `'normal'` → `<a:normAutofit/>`   shrink text to fit the shape
  *   - `'shape'`  → `<a:spAutoFit/>`     grow the shape to fit text
  *
- * Replaces any prior auto-fit child on `<a:bodyPr>`. Throws for
- * non-text-bearing shape kinds.
+ * `params` is valid only for normal autofit and writes the native
+ * `fontScale` / `lnSpcReduction` percentages. Replaces any prior auto-fit
+ * child on `<a:bodyPr>`. Throws before mutation for invalid ratios, parameter
+ * use on another mode, or non-text-bearing shape kinds.
  */
-export const setShapeTextAutoFit = (shape: SlideShapeData, mode: TextAutoFit): void => {
+export const setShapeTextAutoFit = (
+  shape: SlideShapeData,
+  mode: TextAutoFit,
+  params?: TextAutoFitParams,
+): void => {
+  if (params !== undefined && mode !== 'normal') {
+    throw new RangeError('Text autofit parameters are supported only for normal mode.');
+  }
+  if (params !== undefined) {
+    assertTextAutoFitRatio(params.fontScale, 'fontScale');
+    assertTextAutoFitRatio(params.lnSpcReduction, 'lnSpcReduction');
+  }
   const bodyPr = requireBodyPr(shape);
   bodyPr.children = bodyPr.children.filter(
     (c) =>
@@ -257,8 +276,22 @@ export const setShapeTextAutoFit = (shape: SlideShapeData, mode: TextAutoFit): v
       ),
   );
   const local = mode === 'none' ? 'noAutofit' : mode === 'normal' ? 'normAutofit' : 'spAutoFit';
-  bodyPr.children.push(elem(qname('a', local, NS.dml)));
+  const autoFit = elem(qname('a', local, NS.dml));
+  if (params !== undefined) {
+    autoFit.attrs.push(
+      attr(qname('', 'fontScale', ''), String(Math.round(params.fontScale * 100_000))),
+      attr(qname('', 'lnSpcReduction', ''), String(Math.round(params.lnSpcReduction * 100_000))),
+    );
+  }
+  bodyPr.children.push(autoFit);
   commitAndRefresh(shape);
+};
+
+/** Reject values that cannot be represented by the public normal-autofit ratio contract. */
+const assertTextAutoFitRatio = (value: number, name: keyof TextAutoFitParams): void => {
+  if (!Number.isFinite(value) || value < 0 || value > 1) {
+    throw new RangeError(`Text autofit ${name} must be a finite ratio from 0 through 1.`);
+  }
 };
 
 /**
@@ -292,9 +325,7 @@ export const getShapeTextAutoFit = (shape: SlideShapeData): TextAutoFit | null =
  * PowerPoint's actual on-screen text size apply these factors to the
  * authored font sizes; without them, every long title overflows.
  */
-export const getShapeTextAutoFitParams = (
-  shape: SlideShapeData,
-): { fontScale: number; lnSpcReduction: number } | null => {
+export const getShapeTextAutoFitParams = (shape: SlideShapeData): TextAutoFitParams | null => {
   const txBody = firstChildElement(shape[SHAPE_ELEMENT], NAME_TX_BODY);
   if (!txBody) return null;
   const bodyPr = firstChildElement(txBody, NAME_A_BODY_PR);
