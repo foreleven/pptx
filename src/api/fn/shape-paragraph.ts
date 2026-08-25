@@ -48,7 +48,7 @@ import {
   SLIDE_PART_NAME,
   type SlideShapeData,
 } from '../_internal-symbols.ts';
-import { commitAndRefresh, decode, requireTxBody } from './_helpers.ts';
+import { commitAndRefresh, decode, PRES_PART_NAME, requireTxBody } from './_helpers.ts';
 import { getPresentationFonts, getPresentationTheme } from './theme.ts';
 import {
   hyperlinkRelationshipIds,
@@ -64,10 +64,10 @@ import {
 //   2. The paragraph's `<a:endParaRPr>` (last run only)
 //   3. The paragraph's `<a:pPr><a:defRPr>` (paragraph-level run defaults)
 //   4. The text body's `<a:lstStyle><a:lvl{N+1}pPr><a:defRPr>` (N = paragraph level)
-//   5. The same path on the matching placeholder in the slide's layout
-//   6. The same path on the matching placeholder on the slide master,
-//      then the master's `<p:txStyles>` (`titleStyle` / `bodyStyle` / `otherStyle`)
-//   7. The theme's `<a:fontScheme>` — font typeface fallback only
+//   5a. Non-placeholder text: presentation `<p:defaultTextStyle>`
+//   5b. Placeholder text: the same path on the slide layout and master,
+//       then the master's `<p:txStyles>` (`titleStyle` / `bodyStyle` / `otherStyle`)
+//   6. The theme's `<a:fontScheme>` — font typeface fallback only
 //
 // Placeholder matching: by `<p:ph/@idx>` first, then by `<p:ph/@type>`.
 
@@ -79,6 +79,7 @@ const NAME_P_TX_STYLES = qname('p', 'txStyles', NS.pml);
 const NAME_P_TITLE_STYLE = qname('p', 'titleStyle', NS.pml);
 const NAME_P_BODY_STYLE = qname('p', 'bodyStyle', NS.pml);
 const NAME_P_OTHER_STYLE = qname('p', 'otherStyle', NS.pml);
+const NAME_P_DEFAULT_TEXT_STYLE = qname('p', 'defaultTextStyle', NS.pml);
 
 const mergeRPrLayer = (base: Partial<TextFormat>, layer: Partial<TextFormat>): void => {
   if (base.font === undefined && layer.font !== undefined) base.font = layer.font;
@@ -143,6 +144,24 @@ const lstStyleLevelPPr = (lstStyle: XmlElement | null, level: number): XmlElemen
   return firstChildElement(lstStyle, qname('a', 'defPPr', NS.dml));
 };
 
+/** Read the presentation-wide list style used by non-placeholder text shapes. */
+const presentationDefaultTextStyle = (pres: PresentationData): XmlElement | null => {
+  const part = pres[INTERNAL_PACKAGE].getPart(PRES_PART_NAME);
+  if (!part) return null;
+  return firstChildElement(parseXml(decode(part.data)).root, NAME_P_DEFAULT_TEXT_STYLE);
+};
+
+/** Return the level-specific defaults first, followed by the presentation fallback. */
+const textStylePPrLayers = (textStyle: XmlElement | null, level: number): XmlElement[] => {
+  if (!textStyle) return [];
+  const levelPPr = firstChildElement(
+    textStyle,
+    qname('a', `lvl${Math.max(0, Math.min(8, level)) + 1}pPr`, NS.dml),
+  );
+  const defaultPPr = firstChildElement(textStyle, qname('a', 'defPPr', NS.dml));
+  return [levelPPr, defaultPPr].filter((layer): layer is XmlElement => layer !== null);
+};
+
 const findShapeLstStyleElement = (shape: SlideShapeData): XmlElement | null => {
   const txBody = firstChildElement(shape[SHAPE_ELEMENT], NAME_P_TX_BODY_PML);
   if (!txBody) return null;
@@ -200,8 +219,8 @@ const masterTxStyleFor = (masterRoot: XmlElement, phType: string | null): XmlEle
 /**
  * Resolves a run's effective character properties by walking the
  * ECMA-376 §21.1.2.4.7 inheritance chain — run rPr → endParaRPr →
- * pPr defRPr → text-body lstStyle → layout placeholder lstStyle →
- * master placeholder lstStyle + master txStyles → theme fontScheme.
+ * pPr defRPr → text-body lstStyle → presentation default text style or
+ * layout/master placeholder styles → theme fontScheme.
  *
  * Each property (font, size, color, bold, italic, underline) is
  * resolved independently: the innermost layer that supplies a value
@@ -270,13 +289,20 @@ export const getShapeRunFormatEffective = (
   const phType = getShapePlaceholderType(shape);
   const isPlaceholder = shapeIsPlaceholder(shape);
 
+  if (!isPlaceholder) {
+    for (const defaultPPr of textStylePPrLayers(presentationDefaultTextStyle(pres), level)) {
+      const defaultRPr = firstChildElement(defaultPPr, NAME_A_DEF_RPR);
+      if (defaultRPr) mergeRPrLayer(result, parseRPrLikeElement(defaultRPr, ctx));
+    }
+  }
+
   const slide = shape[SHAPE_SLIDE];
   const layout = getSlideLayout(slide);
 
-  // Steps 5-6 are placeholder inheritance: skip them entirely for non-
-  // placeholder shapes (plain text boxes), which do not read the master's
-  // txStyles. Without this guard an unsized text-box run wrongly inherits the
-  // master body size (e.g. 32pt) instead of the ~18pt text-box default.
+  // Placeholder inheritance is separate from the presentation default style
+  // used above for plain text boxes. Without this guard an unsized text-box run
+  // wrongly inherits the master body size (e.g. 32pt) instead of its 18pt
+  // presentation default.
   if (layout && isPlaceholder) {
     // 5. Matching placeholder on the layout — both its inline rPr-bearing
     //    paragraph children (if the layout authored prompt text) and its
@@ -314,7 +340,7 @@ export const getShapeRunFormatEffective = (
     }
   }
 
-  // 7. Theme fontScheme — typeface resolution.
+  // 6. Theme fontScheme — typeface resolution.
   //
   // The master often writes its `<a:latin typeface="+mj-lt"/>` /
   // `+mn-lt` placeholder tokens instead of a concrete face. Those
@@ -348,6 +374,7 @@ export const getShapeRunFormatEffective = (
     if (typeof result.font === 'string' && result.font.startsWith('+')) {
       const resolved = resolveThemeToken(result.font);
       if (resolved) result.font = resolved;
+      else delete result.font;
     }
     if (result.font === undefined) {
       const useMajor = phType === 'title' || phType === 'ctrTitle';
@@ -357,6 +384,7 @@ export const getShapeRunFormatEffective = (
     if (typeof result.fontEastAsian === 'string' && result.fontEastAsian.startsWith('+')) {
       const resolved = resolveThemeToken(result.fontEastAsian);
       if (resolved) result.fontEastAsian = resolved;
+      else delete result.fontEastAsian;
     }
     if (result.fontEastAsian === undefined) {
       const useMajor = phType === 'title' || phType === 'ctrTitle';
@@ -366,6 +394,7 @@ export const getShapeRunFormatEffective = (
     if (typeof result.fontComplexScript === 'string' && result.fontComplexScript.startsWith('+')) {
       const resolved = resolveThemeToken(result.fontComplexScript);
       if (resolved) result.fontComplexScript = resolved;
+      else delete result.fontComplexScript;
     }
     if (result.fontComplexScript === undefined) {
       const useMajor = phType === 'title' || phType === 'ctrTitle';
@@ -384,9 +413,9 @@ export const getShapeRunFormatEffective = (
 //
 //   1. The paragraph's own `<a:pPr>`
 //   2. The text body's `<a:lstStyle><a:lvl{N+1}pPr>` (paragraph defaults)
-//   3. The matching layout placeholder's lstStyle
-//   4. The matching master placeholder's lstStyle, then
-//      `<p:txStyles>/{title|body|other}Style/<a:lvl{N+1}pPr>`
+//   3a. Non-placeholder text: presentation `<p:defaultTextStyle>`
+//   3b. Placeholder text: matching layout/master lstStyle, then
+//       `<p:txStyles>/{title|body|other}Style/<a:lvl{N+1}pPr>`
 //
 // Each property merges independently — innermost layer that supplies a
 // value wins for that one property.
@@ -614,11 +643,17 @@ const paragraphPPrCascade = (
   const shapeLvlPPr = lstStyleLevelPPr(findShapeLstStyleElement(shape), level);
   if (shapeLvlPPr) layers.push(shapeLvlPPr);
 
+  const isPlaceholder = shapeIsPlaceholder(shape);
+  if (!isPlaceholder) {
+    layers.push(...textStylePPrLayers(presentationDefaultTextStyle(pres), level));
+    return { level, layers };
+  }
+
   const phIdx = getShapePlaceholderIdx(shape);
   const phType = getShapePlaceholderType(shape);
   const slide = shape[SHAPE_SLIDE];
   const layout = getSlideLayout(slide);
-  if (!layout || !shapeIsPlaceholder(shape)) return { level, layers };
+  if (!layout) return { level, layers };
 
   const layoutPh = findPlaceholderShapeIn(layout[LAYOUT_PART].shapes, phIdx, phType);
   if (layoutPh) {
