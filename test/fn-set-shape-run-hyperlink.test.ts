@@ -2,6 +2,7 @@
 
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { strFromU8, unzipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
 import { partName } from '../src/internal/opc/index.ts';
 import {
@@ -33,6 +34,28 @@ const hyperlinkTargets = (
     .sort();
 
 describe('fn API: setShapeRunHyperlink', () => {
+  it('writes the empty relationship ID PowerPoint requires for action-only interactions', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const tb = addSlideTextBox(slide, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(4),
+      h: inches(1),
+      text: 'action only',
+    });
+
+    setShapeRunHyperlinkDescriptor(tb, 0, 0, 'click', {
+      action: 'ppaction://hlinkshowjump?jump=nextslide',
+    });
+
+    const entries = unzipSync(await savePresentation(pres));
+    const slideXml = strFromU8(entries['ppt/slides/slide1.xml']!);
+    expect(slideXml).toContain(
+      '<a:hlinkClick r:id="" action="ppaction://hlinkshowjump?jump=nextslide"/>',
+    );
+  });
+
   it('round-trips complete click and hover hyperlink descriptors', async () => {
     const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
     const slide = getSlides(pres)[0]!;

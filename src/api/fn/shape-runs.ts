@@ -651,6 +651,10 @@ export const setShapeRunHyperlinkDescriptor = (
         slide[INTERNAL_PACKAGE].setRels(slide[SLIDE_PART_NAME], rels);
       }
       attrs.push(attr(qname('r', 'id', NS.officeDocRels), relationshipId));
+    } else {
+      // PowerPoint writes an explicit empty relationship ID for action-only
+      // interactions and repairs run hyperlinks that omit the attribute.
+      attrs.push(attr(qname('r', 'id', NS.officeDocRels), ''));
     }
     const addString = (name: string, value: string | undefined): void => {
       if (value !== undefined) attrs.push(attr(qname('', name, ''), value));
