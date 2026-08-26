@@ -90,6 +90,7 @@ import {
   getShapeTextAutoFit,
   getShapeTextAutoFitParams,
   getShapeTextMargins,
+  getShapeTextWarp,
   getGroupChildren,
   getGroupTransform,
   getSlideBackground,
@@ -156,6 +157,7 @@ import {
   type TextBodyInput,
   type TextLayoutMode,
   type TextMeasurer,
+  type TextWarpPreview,
   type VerticalLayout,
 } from './text-layout.ts';
 
@@ -2280,6 +2282,7 @@ export interface SvgTextArgs {
   readonly measure: TextMeasurer;
   readonly vert: VerticalLayout;
   readonly columns: ColumnLayout | null;
+  readonly warp?: TextWarpPreview | null;
   /** Maps an authored font name onto the family the measurer keys off.
    *  The render paths leave this unset (= `substituteFamily`, whose output
    *  must match the bundled TTFs' internal names for resvg). The audit path
@@ -2322,6 +2325,22 @@ export const verticalLayoutOf = (
     case null:
       return 'none';
   }
+};
+
+/**
+ * Select the presets whose geometry this renderer intentionally approximates.
+ * All other native presets remain preserved in OOXML and render as flat text
+ * until their SVG geometry has its own visual acceptance evidence.
+ */
+const textWarpPreviewOf = (shape: SlideShapeData): TextWarpPreview | null => {
+  const warp = getShapeTextWarp(shape);
+  if (
+    warp === null ||
+    (warp.preset !== 'textArchUp' && warp.preset !== 'textWave1' && warp.preset !== 'textInflate')
+  ) {
+    return null;
+  }
+  return { preset: warp.preset, adjustments: warp.adjustments ?? {} };
 };
 
 const verticalTextCss = (vert: ReturnType<typeof getShapeTextDirection>): string => {
@@ -2483,6 +2502,7 @@ export const buildSvgTextInput = (a: SvgTextArgs): TextBodyInput => {
     paragraphs,
     vert: a.vert,
     columns: a.columns,
+    warp: a.warp ?? null,
   };
   return input;
 };
@@ -3236,6 +3256,7 @@ const renderTextBody = (
       measure: ctx.measure,
       vert: svgVert,
       columns: svgColumns,
+      warp: textWarpPreviewOf(shape),
     };
     // Autofit scale is decided once above (shared with the foreignObject path):
     // for any authored autofit — a baked `fontScale` or the bare-normAutofit

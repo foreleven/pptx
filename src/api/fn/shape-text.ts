@@ -125,6 +125,299 @@ const textAnchorFromToken = (token: string | null): TextAnchor | null =>
     : (TEXT_ANCHOR_BY_TOKEN[token as keyof typeof TEXT_ANCHOR_BY_TOKEN] ?? null);
 
 const NAME_A_BODY_PR = qname('a', 'bodyPr', NS.dml);
+const NAME_A_PRST_TX_WARP = qname('a', 'prstTxWarp', NS.dml);
+const NAME_A_AV_LST = qname('a', 'avLst', NS.dml);
+const NAME_A_GD = qname('a', 'gd', NS.dml);
+
+/** Complete ECMA-376 `ST_TextShapeType` preset vocabulary. */
+export const TEXT_WARP_PRESETS = [
+  'textNoShape',
+  'textPlain',
+  'textStop',
+  'textTriangle',
+  'textTriangleInverted',
+  'textChevron',
+  'textChevronInverted',
+  'textRingInside',
+  'textRingOutside',
+  'textArchUp',
+  'textArchDown',
+  'textCircle',
+  'textButton',
+  'textArchUpPour',
+  'textArchDownPour',
+  'textCirclePour',
+  'textButtonPour',
+  'textCurveUp',
+  'textCurveDown',
+  'textCanUp',
+  'textCanDown',
+  'textWave1',
+  'textWave2',
+  'textDoubleWave1',
+  'textWave4',
+  'textInflate',
+  'textDeflate',
+  'textInflateBottom',
+  'textDeflateBottom',
+  'textInflateTop',
+  'textDeflateTop',
+  'textDeflateInflate',
+  'textDeflateInflateDeflate',
+  'textFadeRight',
+  'textFadeLeft',
+  'textFadeUp',
+  'textFadeDown',
+  'textSlantUp',
+  'textSlantDown',
+  'textCascadeUp',
+  'textCascadeDown',
+] as const;
+
+export type TextWarpPreset = (typeof TEXT_WARP_PRESETS)[number];
+
+/** Inclusive authoring bounds for one named preset geometry guide. */
+export interface TextWarpAdjustmentRange {
+  readonly min: number;
+  readonly max: number;
+}
+
+/** ECMA-376 guide names and legal adjustment domains for every text-warp preset. */
+export const TEXT_WARP_PRESET_ADJUSTMENTS = {
+  textNoShape: {},
+  textPlain: { adj: { min: 30000, max: 70000 } },
+  textStop: { adj: { min: 14286, max: 50000 } },
+  textTriangle: { adj: { min: 0, max: 100000 } },
+  textTriangleInverted: { adj: { min: 0, max: 100000 } },
+  textChevron: { adj: { min: 0, max: 50000 } },
+  textChevronInverted: { adj: { min: 50000, max: 100000 } },
+  textRingInside: { adj: { min: 50000, max: 99000 } },
+  textRingOutside: { adj: { min: 50000, max: 99000 } },
+  textArchUp: { adj: { min: 0, max: 21599999 } },
+  textArchDown: { adj: { min: 0, max: 21599999 } },
+  textCircle: { adj: { min: 0, max: 21599999 } },
+  textButton: { adj: { min: 0, max: 21599999 } },
+  textArchUpPour: {
+    adj1: { min: 0, max: 21599999 },
+    adj2: { min: 0, max: 100000 },
+  },
+  textArchDownPour: {
+    adj1: { min: 0, max: 21599999 },
+    adj2: { min: 0, max: 100000 },
+  },
+  textCirclePour: {
+    adj1: { min: 0, max: 21599999 },
+    adj2: { min: 0, max: 100000 },
+  },
+  textButtonPour: {
+    adj1: { min: 0, max: 21599999 },
+    adj2: { min: 0, max: 100000 },
+  },
+  textCurveUp: { adj: { min: 0, max: 56338 } },
+  textCurveDown: { adj: { min: 0, max: 56338 } },
+  textCanUp: { adj: { min: 66667, max: 100000 } },
+  textCanDown: { adj: { min: 0, max: 33333 } },
+  textWave1: {
+    adj1: { min: 0, max: 20000 },
+    adj2: { min: -10000, max: 10000 },
+  },
+  textWave2: {
+    adj1: { min: 0, max: 20000 },
+    adj2: { min: -10000, max: 10000 },
+  },
+  textDoubleWave1: {
+    adj1: { min: 0, max: 12500 },
+    adj2: { min: -10000, max: 10000 },
+  },
+  textWave4: {
+    adj1: { min: 0, max: 12500 },
+    adj2: { min: -10000, max: 10000 },
+  },
+  textInflate: { adj: { min: 0, max: 20000 } },
+  textDeflate: { adj: { min: 0, max: 37500 } },
+  textInflateBottom: { adj: { min: 60000, max: 100000 } },
+  textDeflateBottom: { adj: { min: 6250, max: 100000 } },
+  textInflateTop: { adj: { min: 0, max: 50000 } },
+  textDeflateTop: { adj: { min: 0, max: 93750 } },
+  textDeflateInflate: { adj: { min: 5000, max: 95000 } },
+  textDeflateInflateDeflate: { adj: { min: 3000, max: 47000 } },
+  textFadeRight: { adj: { min: 0, max: 49999 } },
+  textFadeLeft: { adj: { min: 0, max: 49999 } },
+  textFadeUp: { adj: { min: 0, max: 49999 } },
+  textFadeDown: { adj: { min: 0, max: 49999 } },
+  textSlantUp: { adj: { min: 0, max: 71431 } },
+  textSlantDown: { adj: { min: 28569, max: 100000 } },
+  textCascadeUp: { adj: { min: 28570, max: 100000 } },
+  textCascadeDown: { adj: { min: 28570, max: 100000 } },
+} as const satisfies Readonly<
+  Record<TextWarpPreset, Readonly<Record<string, TextWarpAdjustmentRange>>>
+>;
+
+/** Editable preset text warp with the supported constant-value geometry guides. */
+export interface TextWarp {
+  readonly preset: TextWarpPreset;
+  readonly adjustments?: Readonly<Record<string, number>>;
+}
+
+/** Native text-warp payload used to distinguish absence from unsupported XML. */
+export interface TextWarpRaw {
+  readonly preset: string | null;
+  readonly guides: readonly {
+    readonly name: string | null;
+    readonly formula: string | null;
+  }[];
+  readonly exact: boolean;
+}
+
+const TEXT_WARP_PRESET_SET = new Set<string>(TEXT_WARP_PRESETS);
+const TEXT_WARP_GUIDE_NAME = /^[^\t\n\r ]+$/u;
+const TEXT_WARP_VALUE_FORMULA = /^val ([+-]?\d+)$/u;
+
+/** Read the native preset text-warp subtree without widening it into the editable contract. */
+export const getShapeTextWarpRaw = (shape: SlideShapeData): TextWarpRaw | null => {
+  const txBody = firstChildElement(shape[SHAPE_ELEMENT], NAME_TX_BODY);
+  if (!txBody) return null;
+  const bodyPr = firstChildElement(txBody, NAME_A_BODY_PR);
+  if (!bodyPr) return null;
+  const warp = firstChildElement(bodyPr, NAME_A_PRST_TX_WARP);
+  if (!warp) return null;
+  const elementChildren = warp.children.filter(
+    (child): child is XmlElement => child.kind === 'element',
+  );
+  const avLst = firstChildElement(warp, NAME_A_AV_LST);
+  const guideElements =
+    avLst?.children.filter(
+      (child): child is XmlElement =>
+        child.kind === 'element' &&
+        child.name.namespaceURI === NS.dml &&
+        child.name.localName === 'gd',
+    ) ?? [];
+  const guides = guideElements.map((guide) => ({
+    name: getAttrValue(guide, qname('', 'name', '')),
+    formula: getAttrValue(guide, qname('', 'fmla', '')),
+  }));
+  const exact =
+    warp.attrs.length === 1 &&
+    warp.attrs[0]?.name.namespaceURI === '' &&
+    warp.attrs[0]?.name.localName === 'prst' &&
+    warp.children.length === 1 &&
+    elementChildren.length === 1 &&
+    elementChildren[0] === avLst &&
+    avLst !== null &&
+    avLst.attrs.length === 0 &&
+    avLst.children.length === guideElements.length &&
+    guideElements.every(
+      (guide) =>
+        guide.attrs.length === 2 &&
+        guide.attrs.every(
+          (candidate) =>
+            candidate.name.namespaceURI === '' &&
+            (candidate.name.localName === 'name' || candidate.name.localName === 'fmla'),
+        ) &&
+        guide.children.length === 0,
+    );
+  return {
+    preset: getAttrValue(warp, qname('', 'prst', '')),
+    guides,
+    exact,
+  };
+};
+
+/** Read a preset text warp only when its complete subtree is safely editable. */
+export const getShapeTextWarp = (shape: SlideShapeData): TextWarp | null => {
+  const raw = getShapeTextWarpRaw(shape);
+  if (raw === null || !raw.exact || raw.preset === null || !TEXT_WARP_PRESET_SET.has(raw.preset)) {
+    return null;
+  }
+  const adjustments: Record<string, number> = {};
+  const ranges = TEXT_WARP_PRESET_ADJUSTMENTS[raw.preset as TextWarpPreset];
+  for (const guide of raw.guides) {
+    const match = guide.formula === null ? null : TEXT_WARP_VALUE_FORMULA.exec(guide.formula);
+    if (
+      guide.name === null ||
+      !TEXT_WARP_GUIDE_NAME.test(guide.name) ||
+      Object.hasOwn(adjustments, guide.name) ||
+      match?.[1] === undefined
+    ) {
+      return null;
+    }
+    const value = Number(match[1]);
+    if (!Number.isSafeInteger(value) || !Object.hasOwn(ranges, guide.name)) return null;
+    const range = ranges[guide.name as keyof typeof ranges] as TextWarpAdjustmentRange;
+    if (value < range.min || value > range.max) return null;
+    adjustments[guide.name] = value;
+  }
+  return {
+    preset: raw.preset as TextWarpPreset,
+    ...(Object.keys(adjustments).length === 0 ? {} : { adjustments }),
+  };
+};
+
+/** Set or clear `a:prstTxWarp`, accepting only deterministic `val N` guides. */
+export const setShapeTextWarp = (shape: SlideShapeData, warp: TextWarp | null): void => {
+  let normalized: TextWarp | null = null;
+  if (warp !== null) {
+    if (!TEXT_WARP_PRESET_SET.has(warp.preset)) {
+      throw new RangeError(`Unsupported preset text warp: ${String(warp.preset)}.`);
+    }
+    const adjustments: Record<string, number> = {};
+    const ranges = TEXT_WARP_PRESET_ADJUSTMENTS[warp.preset as TextWarpPreset];
+    for (const [name, value] of Object.entries(warp.adjustments ?? {}).sort(([left], [right]) =>
+      left < right ? -1 : left > right ? 1 : 0,
+    )) {
+      if (!TEXT_WARP_GUIDE_NAME.test(name)) {
+        throw new TypeError(
+          'Text-warp adjustment names must be non-empty XML tokens without whitespace.',
+        );
+      }
+      if (!Number.isSafeInteger(value)) {
+        throw new RangeError(`Text-warp adjustment ${name} must be a safe integer.`);
+      }
+      if (!Object.hasOwn(ranges, name)) {
+        throw new RangeError(
+          `Text-warp preset ${warp.preset} does not support adjustment ${JSON.stringify(name)}.`,
+        );
+      }
+      const range = ranges[name as keyof typeof ranges] as TextWarpAdjustmentRange;
+      if (value < range.min || value > range.max) {
+        throw new RangeError(
+          `Text-warp adjustment ${JSON.stringify(name)} for ${warp.preset} must be between ${String(range.min)} and ${String(range.max)}.`,
+        );
+      }
+      adjustments[name] = value;
+    }
+    normalized = {
+      preset: warp.preset,
+      ...(Object.keys(adjustments).length === 0 ? {} : { adjustments }),
+    };
+  }
+  const bodyPr = requireBodyPr(shape);
+  bodyPr.children = bodyPr.children.filter(
+    (child) =>
+      !(
+        child.kind === 'element' &&
+        child.name.namespaceURI === NS.dml &&
+        child.name.localName === 'prstTxWarp'
+      ),
+  );
+  if (normalized !== null) {
+    const guides = Object.entries(normalized.adjustments ?? {}).map(([name, value]) =>
+      elem(NAME_A_GD, {
+        attrs: [
+          attr(qname('', 'name', ''), name),
+          attr(qname('', 'fmla', ''), `val ${String(value)}`),
+        ],
+      }),
+    );
+    bodyPr.children.unshift(
+      elem(NAME_A_PRST_TX_WARP, {
+        attrs: [attr(qname('', 'prst', ''), normalized.preset)],
+        children: [elem(NAME_A_AV_LST, { children: guides })],
+      }),
+    );
+  }
+  commitAndRefresh(shape);
+};
 
 /**
  * Word wrap mode on a text body. `'square'` (PowerPoint default for
@@ -500,7 +793,7 @@ export const setShapeTextColumns = (
 /** Reads one explicit boolean attribute from `<a:bodyPr>`. */
 const getShapeTextBodyBoolean = (
   shape: SlideShapeData,
-  localName: 'rtlCol' | 'upright' | 'anchorCtr' | 'compatLnSpc',
+  localName: 'rtlCol' | 'upright' | 'anchorCtr' | 'compatLnSpc' | 'fromWordArt',
 ): boolean | null => {
   const txBody = firstChildElement(shape[SHAPE_ELEMENT], NAME_TX_BODY);
   if (!txBody) return null;
@@ -515,7 +808,7 @@ const getShapeTextBodyBoolean = (
 /** Writes or clears one explicit boolean attribute on `<a:bodyPr>`. */
 const setShapeTextBodyBoolean = (
   shape: SlideShapeData,
-  localName: 'rtlCol' | 'upright' | 'anchorCtr' | 'compatLnSpc',
+  localName: 'rtlCol' | 'upright' | 'anchorCtr' | 'compatLnSpc' | 'fromWordArt',
   value: boolean | null,
 ): void => {
   const bodyPr = requireBodyPr(shape);
@@ -559,6 +852,14 @@ export const setShapeTextCompatibilityLineSpacing = (
   shape: SlideShapeData,
   value: boolean | null,
 ): void => setShapeTextBodyBoolean(shape, 'compatLnSpc', value);
+
+/** Reads the explicit WordArt identity flag (`bodyPr@fromWordArt`), including false. */
+export const getShapeTextFromWordArt = (shape: SlideShapeData): boolean | null =>
+  getShapeTextBodyBoolean(shape, 'fromWordArt');
+
+/** Sets or clears the WordArt identity flag independently from preset text warp. */
+export const setShapeTextFromWordArt = (shape: SlideShapeData, value: boolean | null): void =>
+  setShapeTextBodyBoolean(shape, 'fromWordArt', value);
 
 /**
  * Reads the shape's text-body rotation from `<a:bodyPr rot="N"/>`.

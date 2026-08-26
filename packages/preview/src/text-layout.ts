@@ -214,6 +214,16 @@ export interface ColumnLayout {
   readonly gapPx: number;
 }
 
+/**
+ * Preset warps with a deliberate SVG preview approximation. The OOXML layer
+ * preserves the complete ST_TextShapeType vocabulary; this smaller contract is
+ * only the renderer's explicitly supported visual subset.
+ */
+export interface TextWarpPreview {
+  readonly preset: 'textArchUp' | 'textWave1' | 'textInflate';
+  readonly adjustments: Readonly<Record<string, number>>;
+}
+
 export interface TextBodyInput {
   readonly boxXpx: number;
   readonly boxYpx: number;
@@ -226,6 +236,8 @@ export interface TextBodyInput {
   readonly vert?: VerticalLayout;
   /** Multi-column body (`numCol`/`spcCol`); null / omitted is single column. */
   readonly columns?: ColumnLayout | null;
+  /** Optional deterministic SVG approximation for a native WordArt warp. */
+  readonly warp?: TextWarpPreview | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -542,10 +554,174 @@ export const layoutCore = (input: TextBodyInput, measure: TextMeasurer): LayoutC
 
 export const layoutTextSvg = (input: TextBodyInput, measure: TextMeasurer): string => {
   const { placements, vert, cx, cy } = layoutCore(input, measure);
-  const body = emitPlacements(placements);
+  const body =
+    input.warp && vert === 'none'
+      ? emitWarpedPlacements(placements, input, measure, input.warp)
+      : emitPlacements(placements);
   if (vert === 'none' || vert === 'upright') return body;
   const deg = vert === 'cw90' ? 90 : 270;
   return `<g transform="rotate(${deg} ${fmt(cx)} ${fmt(cy)})">${body}</g>`;
+};
+
+interface WarpGlyph {
+  readonly text: string;
+  readonly piece: PieceInput;
+  readonly centerX: number;
+  readonly width: number;
+}
+
+/** Clamp an OOXML adjustment before it influences preview geometry. */
+const boundedAdjustment = (
+  adjustments: Readonly<Record<string, number>>,
+  name: string,
+  fallback: number,
+  min: number,
+  max: number,
+): number => Math.min(max, Math.max(min, adjustments[name] ?? fallback));
+
+/**
+ * Emit a one-line WordArt body as individual SVG glyphs. This is a preview
+ * approximation, not a replacement for the native `a:prstTxWarp`: the latter
+ * remains authoritative in the PPTX. Multi-line/bulleted bodies safely fall
+ * back to ordinary SVG text because inventing a layout there would be more
+ * misleading than showing editable flat text.
+ */
+const emitWarpedPlacements = (
+  placements: readonly Placement[],
+  input: TextBodyInput,
+  measure: TextMeasurer,
+  warp: TextWarpPreview,
+): string => {
+  const placement = placements[0];
+  if (placements.length !== 1 || placement === undefined || placement.line.bullet) {
+    return emitPlacements([...placements]);
+  }
+  const { line, baselineY, dx } = placement;
+  const tokens = line.tokens.filter((token) => !token.isBreak);
+  const lineWidth = tokens.reduce((sum, token) => sum + token.width, 0);
+  if (lineWidth <= 0) return emitPlacements([...placements]);
+  const anchorX = line.anchorX + dx + GRID_NUDGE_X;
+  let cursor =
+    line.textAnchor === 'middle'
+      ? anchorX - lineWidth / 2
+      : line.textAnchor === 'end'
+        ? anchorX - lineWidth
+        : anchorX;
+  const glyphs: WarpGlyph[] = [];
+  for (const token of tokens) {
+    const characters = Array.from(token.text);
+    const measured = characters.map((character) => measure(character, specOf(token.piece)).widthPx);
+    const measuredTotal = measured.reduce((sum, width) => sum + width, 0);
+    const correction = measuredTotal > 0 ? token.width / measuredTotal : 1;
+    for (let index = 0; index < characters.length; index += 1) {
+      const width = (measured[index] ?? 0) * correction;
+      glyphs.push({
+        text: characters[index]!,
+        piece: token.piece,
+        centerX: cursor + width / 2,
+        width,
+      });
+      cursor += width;
+    }
+  }
+  const groups = groupTokens(tokens);
+  const label = tokens.map((token) => token.text).join('');
+  const sourceLineCenterX = cursor - lineWidth / 2;
+  // Font advance boxes include side bearings, so a small preset-calibrated
+  // overscan is required for painted glyphs to fill the native frame.
+  const horizontalFill =
+    warp.preset === 'textInflate' ? 1.04 : warp.preset === 'textWave1' ? 0.98 : 1.15;
+  const horizontalOffset = warp.preset === 'textWave1' ? -input.boxWpx * 0.01875 : 0;
+  const horizontalScale = (input.boxWpx * horizontalFill) / lineWidth;
+  const targetLineWidth = lineWidth * horizontalScale;
+  const body = glyphs
+    .map((glyph) => {
+      const stretchedGlyph: WarpGlyph = {
+        ...glyph,
+        centerX:
+          sourceLineCenterX +
+          horizontalOffset +
+          (glyph.centerX - sourceLineCenterX) * horizontalScale,
+      };
+      const progress = Math.min(
+        1,
+        Math.max(
+          0,
+          (stretchedGlyph.centerX - (sourceLineCenterX + horizontalOffset - targetLineWidth / 2)) /
+            targetLineWidth,
+        ),
+      );
+      const transform = warpGlyphTransform(
+        warp,
+        input,
+        stretchedGlyph,
+        baselineY,
+        progress,
+        targetLineWidth,
+        horizontalScale,
+      );
+      return `<text x="${fmt(stretchedGlyph.centerX - glyph.width / 2)}" y="${fmt(baselineY)}" xml:space="preserve" transform="${transform}">${tspan({ text: glyph.text, piece: glyph.piece, width: glyph.width })}</text>`;
+    })
+    .join('');
+  return `${emitGradientDefs(groups)}<g data-text-warp-preview="${warp.preset}" aria-label="${escapeXml(label)}">${body}</g>`;
+};
+
+/** Map the representative preset and its safe constant guides to SVG transforms. */
+const warpGlyphTransform = (
+  warp: TextWarpPreview,
+  input: TextBodyInput,
+  glyph: WarpGlyph,
+  baselineY: number,
+  progress: number,
+  lineWidth: number,
+  horizontalScale: number,
+): string => {
+  const renderedSize = renderedSizePxOf(glyph.piece);
+  const centerY = baselineY - renderedSize * 0.38;
+  // Native WordArt stretches the glyph outlines to occupy the text-warp frame;
+  // it does not retain the ordinary paragraph's authored point-size footprint.
+  // These representative presets reserve different portions of that frame for
+  // their path curvature, calibrated against the native PowerPoint export.
+  const verticalFill =
+    warp.preset === 'textArchUp' ? 0.68 : warp.preset === 'textWave1' ? 1.05 : 1.21;
+  const verticalOffset =
+    input.boxHpx * (warp.preset === 'textArchUp' ? 0.18 : warp.preset === 'textWave1' ? 0.32 : 0.3);
+  const bodyScale = Math.min(
+    6,
+    Math.max(0.05, (input.boxHpx * verticalFill) / Math.max(1, renderedSize)),
+  );
+  const scaleAroundCenter = (scaleY: number): string =>
+    `translate(${fmt(glyph.centerX)} ${fmt(centerY)}) scale(${fmt(horizontalScale)} ${fmt(scaleY)}) translate(${fmt(-glyph.centerX)} ${fmt(-centerY)})`;
+  if (warp.preset === 'textInflate') {
+    const adjustment = boundedAdjustment(warp.adjustments, 'adj', 18750, 0, 20000);
+    const intensity = adjustment / 18750;
+    const scaleY =
+      bodyScale * (1 - 0.2 * intensity + 0.4 * intensity * Math.sin(Math.PI * progress));
+    return `translate(0 ${fmt(verticalOffset)}) ${scaleAroundCenter(scaleY)}`;
+  }
+  if (warp.preset === 'textWave1') {
+    const amplitudeGuide = Math.min(
+      20000,
+      Math.max(0, warp.adjustments.adj1 ?? warp.adjustments.adj ?? 12500),
+    );
+    const phaseGuide = boundedAdjustment(warp.adjustments, 'adj2', 0, -10000, 10000);
+    const amplitude = (input.boxHpx * amplitudeGuide) / 100000;
+    // adj2 is the preset's horizontal offset guide. The SVG approximation maps
+    // its legal range onto a bounded phase shift while adj1 controls amplitude.
+    const phase = (phaseGuide / 10000) * (Math.PI / 2);
+    const radians = progress * Math.PI * 2 + phase;
+    const dy = amplitude * Math.sin(radians);
+    const slope = (amplitude * Math.PI * 2 * Math.cos(radians)) / lineWidth;
+    const angle = ((Math.atan(slope) * 180) / Math.PI) * 0.6;
+    return `translate(0 ${fmt(dy + verticalOffset)}) rotate(${fmt(angle)} ${fmt(glyph.centerX)} ${fmt(baselineY)}) ${scaleAroundCenter(bodyScale)}`;
+  }
+  const adjustment = boundedAdjustment(warp.adjustments, 'adj', 10800000, 0, 21599999);
+  const amplitude = input.boxHpx * 0.9 * (adjustment / 21599999);
+  const radians = progress * Math.PI;
+  const dy = -amplitude * Math.sin(radians);
+  const slope = (-amplitude * Math.PI * Math.cos(radians)) / lineWidth;
+  const angle = (Math.atan(slope) * 180) / Math.PI;
+  return `translate(0 ${fmt(dy + verticalOffset)}) rotate(${fmt(angle)} ${fmt(glyph.centerX)} ${fmt(baselineY)}) ${scaleAroundCenter(bodyScale)}`;
 };
 
 /** Content height (px) the body would occupy at the given input's font sizes —
