@@ -9,16 +9,36 @@ import {
   addSlideTextBox,
   createPresentation,
   findShapeByText,
+  getMediaParts,
   getParagraphBullet,
+  getParagraphBulletImageBytes,
   getParagraphBulletPropertiesEffective,
   getParagraphBulletStyle,
+  getParagraphIndent,
   getSlidePartName,
   getSlides,
   inches,
   loadPresentation,
   savePresentation,
   setParagraphBullet,
+  setParagraphBulletImage,
 } from '../src/api/index.ts';
+
+const PNG = new Uint8Array([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+  0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+  0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x62, 0x00, 0x01, 0x00, 0x00,
+  0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae,
+  0x42, 0x60, 0x82,
+]);
+
+const ALT_PNG = new Uint8Array([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+  0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+  0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00,
+  0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae,
+  0x42, 0x60, 0x82,
+]);
 
 const fixture = (name: string): string =>
   fileURLToPath(new URL(`./fixtures/minimal/${name}`, import.meta.url));
@@ -68,6 +88,58 @@ describe('fn API: getParagraphBullet', () => {
     expect(getParagraphBullet(rebuiltText, 5)).toEqual({ autoNum: 'arabicPeriod', startAt: 5 });
     expect(getParagraphBulletPropertiesEffective(rebuilt, rebuiltText, 3).font).toBe('Arial');
     expect(getParagraphBulletPropertiesEffective(rebuilt, rebuiltText, 4).font).toBe('Aptos');
+  });
+
+  it('writes picture bullets, shares identical media, and collects stale relationships', async () => {
+    const pres = createPresentation();
+    const slide = addBlankSlide(pres);
+    const tb = addSlideTextBox(slide, {
+      x: inches(1),
+      y: inches(1),
+      w: inches(4),
+      h: inches(2),
+      text: 'First\nSecond',
+    });
+
+    setParagraphBulletImage(tb, 0, PNG);
+    setParagraphBulletImage(tb, 1, PNG);
+    expect(getParagraphBulletImageBytes(tb, 0)).toEqual(PNG);
+    expect(getParagraphBulletImageBytes(tb, 1)).toEqual(PNG);
+    expect(getParagraphIndent(tb, 0)).toEqual({
+      leftEmu: 342900,
+      rightEmu: null,
+      firstLineEmu: -342900,
+    });
+    expect(getMediaParts(pres)).toHaveLength(1);
+
+    const rebuilt = await loadPresentation(await savePresentation(pres));
+    const rebuiltText = findShapeByText(getSlides(rebuilt)[0]!, 'First')!;
+    expect(getParagraphBulletImageBytes(rebuiltText, 0)).toEqual(PNG);
+    expect(getParagraphBulletImageBytes(rebuiltText, 1)).toEqual(PNG);
+
+    setParagraphBulletImage(rebuiltText, 0, ALT_PNG);
+    expect(getMediaParts(rebuilt)).toHaveLength(2);
+    setParagraphBullet(rebuiltText, 1, 'bullet');
+    expect(getMediaParts(rebuilt).map((media) => media.data)).toEqual([ALT_PNG]);
+    setParagraphBullet(rebuiltText, 0, 'none');
+    expect(getMediaParts(rebuilt)).toEqual([]);
+  });
+
+  it('rejects undetectable picture-bullet bytes before mutating the paragraph', () => {
+    const pres = createPresentation();
+    const slide = addBlankSlide(pres);
+    const tb = addSlideTextBox(slide, {
+      x: inches(1),
+      y: inches(1),
+      w: inches(4),
+      h: inches(1),
+      text: 'Stable marker',
+    });
+    setParagraphBullet(tb, 0, { char: '★' });
+
+    expect(() => setParagraphBulletImage(tb, 0, new Uint8Array([0, 1, 2]))).toThrow(/format/u);
+    expect(getParagraphBullet(tb, 0)).toEqual({ char: '★' });
+    expect(getMediaParts(pres)).toEqual([]);
   });
 
   it('rejects automatic-number starts outside the DrawingML range', async () => {

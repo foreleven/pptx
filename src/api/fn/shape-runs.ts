@@ -12,7 +12,11 @@ import {
 } from '../../internal/drawingml/index.ts';
 import {
   basename,
+  contentTypeForFormat,
+  detectImageFormat,
   emptyRels,
+  extensionForFormat,
+  type ImageFormat,
   nextRelId,
   partName,
   resolveTarget,
@@ -39,7 +43,7 @@ import {
   type SlideData,
   type SlideShapeData,
 } from '../_internal-symbols.ts';
-import { commitAndRefresh, requireTxBody } from './_helpers.ts';
+import { commitAndRefresh, requireTxBody, setOpcDefault } from './_helpers.ts';
 import { getPresentationTheme } from './theme.ts';
 import { getSlides } from './slide-query.ts';
 import { findCNvPr, NAME_HLINK_CLICK_FN, type ShapeClickAction } from './embedded.ts';
@@ -1090,6 +1094,7 @@ const PPR_CHILD_RANK: Record<string, number> = {
   buNone: 6,
   buAutoNum: 6,
   buChar: 6,
+  buBlip: 6,
   tabLst: 7,
   defRPr: 8,
   extLst: 9,
@@ -2010,6 +2015,8 @@ export const getParagraphBulletStyle = (
  * Sets the bullet style on a single paragraph. Same `BulletStyle` shape
  * as `setShapeBullets` — pass `'bullet'` / `'number'` / `'none'` or an
  * object like `{ char: '◆' }` / `{ autoNum: 'romanLcPeriod' }`.
+ * Replacing a picture bullet also removes its old relationship and media part,
+ * but only after the complete slide no longer references them.
  */
 export const setParagraphBullet = (
   shape: SlideShapeData,
@@ -2017,8 +2024,127 @@ export const setParagraphBullet = (
   style: BulletStyle,
 ): void => {
   const paragraph = requireParagraph(shape, paragraphIndex);
+  const pPr = firstChildElement(paragraph, NAME_A_PPR);
+  const oldRelationshipIds = pPr ? paragraphBulletRelationshipIds(pPr) : new Set<string>();
   applyBulletToParagraph(paragraph, style);
   commitAndRefresh(shape);
+  removeUnreferencedSlideRelationships(shape[SHAPE_SLIDE], oldRelationshipIds);
+};
+
+/**
+ * Sets one paragraph's direct picture bullet from image bytes.
+ *
+ * Identical package media and slide relationships are reused so repeated
+ * markers remain deterministic. Replacing a picture bullet removes its stale
+ * relationship and media part only after the complete slide no longer
+ * references them. The image format is detected from the bytes unless an
+ * explicit format is supplied.
+ */
+export const setParagraphBulletImage = (
+  shape: SlideShapeData,
+  paragraphIndex: number,
+  bytes: Uint8Array,
+  options: { readonly format?: ImageFormat } = {},
+): void => {
+  const paragraph = requireParagraph(shape, paragraphIndex);
+  const format = options.format ?? detectImageFormat(bytes);
+  if (format === null) {
+    throw new Error(
+      'setParagraphBulletImage: could not detect image format. Pass options.format explicitly.',
+    );
+  }
+  const contentType = contentTypeForFormat(format);
+  const extension = extensionForFormat(format);
+  const pPr = ensurePPr(paragraph);
+  const oldRelationshipIds = paragraphBulletRelationshipIds(pPr);
+  const slide = shape[SHAPE_SLIDE];
+  const pkg = slide[INTERNAL_PACKAGE];
+
+  let mediaPart = pkg.parts.find(
+    (part) =>
+      part.name.startsWith('/ppt/media/') &&
+      part.contentType === contentType &&
+      equalBytes(part.data, bytes),
+  );
+  if (!mediaPart) {
+    let nextN = 1;
+    const mediaPattern = /^\/ppt\/media\/image(\d+)\./u;
+    for (const part of pkg.parts) {
+      const match = mediaPattern.exec(part.name);
+      if (match?.[1] === undefined) continue;
+      const n = Number.parseInt(match[1], 10);
+      if (Number.isFinite(n) && n >= nextN) nextN = n + 1;
+    }
+    const mediaName = partName(`/ppt/media/image${nextN}.${extension}`);
+    setOpcDefault(pkg, extension, contentType);
+    pkg.addPart(mediaName, contentType, bytes);
+    mediaPart = pkg.getPart(mediaName)!;
+  }
+
+  const rels = pkg.getRels(slide[SLIDE_PART_NAME]) ?? emptyRels();
+  let relationship = rels.items.find(
+    (candidate) =>
+      candidate.type === REL_TYPES.image &&
+      candidate.targetMode === 'Internal' &&
+      resolveTarget(slide[SLIDE_PART_NAME], candidate.target) === mediaPart.name,
+  );
+  if (!relationship) {
+    relationship = {
+      id: nextRelId(rels.items.map((candidate) => candidate.id)),
+      type: REL_TYPES.image,
+      target: `../media/${basename(mediaPart.name)}`,
+      targetMode: 'Internal',
+    };
+    rels.items.push(relationship);
+    pkg.setRels(slide[SLIDE_PART_NAME], rels);
+  }
+
+  // Reuse the ordinary bullet path for PowerPoint's level-aware hanging indent,
+  // then replace only the marker identity with the picture relationship.
+  applyBulletToParagraph(paragraph, 'bullet');
+  pPr.children = pPr.children.filter(
+    (child) =>
+      !(
+        child.kind === 'element' &&
+        child.name.namespaceURI === NS.dml &&
+        BULLET_CHOICE_NAMES.has(child.name.localName)
+      ),
+  );
+  const blip = elem(qname('a', 'blip', NS.dml), {
+    attrs: [attr(qname('r', 'embed', NS.officeDocRels), relationship.id)],
+  });
+  insertChildByRank(pPr, elem(qname('a', 'buBlip', NS.dml), { children: [blip] }), pPrChildRank);
+  commitAndRefresh(shape);
+  removeUnreferencedSlideRelationships(slide, oldRelationshipIds);
+};
+
+const BULLET_CHOICE_NAMES = new Set([
+  'buClrTx',
+  'buClr',
+  'buSzTx',
+  'buSzPct',
+  'buSzPts',
+  'buFontTx',
+  'buFont',
+  'buNone',
+  'buAutoNum',
+  'buChar',
+  'buBlip',
+]);
+
+/** Collect relationships owned by the direct picture-bullet choice on one paragraph. */
+const paragraphBulletRelationshipIds = (pPr: XmlElement): ReadonlySet<string> => {
+  const picture = firstChildElement(pPr, qname('a', 'buBlip', NS.dml));
+  return picture ? hyperlinkRelationshipIds(picture) : new Set<string>();
+};
+
+/** Compare media payloads without relying on object identity. */
+const equalBytes = (left: Uint8Array, right: Uint8Array): boolean => {
+  if (left.byteLength !== right.byteLength) return false;
+  for (let index = 0; index < left.byteLength; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
 };
 
 /**

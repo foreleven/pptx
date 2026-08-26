@@ -379,6 +379,7 @@ export const applyBulletToParagraph = (paragraph: XmlElement, style: BulletStyle
           c.name.localName === 'buFontTx' ||
           c.name.localName === 'buChar' ||
           c.name.localName === 'buAutoNum' ||
+          c.name.localName === 'buBlip' ||
           c.name.localName === 'buNone' ||
           c.name.localName === 'buFont')
       ),

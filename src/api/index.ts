@@ -537,6 +537,7 @@ export {
   setShapePatternFill,
   setParagraphAlignment,
   setParagraphBullet,
+  setParagraphBulletImage,
   setParagraphDefaultTabSize,
   setParagraphFontAlignment,
   setParagraphLevel,
