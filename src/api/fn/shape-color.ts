@@ -1,7 +1,16 @@
 // Color transforms and rPr-like element parsing.
 
 import { NAME_A_RPR, requireRun } from './shape-runs.ts';
-import { type TextFormat, type TextRunState } from '../../internal/drawingml/index.ts';
+import {
+  isLineAlignment,
+  isLineCap,
+  isLineCompound,
+  isLineDash,
+  isLineJoin,
+  type TextFormat,
+  type TextLineProperties,
+  type TextRunState,
+} from '../../internal/drawingml/index.ts';
 import {
   NS,
   type XmlElement,
@@ -45,6 +54,176 @@ const RUN_FILL_CHOICES = new Set([
   'pattFill',
   'grpFill',
 ]);
+
+/** Parse the structural subset shared by text `<a:ln>` and `<a:uLn>`. */
+const parseTextLineProperties = (
+  line: XmlElement,
+  label: string,
+  options: { readonly rejectZeroWidth: boolean },
+): { readonly properties: TextLineProperties; readonly unsupported: string[] } => {
+  const properties: {
+    -readonly [Key in keyof TextLineProperties]?: TextLineProperties[Key];
+  } = {};
+  const unsupported = unexpectedAttributes(line, new Set(['w', 'cap', 'cmpd', 'algn']), label);
+
+  const widthRaw = getAttrValue(line, qname('', 'w', ''));
+  if (widthRaw !== null) {
+    if (!/^\d+$/u.test(widthRaw)) {
+      unsupported.push(`width ${widthRaw}`);
+    } else {
+      try {
+        const widthEmu = lineWidthEmu(Number(widthRaw), `${label}: width`);
+        if (options.rejectZeroWidth && widthEmu === 0) unsupported.push('width 0');
+        else properties.widthPt = widthEmu / 12_700;
+      } catch {
+        unsupported.push(`width ${widthRaw}`);
+      }
+    }
+  }
+
+  const cap = getAttrValue(line, qname('', 'cap', ''));
+  if (cap !== null) {
+    if (isLineCap(cap)) properties.cap = cap;
+    else unsupported.push(`cap ${cap}`);
+  }
+  const compound = getAttrValue(line, qname('', 'cmpd', ''));
+  if (compound !== null) {
+    if (isLineCompound(compound)) properties.compound = compound;
+    else unsupported.push(`compound ${compound}`);
+  }
+  const alignment = getAttrValue(line, qname('', 'algn', ''));
+  if (alignment !== null) {
+    if (isLineAlignment(alignment)) properties.alignment = alignment;
+    else unsupported.push(`alignment ${alignment}`);
+  }
+
+  const presetDashes = line.children.filter(
+    (child): child is XmlElement =>
+      child.kind === 'element' &&
+      child.name.namespaceURI === NS.dml &&
+      child.name.localName === 'prstDash',
+  );
+  const customDashes = line.children.filter(
+    (child): child is XmlElement =>
+      child.kind === 'element' &&
+      child.name.namespaceURI === NS.dml &&
+      child.name.localName === 'custDash',
+  );
+  if (presetDashes.length + customDashes.length > 1) unsupported.push('multiple line dash choices');
+  const presetDash = presetDashes[0];
+  if (presetDash) {
+    unsupported.push(...unexpectedAttributes(presetDash, new Set(['val']), `${label} dash`));
+    if (presetDash.children.some((child) => child.kind === 'element')) {
+      unsupported.push(`${label} dash children`);
+    }
+    const dash = getAttrValue(presetDash, qname('', 'val', ''));
+    if (dash !== null && isLineDash(dash)) {
+      properties.dash = dash;
+    } else unsupported.push(`${label} dash ${dash ?? 'missing'}`);
+  }
+  if (customDashes.length > 0) unsupported.push('custom dash');
+
+  const joins = line.children.filter(
+    (child): child is XmlElement =>
+      child.kind === 'element' &&
+      child.name.namespaceURI === NS.dml &&
+      (child.name.localName === 'round' ||
+        child.name.localName === 'bevel' ||
+        child.name.localName === 'miter'),
+  );
+  if (joins.length > 1) unsupported.push('multiple line join choices');
+  const join = joins[0];
+  if (join) {
+    if (isLineJoin(join.name.localName)) properties.join = join.name.localName;
+    unsupported.push(...unexpectedAttributes(join, new Set(), `${label} join`));
+    if (join.children.some((child) => child.kind === 'element')) {
+      unsupported.push(`${label} join children`);
+    }
+  }
+
+  const knownChildren = new Set([
+    'noFill',
+    'solidFill',
+    'gradFill',
+    'pattFill',
+    'prstDash',
+    'custDash',
+    'round',
+    'bevel',
+    'miter',
+    'headEnd',
+    'tailEnd',
+    'extLst',
+  ]);
+  for (const child of line.children) {
+    if (child.kind !== 'element') continue;
+    if (child.name.namespaceURI !== NS.dml) {
+      unsupported.push(`foreign child ${child.name.localName}`);
+    } else if (child.name.localName === 'headEnd' || child.name.localName === 'tailEnd') {
+      unsupported.push(`arrow ${child.name.localName}`);
+    } else if (child.name.localName === 'extLst') {
+      unsupported.push('extensions');
+    } else if (!knownChildren.has(child.name.localName)) {
+      unsupported.push(`child ${child.name.localName}`);
+    }
+  }
+  return { properties, unsupported };
+};
+
+type ParsedTextLinePaint =
+  | { readonly kind: 'bare' | 'none'; readonly unsupported: string[] }
+  | { readonly kind: 'solid'; readonly color: string; readonly unsupported: string[] }
+  | { readonly kind: 'unsupported'; readonly reason: string };
+
+/** Parse the no/solid paint subset of one CT_LineProperties element. */
+const parseTextLinePaint = (
+  line: XmlElement,
+  label: string,
+  ctx?: { readonly theme: PresentationTheme | null },
+): ParsedTextLinePaint => {
+  const fills = line.children.filter(
+    (child): child is XmlElement =>
+      child.kind === 'element' &&
+      child.name.namespaceURI === NS.dml &&
+      ['noFill', 'solidFill', 'gradFill', 'pattFill'].includes(child.name.localName),
+  );
+  if (fills.length === 0) return { kind: 'bare', unsupported: [] };
+  if (fills.length > 1) return { kind: 'unsupported', reason: `multiple ${label} fill choices` };
+  const fill = fills[0]!;
+  const unsupported = unexpectedAttributes(fill, new Set(), `${label} ${fill.name.localName}`);
+  if (fill.name.localName === 'noFill') {
+    if (fill.children.some((child) => child.kind === 'element')) {
+      unsupported.push(`${label} noFill children`);
+    }
+    return { kind: 'none', unsupported };
+  }
+  if (fill.name.localName !== 'solidFill') {
+    return { kind: 'unsupported', reason: `${label} ${fill.name.localName}` };
+  }
+  const colors = fill.children.filter((child): child is XmlElement => child.kind === 'element');
+  const color = colors[0];
+  if (colors.length !== 1 || color?.name.namespaceURI !== NS.dml) {
+    return { kind: 'unsupported', reason: `${label} color ${color?.name.localName ?? 'missing'}` };
+  }
+  unsupported.push(...unexpectedAttributes(color, new Set(['val']), `${label} color`));
+  if (color.children.some((child) => child.kind === 'element')) {
+    unsupported.push(`${label} color transforms`);
+  }
+  let colorValue: string | null = null;
+  if (ctx) colorValue = resolveDrawingColor(color, ctx.theme);
+  else if (color.name.localName === 'srgbClr') {
+    const value = getAttrValue(color, qname('', 'val', ''));
+    if (value !== null && /^[\dA-Fa-f]{6}$/u.test(value)) colorValue = `#${value.toUpperCase()}`;
+  } else if (color.name.localName === 'schemeClr') {
+    colorValue = getAttrValue(color, qname('', 'val', ''));
+  }
+  if (color.name.localName !== 'srgbClr')
+    unsupported.push(`${label} color ${color.name.localName}`);
+  if (colorValue === null) {
+    return { kind: 'unsupported', reason: unsupported.join(', ') || `${label} invalid solid fill` };
+  }
+  return { kind: 'solid', color: colorValue, unsupported };
+};
 
 const parseTextGradient = (rPr: XmlElement): NonNullable<TextFormat['gradient']> | undefined => {
   const fills = rPr.children.filter(
@@ -661,20 +840,39 @@ export const parseRPrLikeElement = (
   );
   if (underlineLines.length > 0) {
     const line = underlineLines[0]!;
-    const unsupported = [
-      ...(underlineLines.length === 1 ? [] : ['multiple underline line choices']),
-      ...unexpectedAttributes(line, new Set(), 'underline line'),
-      ...(line.children.some((child) => child.kind === 'element')
-        ? ['underline line children']
-        : []),
-    ];
-    out.underlineLine =
-      line.name.localName === 'uLnTx'
-        ? {
-            kind: 'followText',
-            ...(unsupported.length === 0 ? {} : { unsupported: unsupported.join(', ') }),
-          }
-        : { kind: 'unsupported', reason: ['explicit underline line', ...unsupported].join(', ') };
+    const choiceUnsupported =
+      underlineLines.length === 1 ? [] : ['multiple underline line choices'];
+    if (line.name.localName === 'uLnTx') {
+      const unsupported = [
+        ...choiceUnsupported,
+        ...unexpectedAttributes(line, new Set(), 'underline line-follow-text'),
+        ...(line.children.some((child) => child.kind === 'element')
+          ? ['underline line-follow-text children']
+          : []),
+      ];
+      out.underlineLine = {
+        kind: 'followText',
+        ...(unsupported.length === 0 ? {} : { unsupported: unsupported.join(', ') }),
+      };
+    } else {
+      const parsed = parseTextLineProperties(line, 'underline line', {
+        rejectZeroWidth: false,
+      });
+      const paint = parseTextLinePaint(line, 'underline line', ctx);
+      if (paint.kind === 'unsupported') {
+        out.underlineLine = {
+          kind: 'unsupported',
+          reason: [...choiceUnsupported, ...parsed.unsupported, paint.reason].join(', '),
+        };
+      } else {
+        const unsupported = [...choiceUnsupported, ...parsed.unsupported, ...paint.unsupported];
+        const diagnostic = unsupported.length === 0 ? {} : { unsupported: unsupported.join(', ') };
+        out.underlineLine =
+          paint.kind === 'solid'
+            ? { kind: 'solid', color: paint.color, ...parsed.properties, ...diagnostic }
+            : { kind: paint.kind, ...parsed.properties, ...diagnostic };
+      }
+    }
   }
   const underlineFills = rPr.children.filter(
     (child): child is XmlElement =>
@@ -798,117 +996,28 @@ export const parseRPrLikeElement = (
   }
   const outline = firstChildElement(rPr, qname('a', 'ln', NS.dml));
   if (outline !== null) {
-    const widthRaw = getAttrValue(outline, qname('', 'w', ''));
-    const unsupported: string[] = [];
-    unsupported.push(
-      ...unexpectedAttributes(outline, new Set(['w', 'cap', 'cmpd', 'algn']), 'text outline'),
-    );
-    let widthPt: number | undefined;
-    if (widthRaw !== null) {
-      if (!/^\d+$/u.test(widthRaw)) {
-        unsupported.push(`width ${widthRaw}`);
-      } else {
-        try {
-          const widthEmu = lineWidthEmu(Number(widthRaw), 'getShapeRunFormat: outline width');
-          if (widthEmu === 0) unsupported.push('width 0');
-          else widthPt = widthEmu / 12_700;
-        } catch {
-          unsupported.push(`width ${widthRaw}`);
-        }
-      }
-    }
-    const cap = getAttrValue(outline, qname('', 'cap', ''));
-    const compound = getAttrValue(outline, qname('', 'cmpd', ''));
-    const alignment = getAttrValue(outline, qname('', 'algn', ''));
-    if (cap !== null) unsupported.push(`cap ${cap}`);
-    if (compound !== null && compound !== 'sng') unsupported.push(`compound ${compound}`);
-    if (alignment !== null) unsupported.push(`alignment ${alignment}`);
-    const dash = firstChildElement(outline, qname('a', 'prstDash', NS.dml));
-    const dashValue = dash === null ? null : getAttrValue(dash, qname('', 'val', ''));
-    if (dashValue !== null && dashValue !== 'solid') unsupported.push(`dash ${dashValue}`);
-    if (firstChildElement(outline, qname('a', 'custDash', NS.dml))) unsupported.push('custom dash');
-    for (const join of ['round', 'bevel', 'miter']) {
-      if (firstChildElement(outline, qname('a', join, NS.dml))) unsupported.push(`join ${join}`);
-    }
-    const knownChildren = new Set([
-      'noFill',
-      'solidFill',
-      'gradFill',
-      'pattFill',
-      'prstDash',
-      'custDash',
-      'round',
-      'bevel',
-      'miter',
-      'headEnd',
-      'tailEnd',
-      'extLst',
-    ]);
-    for (const child of outline.children) {
-      if (child.kind !== 'element') continue;
-      if (child.name.namespaceURI !== NS.dml) {
-        unsupported.push(`foreign child ${child.name.localName}`);
-      } else if (child.name.localName === 'headEnd' || child.name.localName === 'tailEnd') {
-        unsupported.push(`arrow ${child.name.localName}`);
-      } else if (child.name.localName === 'extLst') {
-        unsupported.push('extensions');
-      } else if (!knownChildren.has(child.name.localName)) {
-        unsupported.push(`child ${child.name.localName}`);
-      }
-    }
-    const noFill = firstChildElement(outline, qname('a', 'noFill', NS.dml));
-    if (noFill) {
-      unsupported.push(...unexpectedAttributes(noFill, new Set(), 'noFill'));
-      const unsupportedText = unsupported.length > 0 ? unsupported.join(', ') : undefined;
-      out.outline = { kind: 'none', ...(unsupportedText ? { unsupported: unsupportedText } : {}) };
+    const parsed = parseTextLineProperties(outline, 'text outline', {
+      rejectZeroWidth: false,
+    });
+    const paint = parseTextLinePaint(outline, 'text outline', ctx);
+    const hasInvalidExplicitWidth =
+      getAttrValue(outline, qname('', 'w', '')) !== null && parsed.properties.widthPt === undefined;
+    if (paint.kind === 'unsupported' || paint.kind === 'bare' || hasInvalidExplicitWidth) {
+      out.outline = {
+        kind: 'unsupported',
+        reason: hasInvalidExplicitWidth
+          ? parsed.unsupported.join(', ')
+          : paint.kind === 'unsupported'
+            ? [...parsed.unsupported, paint.reason].join(', ')
+            : [...parsed.unsupported, 'text outline without a supported solid/no fill'].join(', '),
+      };
     } else {
-      const solid = firstChildElement(outline, qname('a', 'solidFill', NS.dml));
-      let color: string | null = null;
-      if (solid) {
-        unsupported.push(...unexpectedAttributes(solid, new Set(), 'solidFill'));
-        const colorChild = solid.children.find(
-          (child): child is XmlElement =>
-            child.kind === 'element' && child.name.namespaceURI === NS.dml,
-        );
-        if (colorChild) {
-          unsupported.push(
-            ...unexpectedAttributes(colorChild, new Set(['val']), colorChild.name.localName),
-          );
-          if (colorChild.name.localName !== 'srgbClr') {
-            unsupported.push(`color ${colorChild.name.localName}`);
-          }
-          if (colorChild.children.some((child) => child.kind === 'element')) {
-            unsupported.push('color transforms');
-          }
-          if (ctx) color = resolveDrawingColor(colorChild, ctx.theme);
-          else if (colorChild.name.localName === 'srgbClr') {
-            const value = getAttrValue(colorChild, qname('', 'val', ''));
-            if (value !== null) color = `#${value.toUpperCase()}`;
-          } else if (colorChild.name.localName === 'schemeClr') {
-            color = getAttrValue(colorChild, qname('', 'val', ''));
-          }
-        }
-      }
-      if (color !== null) {
-        const unsupportedText = unsupported.length > 0 ? unsupported.join(', ') : undefined;
-        out.outline = {
-          kind: 'solid',
-          color,
-          ...(widthPt === undefined ? {} : { widthPt }),
-          ...(unsupportedText ? { unsupported: unsupportedText } : {}),
-        };
-      } else {
-        const fill = outline.children.find(
-          (child): child is XmlElement =>
-            child.kind === 'element' &&
-            child.name.namespaceURI === NS.dml &&
-            ['gradFill', 'pattFill'].includes(child.name.localName),
-        );
-        out.outline = {
-          kind: 'unsupported',
-          reason: `text outline ${fill?.name.localName ?? 'without a supported solid/no fill'}`,
-        };
-      }
+      const unsupported = [...parsed.unsupported, ...paint.unsupported];
+      const diagnostic = unsupported.length === 0 ? {} : { unsupported: unsupported.join(', ') };
+      out.outline =
+        paint.kind === 'solid'
+          ? { kind: 'solid', color: paint.color, ...parsed.properties, ...diagnostic }
+          : { kind: 'none', ...parsed.properties, ...diagnostic };
     }
   }
   const spc = getAttrValue(rPr, qname('', 'spc', ''));

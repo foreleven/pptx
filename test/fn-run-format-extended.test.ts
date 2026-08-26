@@ -21,11 +21,27 @@ import {
   setShapeParagraphElements,
   setShapeRunFormat,
 } from '../src/api/index.ts';
+import { applyLineStyle } from '../src/internal/drawingml/index.ts';
+import { NS, attr, elem, getAttrValue, qname } from '../src/internal/xml/index.ts';
 
 const fixture = (name: string): string =>
   fileURLToPath(new URL(`./fixtures/minimal/${name}`, import.meta.url));
 
 describe('fn API: extended run-format properties', () => {
+  it('updates an unqualified line width without deleting same-local-name extension attributes', () => {
+    const line = elem(qname('a', 'ln', NS.dml), {
+      attrs: [
+        attr(qname('', 'w', ''), '12700'),
+        attr(qname('future', 'w', 'urn:office-kit:test'), 'opaque'),
+      ],
+    });
+
+    applyLineStyle(line, { widthEmu: 25_400 });
+
+    expect(getAttrValue(line, qname('', 'w', ''))).toBe('25400');
+    expect(getAttrValue(line, qname('future', 'w', 'urn:office-kit:test'))).toBe('opaque');
+  });
+
   it('accepts every ST_TextUnderlineType token and rejects unknown values', async () => {
     const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
     const slide = getSlides(pres)[0]!;
@@ -75,7 +91,7 @@ describe('fn API: extended run-format properties', () => {
       y: inches(0),
       w: inches(4),
       h: inches(2),
-      text: 'follow solid none',
+      text: 'follow explicit none',
     });
     setShapeParagraphElements(tb, 0, [
       {
@@ -89,9 +105,19 @@ describe('fn API: extended run-format properties', () => {
       },
       {
         kind: 'r',
-        text: 'solid ',
+        text: 'explicit ',
         format: {
           underline: 'dashHeavy',
+          underlineLine: {
+            kind: 'solid',
+            color: '#3659E3',
+            widthPt: 1.25,
+            cap: 'rnd',
+            dash: 'dashDot',
+            join: 'bevel',
+            compound: 'dbl',
+            alignment: 'ctr',
+          },
           underlineFill: { kind: 'solid', color: '#F26B5B80' },
         },
       },
@@ -103,7 +129,7 @@ describe('fn API: extended run-format properties', () => {
     ]);
 
     const reloaded = await loadPresentation(await savePresentation(pres));
-    const reloadedShape = findShapeByText(getSlides(reloaded)[0]!, 'follow solid none')!;
+    const reloadedShape = findShapeByText(getSlides(reloaded)[0]!, 'follow explicit none')!;
     expect(getShapeRunFormat(reloadedShape, 0, 0)).toMatchObject({
       underline: 'words',
       underlineLine: { kind: 'followText' },
@@ -111,6 +137,16 @@ describe('fn API: extended run-format properties', () => {
     });
     expect(getShapeRunFormat(reloadedShape, 0, 1)).toMatchObject({
       underline: 'dashHeavy',
+      underlineLine: {
+        kind: 'solid',
+        color: '#3659E3',
+        widthPt: 1.25,
+        cap: 'rnd',
+        dash: 'dashDot',
+        join: 'bevel',
+        compound: 'dbl',
+        alignment: 'ctr',
+      },
       underlineFill: { kind: 'solid', color: '#F26B5B80' },
     });
     expect(getShapeRunFormat(reloadedShape, 0, 2)).toMatchObject({
@@ -179,7 +215,18 @@ describe('fn API: extended run-format properties', () => {
       {
         kind: 'r',
         text: 'solid',
-        format: { outline: { kind: 'solid', color: '#3659E3', widthPt: 1.5 } },
+        format: {
+          outline: {
+            kind: 'solid',
+            color: '#3659E3',
+            widthPt: 1.5,
+            cap: 'sq',
+            dash: 'lgDashDot',
+            join: 'round',
+            compound: 'thickThin',
+            alignment: 'in',
+          },
+        },
       },
       { kind: 'r', text: 'none', format: { outline: { kind: 'none' } } },
     ]);
@@ -190,6 +237,11 @@ describe('fn API: extended run-format properties', () => {
       kind: 'solid',
       color: '#3659E3',
       widthPt: 1.5,
+      cap: 'sq',
+      dash: 'lgDashDot',
+      join: 'round',
+      compound: 'thickThin',
+      alignment: 'in',
     });
     expect(getShapeRunFormat(reloadedShape, 0, 1)?.outline).toEqual({ kind: 'none' });
   });

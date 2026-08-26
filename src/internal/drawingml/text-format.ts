@@ -28,7 +28,14 @@ import {
 import { fontSizeHundredthPt, textNonNegativePoint, textPointSpacing } from '../bounds.ts';
 import { buildColorElement } from './color.ts';
 import { buildGradientFill, type GradientFillOptions } from './fill.ts';
-import { setNoStroke, setSolidStroke } from './stroke.ts';
+import {
+  applyLineStyle,
+  type LineAlignment,
+  type LineCap,
+  type LineCompound,
+  type LineDash,
+  type LineJoin,
+} from './stroke.ts';
 
 const NAME_R = qname('a', 'r', NS.dml);
 const NAME_RPR = qname('a', 'rPr', NS.dml);
@@ -196,19 +203,34 @@ export interface TextFormat {
   gradient?: TextGradient | null;
 }
 
+/** Structural line semantics shared by text outlines and explicit underline lines. */
+export interface TextLineProperties {
+  readonly widthPt?: number;
+  readonly cap?: LineCap;
+  readonly dash?: LineDash;
+  readonly join?: LineJoin;
+  readonly compound?: LineCompound;
+  readonly alignment?: LineAlignment;
+}
+
 /** Common editable text-outline subset plus an importer-only diagnostic carrier. */
 export type TextOutline =
-  | {
+  | (TextLineProperties & {
       readonly kind: 'solid';
       readonly color: string;
-      readonly widthPt?: number;
       readonly unsupported?: string;
-    }
-  | { readonly kind: 'none'; readonly unsupported?: string }
+    })
+  | (TextLineProperties & { readonly kind: 'none'; readonly unsupported?: string })
   | { readonly kind: 'unsupported'; readonly reason: string };
 
 export type TextUnderlineLine =
   | { readonly kind: 'followText'; readonly unsupported?: string }
+  | (TextLineProperties & {
+      readonly kind: 'solid';
+      readonly color: string;
+      readonly unsupported?: string;
+    })
+  | (TextLineProperties & { readonly kind: 'none' | 'bare'; readonly unsupported?: string })
   | { readonly kind: 'unsupported'; readonly reason: string };
 
 export type TextUnderlineFill =
@@ -346,7 +368,13 @@ const setUnderlineLine = (rPr: XmlElement, value: TextUnderlineLine): void => {
         ['uLnTx', 'uLn'].includes(child.name.localName)
       ),
   );
-  insertChildByRank(rPr, elem(NAME_U_LN_TX), rprChildRank);
+  if (value.kind === 'followText') {
+    insertChildByRank(rPr, elem(NAME_U_LN_TX), rprChildRank);
+    return;
+  }
+  const line = elem(qname('a', 'uLn', NS.dml));
+  applyTextLineProperties(line, value);
+  insertChildByRank(rPr, line, rprChildRank);
 };
 
 const setUnderlineFill = (rPr: XmlElement, value: TextUnderlineFill): void => {
@@ -445,10 +473,37 @@ const setTextShadow = (rPr: XmlElement, value: TextShadow | null): void => {
   insertChildByRank(rPr, elem(NAME_EFFECT_LST, { children: [shadow] }), rprChildRank);
 };
 
+/** Apply the editable CT_LineProperties subset to one text line host. */
+const applyTextLineProperties = (
+  line: XmlElement,
+  value: TextOutline | Exclude<TextUnderlineLine, { readonly kind: 'followText' }>,
+): void => {
+  if (value.kind === 'unsupported') {
+    throw new TypeError('Unsupported text line diagnostic state is read-only.');
+  }
+  const widthEmu = value.widthPt === undefined ? undefined : Math.round(value.widthPt * 12_700);
+  applyLineStyle(line, {
+    ...(value.kind === 'solid'
+      ? { fill: { kind: 'solid' as const, color: value.color } }
+      : value.kind === 'none'
+        ? { fill: { kind: 'none' as const } }
+        : {}),
+    ...(widthEmu === undefined ? {} : { widthEmu }),
+    ...(value.cap === undefined ? {} : { cap: value.cap }),
+    ...(value.dash === undefined ? {} : { dash: value.dash }),
+    ...(value.join === undefined ? {} : { join: value.join }),
+    ...(value.compound === undefined ? {} : { compound: value.compound }),
+    ...(value.alignment === undefined ? {} : { alignment: value.alignment }),
+  });
+};
+
 /** Ensure the run outline exists in the first CT_TextCharacterProperties child slot. */
-const ensureRunOutline = (rPr: XmlElement): void => {
-  if (firstChildElement(rPr, qname('a', 'ln', NS.dml)) !== null) return;
-  insertChildByRank(rPr, elem(qname('a', 'ln', NS.dml)), rprChildRank);
+const ensureRunOutline = (rPr: XmlElement): XmlElement => {
+  const existing = firstChildElement(rPr, qname('a', 'ln', NS.dml));
+  if (existing !== null) return existing;
+  const outline = elem(qname('a', 'ln', NS.dml));
+  insertChildByRank(rPr, outline, rprChildRank);
+  return outline;
 };
 
 /** Mutates `rPr` in place per `format`. */
@@ -525,19 +580,7 @@ export const applyRunFormat = (rPr: XmlElement, format: TextFormat): void => {
     if (format.outline.kind === 'unsupported') {
       throw new TypeError('TextFormat.outline kind unsupported is read-only diagnostic state.');
     }
-    ensureRunOutline(rPr);
-    if (format.outline.kind === 'none') {
-      setNoStroke(rPr);
-    } else {
-      const widthEmu =
-        format.outline.widthPt === undefined
-          ? undefined
-          : Math.round(format.outline.widthPt * 12_700);
-      setSolidStroke(rPr, {
-        color: format.outline.color,
-        ...(widthEmu === undefined ? {} : { widthEmu }),
-      });
-    }
+    applyTextLineProperties(ensureRunOutline(rPr), format.outline);
   }
 };
 

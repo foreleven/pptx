@@ -12,7 +12,15 @@ export {
   replaceTokensInTree,
   setTextBody,
 } from './text-body-mutation.ts';
-export type { TextFormat, TextGradient, TextOutline, TextShadow } from './text-format.ts';
+export type {
+  TextFormat,
+  TextGradient,
+  TextLineProperties,
+  TextOutline,
+  TextShadow,
+  TextUnderlineFill,
+  TextUnderlineLine,
+} from './text-format.ts';
 export { applyFormatToAllRuns, applyRunFormat, applyRunState } from './text-format.ts';
 export type { TextRunState } from './text-format.ts';
 export type { ParsedColor } from './color.ts';
@@ -35,6 +43,7 @@ export type { GlowOptions, ShadowOptions, ShapeEffectOptions } from './effects.t
 export { clearEffects, setEffects, setGlow, setShadow } from './effects.ts';
 export type {
   ArrowOptions,
+  LineAlignment,
   LineCap,
   LineCompound,
   LineDash,
@@ -42,10 +51,17 @@ export type {
   LineEndSize,
   LineEndType,
   LineJoin,
+  LineStyle,
   StrokeOptions,
 } from './stroke.ts';
 export {
+  applyLineStyle,
   clearStroke,
+  isLineAlignment,
+  isLineCap,
+  isLineCompound,
+  isLineDash,
+  isLineJoin,
   setNoStroke,
   setSolidStroke,
   setStrokeArrow,

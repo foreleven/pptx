@@ -266,3 +266,103 @@ export const setStrokeCompound = (spPr: XmlElement, cmpd: LineCompound | null): 
   ln.attrs = ln.attrs.filter((a) => !(a.name.namespaceURI === '' && a.name.localName === 'cmpd'));
   if (cmpd !== null) ln.attrs.push(attr(qname('', 'cmpd', ''), cmpd));
 };
+
+/** ECMA-376 §20.1.10.32 `ST_PenAlignment`. */
+export type LineAlignment = 'ctr' | 'in';
+
+/** Structural and simple-paint subset shared by every `CT_LineProperties` host. */
+export interface LineStyle {
+  readonly fill?: { readonly kind: 'solid'; readonly color: string } | { readonly kind: 'none' };
+  readonly widthEmu?: number;
+  readonly cap?: LineCap;
+  readonly dash?: LineDash;
+  readonly join?: LineJoin;
+  readonly compound?: LineCompound;
+  readonly alignment?: LineAlignment;
+}
+
+const LINE_CAPS: ReadonlySet<string> = new Set(['rnd', 'sq', 'flat']);
+const LINE_DASHES: ReadonlySet<string> = new Set([
+  'solid',
+  'dot',
+  'dash',
+  'lgDash',
+  'dashDot',
+  'lgDashDot',
+  'lgDashDotDot',
+  'sysDash',
+  'sysDot',
+  'sysDashDot',
+  'sysDashDotDot',
+]);
+const LINE_JOINS: ReadonlySet<string> = new Set(['round', 'bevel', 'miter']);
+const LINE_COMPOUNDS: ReadonlySet<string> = new Set([
+  'sng',
+  'dbl',
+  'thickThin',
+  'thinThick',
+  'tri',
+]);
+const LINE_ALIGNMENTS: ReadonlySet<string> = new Set(['ctr', 'in']);
+
+export const isLineCap = (value: string): value is LineCap => LINE_CAPS.has(value);
+export const isLineDash = (value: string): value is LineDash => LINE_DASHES.has(value);
+export const isLineJoin = (value: string): value is LineJoin => LINE_JOINS.has(value);
+export const isLineCompound = (value: string): value is LineCompound => LINE_COMPOUNDS.has(value);
+export const isLineAlignment = (value: string): value is LineAlignment =>
+  LINE_ALIGNMENTS.has(value);
+
+/**
+ * Applies the shared editable subset directly to an existing line element.
+ * Unlike the shape-level setters, this also works for text `<a:ln>` and
+ * underline `<a:uLn>` hosts without wrapping them in another `<a:ln>`.
+ */
+export const applyLineStyle = (ln: XmlElement, style: LineStyle): void => {
+  if (style.widthEmu !== undefined) {
+    ln.attrs = ln.attrs.filter(
+      (attribute) => attribute.name.namespaceURI !== '' || attribute.name.localName !== 'w',
+    );
+    ln.attrs.push(attr(ATTR_W, String(lineWidthEmu(style.widthEmu, 'applyLineStyle: widthEmu'))));
+  }
+  const setTokenAttribute = (
+    localName: 'cap' | 'cmpd' | 'algn',
+    value: string | undefined,
+    allowed: ReadonlySet<string>,
+  ): void => {
+    if (value === undefined) return;
+    if (!allowed.has(value)) {
+      throw new TypeError(`applyLineStyle: invalid ${localName} token ${JSON.stringify(value)}`);
+    }
+    ln.attrs = ln.attrs.filter(
+      (attribute) => attribute.name.namespaceURI !== '' || attribute.name.localName !== localName,
+    );
+    ln.attrs.push(attr(qname('', localName, ''), value));
+  };
+  setTokenAttribute('cap', style.cap, LINE_CAPS);
+  setTokenAttribute('cmpd', style.compound, LINE_COMPOUNDS);
+  setTokenAttribute('algn', style.alignment, LINE_ALIGNMENTS);
+
+  if (style.fill !== undefined) {
+    removeChildrenIn(ln, FILL_LOCALS);
+    insertLnChild(
+      ln,
+      style.fill.kind === 'none'
+        ? elem(NAME_NO_FILL)
+        : elem(NAME_SOLID_FILL, { children: [buildColorElement(style.fill.color)] }),
+    );
+  }
+  if (style.dash !== undefined) {
+    if (!isLineDash(style.dash)) {
+      throw new TypeError(`applyLineStyle: invalid dash token ${JSON.stringify(style.dash)}`);
+    }
+    removeChildrenIn(ln, DASH_LOCALS);
+    insertLnChild(ln, elem(NAME_PRST_DASH, { attrs: [attr(ATTR_VAL, style.dash)] }));
+  }
+  if (style.join !== undefined) {
+    if (!isLineJoin(style.join)) {
+      throw new TypeError(`applyLineStyle: invalid join token ${JSON.stringify(style.join)}`);
+    }
+    removeChildrenIn(ln, JOIN_LOCALS);
+    insertLnChild(ln, elem(qname('a', style.join, NS.dml)));
+  }
+};
