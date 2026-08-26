@@ -471,8 +471,12 @@ export interface ParagraphBulletPropertiesEffective {
   bullet: BulletStyle | null;
   picture: boolean;
   color: string | null;
+  /** True only when the winning color is an sRGB hex plus an optional exactly byte-representable alpha. */
+  colorExactSrgb: boolean | null;
   sizePct: number | null;
   sizePts: number | null;
+  /** False when the winning layer contains malformed, out-of-range, or conflicting size nodes. */
+  sizeValid: boolean;
   font: string | null;
 }
 
@@ -735,8 +739,9 @@ export const getParagraphPropertiesEffective = (
 
 interface ParsedBulletLayer {
   identity?: ParsedBulletIdentity;
-  color?: string | null;
+  color?: { value: string | null; exactSrgb: boolean | null };
   size?: { sizePct: number | null; sizePts: number | null } | null;
+  sizeValid?: boolean;
   font?: string | null;
 }
 
@@ -747,19 +752,26 @@ const parseBulletLayer = (
 ): ParsedBulletLayer => {
   const identity = parseBulletIdentity(pPr);
   const result: ParsedBulletLayer = identity ? { identity } : {};
+  let sizeNodeCount = 0;
   for (const child of pPr.children) {
     if (child.kind !== 'element' || child.name.namespaceURI !== NS.dml) continue;
     if (child.name.localName === 'buClrTx') {
-      result.color = null;
+      result.color = { value: null, exactSrgb: null };
     } else if (child.name.localName === 'buClr') {
       const color = child.children.find(
         (candidate): candidate is XmlElement =>
           candidate.kind === 'element' && candidate.name.namespaceURI === NS.dml,
       );
-      result.color = color ? resolveDrawingColor(color, theme) : null;
+      result.color = {
+        value: color ? resolveDrawingColor(color, theme) : null,
+        exactSrgb: color ? bulletColorIsExactCssHex(color) : false,
+      };
     } else if (child.name.localName === 'buSzTx') {
+      sizeNodeCount += 1;
       result.size = null;
+      result.sizeValid = sizeNodeCount === 1;
     } else if (child.name.localName === 'buSzPct') {
+      sizeNodeCount += 1;
       const value = getAttrValue(child, qname('', 'val', ''));
       const parsed = parsePercentageFraction(value);
       if (parsed !== null) {
@@ -767,11 +779,16 @@ const parseBulletLayer = (
           sizePct: parsed,
           sizePts: null,
         };
-      }
+      } else result.size = null;
+      result.sizeValid = sizeNodeCount === 1 && parsed !== null && parsed >= 0.25 && parsed <= 4;
     } else if (child.name.localName === 'buSzPts') {
+      sizeNodeCount += 1;
       const value = getAttrValue(child, qname('', 'val', ''));
-      const parsed = value === null ? Number.NaN : Number.parseInt(value, 10);
+      const parsed = value !== null && /^\d+$/u.test(value) ? Number(value) : Number.NaN;
       if (Number.isFinite(parsed)) result.size = { sizePct: null, sizePts: parsed / 100 };
+      else result.size = null;
+      result.sizeValid =
+        sizeNodeCount === 1 && Number.isFinite(parsed) && parsed >= 100 && parsed <= 400000;
     } else if (child.name.localName === 'buFontTx') {
       result.font = null;
     } else if (child.name.localName === 'buFont') {
@@ -779,6 +796,29 @@ const parseBulletLayer = (
     }
   }
   return result;
+};
+
+/** CSS marker colors can preserve only literal sRGB plus zero or one exactly byte-addressable alpha. */
+const bulletColorIsExactCssHex = (color: XmlElement): boolean => {
+  if (color.name.localName !== 'srgbClr') return false;
+  const value = getAttrValue(color, qname('', 'val', ''));
+  if (value === null || !/^[0-9A-Fa-f]{6}$/u.test(value)) return false;
+  if (color.children.length === 0) return true;
+  if (color.children.length !== 1) return false;
+  const alpha = color.children[0];
+  if (
+    alpha?.kind !== 'element' ||
+    alpha.name.namespaceURI !== NS.dml ||
+    alpha.name.localName !== 'alpha'
+  ) {
+    return false;
+  }
+  const raw = getAttrValue(alpha, qname('', 'val', ''));
+  if (raw === null || !/^\d+$/u.test(raw)) return false;
+  const value100k = Number(raw);
+  if (value100k < 0 || value100k > 100000) return false;
+  const byte = Math.round((value100k / 100000) * 255);
+  return Math.round((byte / 255) * 100000) === value100k;
 };
 
 /** Parse Transitional integer units and Strict percent lexemes into a unit fraction. */
@@ -802,22 +842,28 @@ export const getParagraphBulletPropertiesEffective = (
   const { layers } = paragraphPPrCascade(pres, shape, paragraphIndex);
   const theme = getPresentationTheme(pres);
   let identity: ParsedBulletLayer['identity'];
-  let color: string | null | undefined;
+  let color: ParsedBulletLayer['color'];
   let size: ParsedBulletLayer['size'];
+  let sizeValid = true;
   let font: string | null | undefined;
   for (const layer of layers) {
     const parsed = parseBulletLayer(layer, theme);
     if (identity === undefined && parsed.identity !== undefined) identity = parsed.identity;
     if (color === undefined && parsed.color !== undefined) color = parsed.color;
-    if (size === undefined && parsed.size !== undefined) size = parsed.size;
+    if (size === undefined && parsed.size !== undefined) {
+      size = parsed.size;
+      sizeValid = parsed.sizeValid ?? true;
+    }
     if (font === undefined && parsed.font !== undefined) font = parsed.font;
   }
   return {
     bullet: identity?.bullet ?? null,
     picture: identity?.picture ?? false,
-    color: color ?? null,
+    color: color?.value ?? null,
+    colorExactSrgb: color?.exactSrgb ?? null,
     sizePct: size?.sizePct ?? null,
     sizePts: size?.sizePts ?? null,
+    sizeValid,
     font: font ?? null,
   };
 };

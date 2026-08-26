@@ -18,15 +18,21 @@ import {
   text,
   walkElements,
 } from '../xml/index.ts';
+import { fontSizeHundredthPt } from '../bounds.ts';
+import { buildColorElement } from './color.ts';
 
 const NAME_BU_CHAR = qname('a', 'buChar', NS.dml);
 const NAME_BU_AUTO_NUM = qname('a', 'buAutoNum', NS.dml);
 const NAME_BU_NONE = qname('a', 'buNone', NS.dml);
+const NAME_BU_CLR = qname('a', 'buClr', NS.dml);
+const NAME_BU_SZ_PCT = qname('a', 'buSzPct', NS.dml);
+const NAME_BU_SZ_PTS = qname('a', 'buSzPts', NS.dml);
 const NAME_BU_FONT = qname('a', 'buFont', NS.dml);
 const ATTR_CHAR = qname('', 'char', '');
 const ATTR_BU_TYPE = qname('', 'type', '');
 const ATTR_START_AT = qname('', 'startAt', '');
 const ATTR_TYPEFACE = qname('', 'typeface', '');
+const ATTR_VAL = qname('', 'val', '');
 
 const NAME_P = qname('a', 'p', NS.dml);
 const NAME_R = qname('a', 'r', NS.dml);
@@ -178,13 +184,22 @@ export const replaceTextInTree = (root: XmlElement, from: string | RegExp, to: s
  *   - `{ autoNum, startAt?, font? }` — any ECMA-376 `ST_TextAutonumberScheme`
  *     token (`arabicPeriod`, `romanLcParenR`, `alphaUcPeriod`, ...),
  *     optionally starting from an integer in the native 1–32767 range.
+ *   - Object variants may also set `color`, relative `sizePct` (0.25–4), or
+ *     fixed `sizePts` (1–4000). Relative and fixed size are mutually exclusive.
  */
+interface BulletMarkerStyle {
+  color?: string;
+  sizePct?: number;
+  sizePts?: number;
+  font?: string;
+}
+
 export type BulletStyle =
   | 'bullet'
   | 'number'
   | 'none'
-  | { char: string; font?: string }
-  | { autoNum: string; startAt?: number; font?: string };
+  | ({ char: string } & BulletMarkerStyle)
+  | ({ autoNum: string; startAt?: number } & BulletMarkerStyle);
 
 const normalizeBulletStyle = (
   s: BulletStyle,
@@ -326,19 +341,43 @@ export const applyBulletToParagraph = (paragraph: XmlElement, style: BulletStyle
   if (authoredFont !== undefined && authoredFont.trim().length === 0) {
     throw new TypeError('bullet font must be a non-empty string');
   }
+  const authoredColor = typeof style === 'object' ? style.color : undefined;
+  const colorElement = authoredColor === undefined ? undefined : buildColorElement(authoredColor);
+  const sizePct = typeof style === 'object' ? style.sizePct : undefined;
+  const sizePts = typeof style === 'object' ? style.sizePts : undefined;
+  if (sizePct !== undefined && sizePts !== undefined) {
+    throw new TypeError('bullet sizePct and sizePts are mutually exclusive');
+  }
+  let sizePctValue: number | undefined;
+  if (sizePct !== undefined) {
+    if (!Number.isFinite(sizePct) || sizePct < 0.25 || sizePct > 4) {
+      throw new RangeError(`bullet sizePct must be from 0.25 to 4; got ${String(sizePct)}`);
+    }
+    sizePctValue = Math.round(sizePct * 100000);
+  }
+  const sizePtsValue =
+    sizePts === undefined
+      ? undefined
+      : fontSizeHundredthPt(Math.round(sizePts * 100), 'bullet sizePts');
   let pPr = firstChildElement(paragraph, NAME_PPR_FOR_BULLET);
   if (pPr === null) {
     pPr = elem(NAME_PPR_FOR_BULLET);
     // <a:pPr> must be the first child of <a:p>.
     paragraph.children.unshift(pPr);
   }
-  // Remove any existing bullet child (and the number font we may have added).
+  // Remove every independently inheritable bullet group before emitting the complete authored replacement.
   pPr.children = pPr.children.filter(
     (c) =>
       !(
         c.kind === 'element' &&
         c.name.namespaceURI === NS.dml &&
-        (c.name.localName === 'buChar' ||
+        (c.name.localName === 'buClrTx' ||
+          c.name.localName === 'buClr' ||
+          c.name.localName === 'buSzTx' ||
+          c.name.localName === 'buSzPct' ||
+          c.name.localName === 'buSzPts' ||
+          c.name.localName === 'buFontTx' ||
+          c.name.localName === 'buChar' ||
           c.name.localName === 'buAutoNum' ||
           c.name.localName === 'buNone' ||
           c.name.localName === 'buFont')
@@ -364,11 +403,32 @@ export const applyBulletToParagraph = (paragraph: XmlElement, style: BulletStyle
   // major font) ahead of `<a:buAutoNum>`. A character bullet carries its glyph
   // directly and needs none. `<a:buFont>` precedes the bullet child per the
   // CT_TextParagraphProperties element order.
+  const bulletChildren: XmlElement[] = [];
+  if (colorElement !== undefined)
+    bulletChildren.push(elem(NAME_BU_CLR, { children: [colorElement] }));
+  if (sizePctValue !== undefined) {
+    bulletChildren.push(elem(NAME_BU_SZ_PCT, { attrs: [attr(ATTR_VAL, String(sizePctValue))] }));
+  } else if (sizePtsValue !== undefined) {
+    bulletChildren.push(elem(NAME_BU_SZ_PTS, { attrs: [attr(ATTR_VAL, String(sizePtsValue))] }));
+  }
   const bulletFont = authoredFont ?? (normalized.kind === 'autoNum' ? '+mj-lt' : undefined);
   if (bulletFont !== undefined) {
-    pPr.children.push(elem(NAME_BU_FONT, { attrs: [attr(ATTR_TYPEFACE, bulletFont)] }));
+    bulletChildren.push(elem(NAME_BU_FONT, { attrs: [attr(ATTR_TYPEFACE, bulletFont)] }));
   }
-  pPr.children.push(buildBulletElement(style));
+  bulletChildren.push(buildBulletElement(style));
+  const trailingIndex = pPr.children.findIndex(
+    (child) =>
+      child.kind === 'element' &&
+      child.name.namespaceURI === NS.dml &&
+      (child.name.localName === 'tabLst' ||
+        child.name.localName === 'defRPr' ||
+        child.name.localName === 'extLst'),
+  );
+  pPr.children.splice(
+    trailingIndex < 0 ? pPr.children.length : trailingIndex,
+    0,
+    ...bulletChildren,
+  );
 };
 
 /**

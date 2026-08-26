@@ -11,6 +11,7 @@ import {
   findShapeByText,
   getParagraphBullet,
   getParagraphBulletPropertiesEffective,
+  getParagraphBulletStyle,
   getSlidePartName,
   getSlides,
   inches,
@@ -105,6 +106,71 @@ describe('fn API: getParagraphBullet', () => {
     );
     expect(getParagraphBullet(tb, 0)).toBe('bullet');
     expect(getParagraphBulletPropertiesEffective(pres, tb, 0).font).toBe('Arial');
+  });
+
+  it('writes editable marker color plus relative or fixed size in schema order', async () => {
+    const pres = createPresentation();
+    const slide = addBlankSlide(pres);
+    const tb = addSlideTextBox(slide, {
+      x: inches(1),
+      y: inches(1),
+      w: inches(4),
+      h: inches(2),
+      text: 'Relative\nFixed',
+    });
+    setParagraphBullet(tb, 0, { char: '▪', color: '#F26B5B', sizePct: 0.8 });
+    setParagraphBullet(tb, 1, { char: '▪', color: '#3659E380', sizePts: 12 });
+
+    expect(getParagraphBulletStyle(pres, tb, 0)).toEqual({
+      color: '#F26B5B',
+      sizePct: 0.8,
+      sizePts: null,
+      font: null,
+    });
+    expect(getParagraphBulletStyle(pres, tb, 1)).toEqual({
+      color: '#3659E380',
+      sizePct: null,
+      sizePts: 12,
+      font: null,
+    });
+
+    const pkg = _internalPackageOf(pres);
+    const slidePartName = getSlidePartName(slide) as Parameters<typeof pkg.getPart>[0];
+    const xml = new TextDecoder().decode(pkg.getPart(slidePartName)!.data);
+    expect(xml).toContain(
+      '<a:buClr><a:srgbClr val="F26B5B"/></a:buClr><a:buSzPct val="80000"/><a:buChar char="▪"/>',
+    );
+    expect(xml).toContain(
+      '<a:buClr><a:srgbClr val="3659E3"><a:alpha val="50196"/></a:srgbClr></a:buClr><a:buSzPts val="1200"/><a:buChar char="▪"/>',
+    );
+
+    const rebuilt = await loadPresentation(await savePresentation(pres));
+    const rebuiltText = findShapeByText(getSlides(rebuilt)[0]!, 'Relative')!;
+    expect(getParagraphBulletStyle(rebuilt, rebuiltText, 0).sizePct).toBe(0.8);
+    expect(getParagraphBulletStyle(rebuilt, rebuiltText, 1).sizePts).toBe(12);
+  });
+
+  it('rejects invalid marker sizes atomically', () => {
+    const pres = createPresentation();
+    const slide = addBlankSlide(pres);
+    const tb = addSlideTextBox(slide, {
+      x: inches(1),
+      y: inches(1),
+      w: inches(4),
+      h: inches(2),
+      text: 'Stable',
+    });
+    setParagraphBullet(tb, 0, { char: '•', color: '#F26B5B', sizePct: 0.8 });
+
+    expect(() => setParagraphBullet(tb, 0, { char: '▪', sizePct: 0.2 })).toThrow(/0\.25 to 4/u);
+    expect(() => setParagraphBullet(tb, 0, { char: '▪', sizePts: 4001 })).toThrow(
+      /bullet sizePts/u,
+    );
+    expect(() => setParagraphBullet(tb, 0, { char: '▪', sizePct: 1, sizePts: 12 })).toThrow(
+      /mutually exclusive/u,
+    );
+    expect(getParagraphBullet(tb, 0)).toBe('bullet');
+    expect(getParagraphBulletStyle(pres, tb, 0)).toMatchObject({ color: '#F26B5B', sizePct: 0.8 });
   });
 
   it('resolves marker overrides independently from a direct bullet identity', async () => {
