@@ -31,6 +31,7 @@ import {
   NS,
   type XmlElement,
   attr,
+  elem,
   firstChildElement,
   getAttrValue,
   parseXml,
@@ -51,6 +52,12 @@ import {
 import { PRES_PART_NAME, commitAndRefresh, decode } from './_helpers.ts';
 import { getSlides } from './slide-query.ts';
 import { findCNvPr } from './embedded.ts';
+
+const DECORATIVE_NAMESPACE = 'http://schemas.microsoft.com/office/drawing/2017/decorative';
+const DECORATIVE_EXTENSION_URI = '{C183D7F6-B498-43B3-948B-1728B52AA6E4}';
+const NAME_A_EXT_LST = qname('a', 'extLst', NS.dml);
+const NAME_A_EXT = qname('a', 'ext', NS.dml);
+const NAME_ADEC_DECORATIVE = qname('adec', 'decorative', DECORATIVE_NAMESPACE);
 
 // ---------------------------------------------------------------------------
 // SlideShape-level reads.
@@ -329,6 +336,71 @@ export const setShapeDescription = (shape: SlideShapeData, description: string |
   );
   if (description !== null && description !== '') {
     cNvPr.attrs.push(attr(qname('', 'descr', ''), description));
+  }
+  commitAndRefresh(shape);
+};
+
+/** Reads the explicit Office decorative accessibility flag, including false. */
+export const getShapeDecorative = (shape: SlideShapeData): boolean | null => {
+  const cNvPr = findCNvPr(shape);
+  if (cNvPr === null) return null;
+  const extLst = firstChildElement(cNvPr, NAME_A_EXT_LST);
+  if (extLst === null) return null;
+  for (const child of extLst.children) {
+    if (
+      child.kind !== 'element' ||
+      child.name.namespaceURI !== NS.dml ||
+      child.name.localName !== 'ext' ||
+      getAttrValue(child, qname('', 'uri', '')) !== DECORATIVE_EXTENSION_URI
+    ) {
+      continue;
+    }
+    const decorative = firstChildElement(child, NAME_ADEC_DECORATIVE);
+    if (decorative === null) return null;
+    const value = getAttrValue(decorative, qname('', 'val', ''));
+    if (value === '1' || value === 'true') return true;
+    if (value === '0' || value === 'false') return false;
+    return null;
+  }
+  return null;
+};
+
+/** Sets or clears the Office decorative accessibility extension on `cNvPr`. */
+export const setShapeDecorative = (shape: SlideShapeData, decorative: boolean | null): void => {
+  const cNvPr = findCNvPr(shape);
+  if (cNvPr === null) {
+    throw new Error(`setShapeDecorative: ${shape[SHAPE_SNAPSHOT].kind} shape has no cNvPr`);
+  }
+  let extLst = firstChildElement(cNvPr, NAME_A_EXT_LST);
+  if (extLst !== null) {
+    extLst.children = extLst.children.filter(
+      (child) =>
+        !(
+          child.kind === 'element' &&
+          child.name.namespaceURI === NS.dml &&
+          child.name.localName === 'ext' &&
+          getAttrValue(child, qname('', 'uri', '')) === DECORATIVE_EXTENSION_URI
+        ),
+    );
+  }
+  if (decorative !== null) {
+    if (extLst === null) {
+      extLst = elem(NAME_A_EXT_LST);
+      cNvPr.children.push(extLst);
+    }
+    extLst.children.push(
+      elem(NAME_A_EXT, {
+        attrs: [attr(qname('', 'uri', ''), DECORATIVE_EXTENSION_URI)],
+        children: [
+          elem(NAME_ADEC_DECORATIVE, {
+            prefixDecls: new Map([['adec', DECORATIVE_NAMESPACE]]),
+            attrs: [attr(qname('', 'val', ''), decorative ? '1' : '0')],
+          }),
+        ],
+      }),
+    );
+  } else if (extLst !== null && extLst.children.length === 0) {
+    cNvPr.children = cNvPr.children.filter((child) => child !== extLst);
   }
   commitAndRefresh(shape);
 };

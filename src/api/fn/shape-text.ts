@@ -17,6 +17,7 @@ import {
 } from '../../internal/drawingml/index.ts';
 import {
   angle60000,
+  emuCoordinate,
   emuCoordinate32,
   emuPositiveCoordinate32,
   textColumnCount,
@@ -126,6 +127,8 @@ const textAnchorFromToken = (token: string | null): TextAnchor | null =>
 
 const NAME_A_BODY_PR = qname('a', 'bodyPr', NS.dml);
 const NAME_A_PRST_TX_WARP = qname('a', 'prstTxWarp', NS.dml);
+const NAME_A_FLAT_TX = qname('a', 'flatTx', NS.dml);
+const NAME_A_SP3D = qname('a', 'sp3d', NS.dml);
 const NAME_A_AV_LST = qname('a', 'avLst', NS.dml);
 const NAME_A_GD = qname('a', 'gd', NS.dml);
 
@@ -415,6 +418,73 @@ export const setShapeTextWarp = (shape: SlideShapeData, warp: TextWarp | null): 
         children: [elem(NAME_A_AV_LST, { children: guides })],
       }),
     );
+  }
+  commitAndRefresh(shape);
+};
+
+/**
+ * Reads the explicit flat-text Z coordinate in EMU. A present `<a:flatTx/>`
+ * uses the schema default of zero; absence and the mutually exclusive `sp3d`
+ * branch return `null`.
+ */
+export const getShapeTextFlatTextZ = (shape: SlideShapeData): number | null => {
+  const txBody = firstChildElement(shape[SHAPE_ELEMENT], NAME_TX_BODY);
+  if (txBody === null) return null;
+  const bodyPr = firstChildElement(txBody, NAME_A_BODY_PR);
+  if (bodyPr === null || firstChildElement(bodyPr, NAME_A_SP3D) !== null) return null;
+  const flatText = firstChildElement(bodyPr, NAME_A_FLAT_TX);
+  if (flatText === null) return null;
+  const raw = getAttrValue(flatText, qname('', 'z', ''));
+  if (raw === null) return 0;
+  if (!/^-?\d+$/u.test(raw)) return null;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value)) return null;
+  try {
+    return emuCoordinate(value, 'getShapeTextFlatTextZ: flatTx@z');
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Sets or clears the DrawingML flat-text Z coordinate in EMU. `flatTx` and
+ * `sp3d` are alternatives in `EG_Text3D`, so an existing shape-3D branch is
+ * rejected rather than discarded implicitly.
+ */
+export const setShapeTextFlatTextZ = (shape: SlideShapeData, zEmu: number | null): void => {
+  let normalized: number | null = null;
+  if (zEmu !== null) {
+    if (!Number.isSafeInteger(zEmu)) {
+      throw new RangeError('setShapeTextFlatTextZ: zEmu must be a safe integer.');
+    }
+    normalized = emuCoordinate(zEmu, 'setShapeTextFlatTextZ: zEmu (ST_Coordinate)');
+  }
+  const bodyPr = requireBodyPr(shape);
+  if (normalized !== null && firstChildElement(bodyPr, NAME_A_SP3D) !== null) {
+    throw new Error(
+      'setShapeTextFlatTextZ cannot add flatTx while bodyPr contains the mutually exclusive sp3d branch.',
+    );
+  }
+  bodyPr.children = bodyPr.children.filter(
+    (child) =>
+      !(
+        child.kind === 'element' &&
+        child.name.namespaceURI === NS.dml &&
+        child.name.localName === 'flatTx'
+      ),
+  );
+  if (normalized !== null) {
+    const flatText = elem(NAME_A_FLAT_TX, {
+      attrs: [attr(qname('', 'z', ''), String(normalized))],
+    });
+    const extensionIndex = bodyPr.children.findIndex(
+      (child) =>
+        child.kind === 'element' &&
+        child.name.namespaceURI === NS.dml &&
+        child.name.localName === 'extLst',
+    );
+    if (extensionIndex < 0) bodyPr.children.push(flatText);
+    else bodyPr.children.splice(extensionIndex, 0, flatText);
   }
   commitAndRefresh(shape);
 };

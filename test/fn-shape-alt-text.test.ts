@@ -9,6 +9,8 @@ import {
   addSlideTextBox,
   getShapeAltTitle,
   getShapeDescription,
+  getShapeDecorative,
+  getShapeXmlString,
   getSlideShapes,
   getSlides,
   inches,
@@ -16,6 +18,7 @@ import {
   savePresentation,
   setShapeAltTitle,
   setShapeDescription,
+  setShapeDecorative,
 } from '../src/api/index.ts';
 
 const fixture = (name: string): string =>
@@ -74,5 +77,31 @@ describe('fn API: alt-text accessors', () => {
     setShapeAltTitle(s, 'set');
     setShapeAltTitle(s, null);
     expect(getShapeAltTitle(s)).toBeNull();
+  });
+
+  it('round-trips the Office decorative accessibility extension', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const shape = addSlideTextBox(slide, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(2),
+      h: inches(1),
+      text: 'Decorative flourish',
+    });
+
+    expect(getShapeDecorative(shape)).toBeNull();
+    setShapeDecorative(shape, true);
+    expect(getShapeDecorative(shape)).toBe(true);
+    expect(getShapeXmlString(shape)).toContain(
+      '<a:ext uri="{C183D7F6-B498-43B3-948B-1728B52AA6E4}"><adec:decorative xmlns:adec="http://schemas.microsoft.com/office/drawing/2017/decorative" val="1"/></a:ext>',
+    );
+    const reloaded = await loadPresentation(await savePresentation(pres));
+    const reloadedShape = getSlideShapes(getSlides(reloaded)[0]!).at(-1)!;
+    expect(getShapeDecorative(reloadedShape)).toBe(true);
+    setShapeDecorative(reloadedShape, false);
+    expect(getShapeDecorative(reloadedShape)).toBe(false);
+    setShapeDecorative(reloadedShape, null);
+    expect(getShapeDecorative(reloadedShape)).toBeNull();
   });
 });

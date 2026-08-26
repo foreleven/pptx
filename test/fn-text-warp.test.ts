@@ -10,6 +10,7 @@ import {
   addSlideTextBox,
   createPresentation,
   getShapeTextFromWordArt,
+  getShapeTextFlatTextZ,
   getShapeTextWarp,
   getShapeTextWarpRaw,
   getSlideShapes,
@@ -18,6 +19,7 @@ import {
   loadPresentation,
   savePresentation,
   setShapeTextFromWordArt,
+  setShapeTextFlatTextZ,
   setShapeTextWarp,
 } from '../src/api/index.ts';
 
@@ -66,6 +68,59 @@ const readEcmaAdjustmentRanges = async (): Promise<
 };
 
 describe('fn API: WordArt preset text warp', () => {
+  it('round-trips flat text Z while preserving absence and explicit zero', async () => {
+    const presentation = createPresentation();
+    const slide = addBlankSlide(presentation);
+    const shape = addSlideTextBox(slide, {
+      x: inches(1),
+      y: inches(1),
+      w: inches(4),
+      h: inches(1),
+      text: 'Flat text',
+    });
+
+    expect(getShapeTextFlatTextZ(shape)).toBeNull();
+    setShapeTextFlatTextZ(shape, 0);
+    expect(getShapeTextFlatTextZ(shape)).toBe(0);
+    setShapeTextFlatTextZ(shape, -12_700);
+    expect(getShapeTextFlatTextZ(shape)).toBe(-12_700);
+
+    const reloaded = await loadPresentation(await savePresentation(presentation));
+    const reloadedShape = getSlideShapes(getSlides(reloaded)[0]!)[0]!;
+    expect(getShapeTextFlatTextZ(reloadedShape)).toBe(-12_700);
+
+    setShapeTextFlatTextZ(reloadedShape, null);
+    expect(getShapeTextFlatTextZ(reloadedShape)).toBeNull();
+  });
+
+  it('validates flat text Z and rejects the mutually exclusive sp3d branch before mutation', async () => {
+    const presentation = createPresentation();
+    const slide = addBlankSlide(presentation);
+    const shape = addSlideTextBox(slide, {
+      x: inches(1),
+      y: inches(1),
+      w: inches(4),
+      h: inches(1),
+      text: 'Flat text bounds',
+    });
+    setShapeTextFlatTextZ(shape, 12_700);
+    for (const value of [1.5, Number.NaN, 27_273_042_316_901, -27_273_042_329_601]) {
+      expect(() => setShapeTextFlatTextZ(shape, value)).toThrow(/safe integer|ST_Coordinate/u);
+      expect(getShapeTextFlatTextZ(shape)).toBe(12_700);
+    }
+
+    const entries = unzipSync(await savePresentation(presentation));
+    const slidePart = 'ppt/slides/slide1.xml';
+    entries[slidePart] = strToU8(
+      strFromU8(entries[slidePart]!).replace('<a:flatTx z="12700"/>', '<a:sp3d/>'),
+    );
+    const imported = await loadPresentation(zipSync(entries));
+    const importedShape = getSlideShapes(getSlides(imported)[0]!)[0]!;
+    expect(getShapeTextFlatTextZ(importedShape)).toBeNull();
+    expect(() => setShapeTextFlatTextZ(importedShape, 0)).toThrow(/sp3d/u);
+    expect(getShapeTextFlatTextZ(importedShape)).toBeNull();
+  });
+
   it('round-trips every preset plus deterministic constant-value guides', async () => {
     const presentation = createPresentation();
     const slide = addBlankSlide(presentation);
