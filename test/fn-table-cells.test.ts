@@ -109,6 +109,10 @@ describe('fn API: table cell access', () => {
         rtl: true,
         beforePts: 4,
         indent: { leftEmu: 12700, firstLineEmu: -6350 },
+        endParagraph: {
+          format: { font: 'Aptos', size: 18, color: '#F26B5B', bold: true },
+          state: { dirty: false },
+        },
         runs: [
           { text: 'Revenue ', format: { bold: true, font: 'Aptos' } },
           {
@@ -128,11 +132,17 @@ describe('fn API: table cell access', () => {
         { kind: 'r', text: 'Revenue ', format: { bold: true, font: 'Aptos' } },
         { kind: 'r', text: '42', format: { color: '#3659E3', fontEastAsian: 'PingFang SC' } },
       ],
+      endParagraph: {
+        format: { font: 'Aptos', size: 18, color: '#F26B5B', bold: true },
+        state: { dirty: false },
+      },
     });
     const xml = await slideXml(await savePresentation(pres), 0);
     expect(xml).toMatch(/<a:pPr[^>]*algn="ctr"[^>]*marL="12700"[^>]*indent="-6350"/);
     expect(xml).toContain('<a:spcBef><a:spcPts val="400"/></a:spcBef>');
     expect(xml).toMatch(/<a:hlinkClick[^>]*r:id="rId\d+"[^>]*tooltip="Details"/);
+    expect(xml).toMatch(/<a:endParaRPr[^>]*sz="1800"[^>]*b="1"[^>]*dirty="0"/);
+    expect(xml).toContain('<a:srgbClr val="F26B5B"/>');
     expect(xml).not.toContain('xml:space');
 
     const reloaded = await loadPresentation(await savePresentation(pres));
@@ -141,6 +151,10 @@ describe('fn API: table cell access', () => {
       { kind: 'r', text: 'Revenue ' },
       { kind: 'r', text: '42' },
     ]);
+    expect(getTableCellParagraphs(getTableCell(reloadedTable, 0, 0))[0]?.endParagraph).toEqual({
+      format: { font: 'Aptos', size: 18, color: '#F26B5B', bold: true },
+      state: { dirty: false },
+    });
   });
 
   it('clearTableCellFill removes a previously-set fill', async () => {

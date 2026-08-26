@@ -6,6 +6,7 @@ import {
   applyBulletToParagraph,
   applyFormatToAllRuns,
   applyRunFormat,
+  applyRunState,
   buildColorElement,
   clearFill as clearFillImpl,
   setSolidFill,
@@ -53,7 +54,13 @@ import {
   normalizeGuid,
 } from '../../internal/bounds.ts';
 import { commitSlideData, refreshSlideData } from './_helpers.ts';
-import { type ShapeParagraphElement, readParagraphElements } from './shape-runs.ts';
+import { parseRPrLikeElement, parseTextRunState } from './shape-color.ts';
+import {
+  type ShapeEndParagraphProperties,
+  type ShapeEndParagraphPropertiesInput,
+  type ShapeParagraphElement,
+  readParagraphElements,
+} from './shape-runs.ts';
 import { ALIGN_TOKEN_MAP } from './shape-paragraph.ts';
 import { getPresentationTheme } from './package.ts';
 import { resolveDrawingColor } from './shapes.ts';
@@ -79,6 +86,7 @@ const NAME_A_PPR_TBL = qname('a', 'pPr', NS.dml);
 const NAME_A_R_TBL = qname('a', 'r', NS.dml);
 const NAME_A_RPR_TBL = qname('a', 'rPr', NS.dml);
 const NAME_A_T_TBL = qname('a', 't', NS.dml);
+const NAME_A_END_PARA_RPR_TBL = qname('a', 'endParaRPr', NS.dml);
 
 const findTblElement = (shape: SlideShapeData): XmlElement | null => {
   if (shape[SHAPE_SNAPSHOT].kind !== 'graphicFrame') return null;
@@ -504,6 +512,8 @@ export interface TableCellRunInput {
 /** Native paragraph properties supported by the table-cell rich-text writer. */
 export interface TableCellParagraphInput {
   readonly runs: ReadonlyArray<TableCellRunInput>;
+  /** Direct terminal-character properties emitted after the paragraph's visible runs. */
+  readonly endParagraph?: ShapeEndParagraphPropertiesInput;
   readonly alignment?: ParagraphAlignment;
   readonly rtl?: boolean;
   readonly bullet?: BulletStyle;
@@ -678,7 +688,16 @@ export const setTableCellParagraphs = (
         ],
       });
     });
-    const paragraph = elem(NAME_A_P_TBL, { children: [...(pPr ? [pPr] : []), ...runs] });
+    const endParagraph = input.endParagraph === undefined ? null : elem(NAME_A_END_PARA_RPR_TBL);
+    if (endParagraph && input.endParagraph?.format) {
+      applyRunFormat(endParagraph, input.endParagraph.format);
+    }
+    if (endParagraph && input.endParagraph?.state) {
+      applyRunState(endParagraph, input.endParagraph.state);
+    }
+    const paragraph = elem(NAME_A_P_TBL, {
+      children: [...(pPr ? [pPr] : []), ...runs, ...(endParagraph ? [endParagraph] : [])],
+    });
     if (input.bullet !== undefined) applyBulletToParagraph(paragraph, input.bullet);
     return paragraph;
   });
@@ -1249,6 +1268,8 @@ export interface TableCellParagraph {
   readonly rtl: boolean | null;
   /** Runs / fields / breaks in document order, with their literal `<a:rPr>` format. */
   readonly elements: ReadonlyArray<ShapeParagraphElement>;
+  /** Direct `<a:endParaRPr>` terminal-character properties, or `null` when absent. */
+  readonly endParagraph: ShapeEndParagraphProperties | null;
 }
 
 /**
@@ -1285,7 +1306,19 @@ export const getTableCellParagraphs = (cell: TableCellData): ReadonlyArray<Table
         : rtlToken === '0' || rtlToken === 'false'
           ? false
           : null;
-    out.push({ align, rtl, elements: readParagraphElements(p) });
+    const endProperties = firstChildElement(p, NAME_A_END_PARA_RPR_TBL);
+    out.push({
+      align,
+      rtl,
+      elements: readParagraphElements(p),
+      endParagraph:
+        endProperties === null
+          ? null
+          : {
+              format: parseRPrLikeElement(endProperties) as TextFormat,
+              state: parseTextRunState(endProperties),
+            },
+    });
   }
   return out;
 };
