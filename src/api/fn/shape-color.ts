@@ -653,6 +653,143 @@ export const parseRPrLikeElement = (
     else if (u === 'sng') out.underline = true;
     else out.underline = u;
   }
+  const underlineLines = rPr.children.filter(
+    (child): child is XmlElement =>
+      child.kind === 'element' &&
+      child.name.namespaceURI === NS.dml &&
+      (child.name.localName === 'uLnTx' || child.name.localName === 'uLn'),
+  );
+  if (underlineLines.length > 0) {
+    const line = underlineLines[0]!;
+    const unsupported = [
+      ...(underlineLines.length === 1 ? [] : ['multiple underline line choices']),
+      ...unexpectedAttributes(line, new Set(), 'underline line'),
+      ...(line.children.some((child) => child.kind === 'element')
+        ? ['underline line children']
+        : []),
+    ];
+    out.underlineLine =
+      line.name.localName === 'uLnTx'
+        ? {
+            kind: 'followText',
+            ...(unsupported.length === 0 ? {} : { unsupported: unsupported.join(', ') }),
+          }
+        : { kind: 'unsupported', reason: ['explicit underline line', ...unsupported].join(', ') };
+  }
+  const underlineFills = rPr.children.filter(
+    (child): child is XmlElement =>
+      child.kind === 'element' &&
+      child.name.namespaceURI === NS.dml &&
+      (child.name.localName === 'uFillTx' || child.name.localName === 'uFill'),
+  );
+  if (underlineFills.length > 0) {
+    const fillChoice = underlineFills[0]!;
+    const unsupported = [
+      ...(underlineFills.length === 1 ? [] : ['multiple underline fill choices']),
+      ...unexpectedAttributes(fillChoice, new Set(), 'underline fill'),
+    ];
+    if (fillChoice.name.localName === 'uFillTx') {
+      if (fillChoice.children.some((child) => child.kind === 'element')) {
+        unsupported.push('underline fill-follow-text children');
+      }
+      out.underlineFill = {
+        kind: 'followText',
+        ...(unsupported.length === 0 ? {} : { unsupported: unsupported.join(', ') }),
+      };
+    } else {
+      const fills = fillChoice.children.filter(
+        (child): child is XmlElement => child.kind === 'element',
+      );
+      const fill = fills[0];
+      if (fills.length !== 1 || fill?.name.namespaceURI !== NS.dml) {
+        out.underlineFill = {
+          kind: 'unsupported',
+          reason: 'underline fill without one DrawingML fill choice',
+        };
+      } else if (fill.name.localName === 'noFill') {
+        unsupported.push(...unexpectedAttributes(fill, new Set(), 'underline noFill'));
+        if (fill.children.some((child) => child.kind === 'element')) {
+          unsupported.push('underline noFill children');
+        }
+        out.underlineFill = {
+          kind: 'none',
+          ...(unsupported.length === 0 ? {} : { unsupported: unsupported.join(', ') }),
+        };
+      } else if (fill.name.localName === 'solidFill') {
+        unsupported.push(...unexpectedAttributes(fill, new Set(), 'underline solidFill'));
+        const colors = fill.children.filter(
+          (child): child is XmlElement => child.kind === 'element',
+        );
+        const color = colors[0];
+        let colorValue: string | null = null;
+        if (
+          colors.length !== 1 ||
+          color?.name.namespaceURI !== NS.dml ||
+          color.name.localName !== 'srgbClr'
+        ) {
+          unsupported.push(`underline fill color ${color?.name.localName ?? 'missing'}`);
+        } else {
+          unsupported.push(
+            ...unexpectedAttributes(color, new Set(['val']), 'underline fill color'),
+          );
+          const rawColor = getAttrValue(color, qname('', 'val', '')) ?? '';
+          if (!/^[\dA-Fa-f]{6}$/u.test(rawColor)) {
+            unsupported.push(`underline fill color ${rawColor || 'missing'}`);
+          } else {
+            const transforms = color.children.filter(
+              (child): child is XmlElement => child.kind === 'element',
+            );
+            let alphaHex = '';
+            if (
+              transforms.length > 1 ||
+              (transforms[0] &&
+                (transforms[0].name.namespaceURI !== NS.dml ||
+                  transforms[0].name.localName !== 'alpha'))
+            ) {
+              unsupported.push('underline fill color transforms');
+            } else if (transforms[0]) {
+              const alpha = transforms[0];
+              unsupported.push(
+                ...unexpectedAttributes(alpha, new Set(['val']), 'underline fill alpha'),
+              );
+              const rawAlpha = getAttrValue(alpha, qname('', 'val', '')) ?? '';
+              const alphaValue = Number(rawAlpha);
+              const alphaByte = Math.round((alphaValue / 100_000) * 255);
+              if (
+                !/^\d+$/u.test(rawAlpha) ||
+                alphaValue < 0 ||
+                alphaValue > 100_000 ||
+                Math.round((alphaByte / 255) * 100_000) !== alphaValue
+              ) {
+                unsupported.push(
+                  `underline fill alpha ${rawAlpha || 'missing'} exceeds CSS hex-byte precision`,
+                );
+              } else {
+                alphaHex = alphaByte.toString(16).padStart(2, '0').toUpperCase();
+              }
+            }
+            colorValue = `#${rawColor.toUpperCase()}${alphaHex}`;
+          }
+        }
+        out.underlineFill =
+          colorValue === null
+            ? {
+                kind: 'unsupported',
+                reason: unsupported.join(', ') || 'invalid underline solid fill',
+              }
+            : {
+                kind: 'solid',
+                color: colorValue,
+                ...(unsupported.length === 0 ? {} : { unsupported: unsupported.join(', ') }),
+              };
+      } else {
+        out.underlineFill = {
+          kind: 'unsupported',
+          reason: `underline fill ${fill.name.localName}`,
+        };
+      }
+    }
+  }
   const strike = getAttrValue(rPr, qname('', 'strike', ''));
   if (strike !== null) {
     if (strike === 'noStrike') out.strike = false;

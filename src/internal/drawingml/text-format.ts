@@ -62,6 +62,31 @@ const ATTR_DIR = qname('', 'dir', '');
 const ATTR_ALGN = qname('', 'algn', '');
 const ATTR_ROT_WITH_SHAPE = qname('', 'rotWithShape', '');
 const NAME_HIGHLIGHT = qname('a', 'highlight', NS.dml);
+const NAME_U_LN_TX = qname('a', 'uLnTx', NS.dml);
+const NAME_U_FILL_TX = qname('a', 'uFillTx', NS.dml);
+const NAME_U_FILL = qname('a', 'uFill', NS.dml);
+const NAME_NO_FILL = qname('a', 'noFill', NS.dml);
+
+const TEXT_UNDERLINE_TYPES = new Set([
+  'none',
+  'words',
+  'sng',
+  'dbl',
+  'heavy',
+  'dotted',
+  'dottedHeavy',
+  'dash',
+  'dashHeavy',
+  'dashLong',
+  'dashLongHeavy',
+  'dotDash',
+  'dotDashHeavy',
+  'dotDotDash',
+  'dotDotDashHeavy',
+  'wavy',
+  'wavyHeavy',
+  'wavyDbl',
+]);
 
 // CT_TextCharacterProperties (a:rPr) is an xsd:sequence: children must appear
 // in this order or the run fails dml/pml schema validation. Setters strip the
@@ -126,6 +151,10 @@ export interface TextFormat {
    * `'dash'`, ...).
    */
   underline?: boolean | string;
+  /** Optional underline line choice; `followText` emits `<a:uLnTx/>`. */
+  underlineLine?: TextUnderlineLine;
+  /** Optional underline paint choice (`uFillTx` or explicit `uFill`). */
+  underlineFill?: TextUnderlineFill;
   /**
    * Strikethrough style. `true` is shorthand for `'sngStrike'` (single
    * line). Pass the exact `ST_TextStrikeType` token (`'sngStrike'`,
@@ -176,6 +205,16 @@ export type TextOutline =
       readonly unsupported?: string;
     }
   | { readonly kind: 'none'; readonly unsupported?: string }
+  | { readonly kind: 'unsupported'; readonly reason: string };
+
+export type TextUnderlineLine =
+  | { readonly kind: 'followText'; readonly unsupported?: string }
+  | { readonly kind: 'unsupported'; readonly reason: string };
+
+export type TextUnderlineFill =
+  | { readonly kind: 'followText'; readonly unsupported?: string }
+  | { readonly kind: 'none'; readonly unsupported?: string }
+  | { readonly kind: 'solid'; readonly color: string; readonly unsupported?: string }
   | { readonly kind: 'unsupported'; readonly reason: string };
 
 /** Common editable outer-shadow subset plus an importer-only diagnostic carrier. */
@@ -295,6 +334,46 @@ const setHighlight = (rPr: XmlElement, value: string | null): void => {
   );
 };
 
+const setUnderlineLine = (rPr: XmlElement, value: TextUnderlineLine): void => {
+  if (value.kind === 'unsupported') {
+    throw new TypeError('TextFormat.underlineLine unsupported diagnostic state is read-only.');
+  }
+  rPr.children = rPr.children.filter(
+    (child) =>
+      !(
+        child.kind === 'element' &&
+        child.name.namespaceURI === NS.dml &&
+        ['uLnTx', 'uLn'].includes(child.name.localName)
+      ),
+  );
+  insertChildByRank(rPr, elem(NAME_U_LN_TX), rprChildRank);
+};
+
+const setUnderlineFill = (rPr: XmlElement, value: TextUnderlineFill): void => {
+  if (value.kind === 'unsupported') {
+    throw new TypeError('TextFormat.underlineFill unsupported diagnostic state is read-only.');
+  }
+  const fill =
+    value.kind === 'followText'
+      ? elem(NAME_U_FILL_TX)
+      : elem(NAME_U_FILL, {
+          children: [
+            value.kind === 'none'
+              ? elem(NAME_NO_FILL)
+              : elem(NAME_SOLID_FILL, { children: [buildColorElement(value.color)] }),
+          ],
+        });
+  rPr.children = rPr.children.filter(
+    (child) =>
+      !(
+        child.kind === 'element' &&
+        child.name.namespaceURI === NS.dml &&
+        ['uFillTx', 'uFill'].includes(child.name.localName)
+      ),
+  );
+  insertChildByRank(rPr, fill, rprChildRank);
+};
+
 const finiteShadowPoint = (value: number, label: string, allowNegative: boolean): number => {
   if (!Number.isFinite(value) || (!allowNegative && value < 0)) {
     throw new RangeError(
@@ -388,7 +467,16 @@ export const applyRunFormat = (rPr: XmlElement, format: TextFormat): void => {
   }
   if (format.underline !== undefined) {
     const value =
-      format.underline === false ? 'none' : format.underline === true ? 'sng' : format.underline;
+      format.underline === false || format.underline === 'noUnderline'
+        ? 'none'
+        : format.underline === true
+          ? 'sng'
+          : format.underline;
+    if (!TEXT_UNDERLINE_TYPES.has(value)) {
+      throw new TypeError(
+        `TextFormat.underline must be a valid ST_TextUnderlineType token; got ${JSON.stringify(value)}.`,
+      );
+    }
     attrs = setOrRemoveAttr(attrs, ATTR_U, value);
   }
   if (format.strike !== undefined) {
@@ -430,6 +518,8 @@ export const applyRunFormat = (rPr: XmlElement, format: TextFormat): void => {
   if (format.color !== undefined) setSolidFill(rPr, format.color);
   if (format.gradient !== undefined) setTextGradient(rPr, format.gradient);
   if (format.highlight !== undefined) setHighlight(rPr, format.highlight);
+  if (format.underlineLine !== undefined) setUnderlineLine(rPr, format.underlineLine);
+  if (format.underlineFill !== undefined) setUnderlineFill(rPr, format.underlineFill);
   if (format.textShadow !== undefined) setTextShadow(rPr, format.textShadow);
   if (format.outline !== undefined) {
     if (format.outline.kind === 'unsupported') {

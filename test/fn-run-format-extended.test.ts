@@ -26,6 +26,99 @@ const fixture = (name: string): string =>
   fileURLToPath(new URL(`./fixtures/minimal/${name}`, import.meta.url));
 
 describe('fn API: extended run-format properties', () => {
+  it('accepts every ST_TextUnderlineType token and rejects unknown values', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const tb = addSlideTextBox(slide, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(4),
+      h: inches(2),
+      text: 'underline',
+    });
+    const tokens = [
+      'none',
+      'words',
+      'sng',
+      'dbl',
+      'heavy',
+      'dotted',
+      'dottedHeavy',
+      'dash',
+      'dashHeavy',
+      'dashLong',
+      'dashLongHeavy',
+      'dotDash',
+      'dotDashHeavy',
+      'dotDotDash',
+      'dotDotDashHeavy',
+      'wavy',
+      'wavyHeavy',
+      'wavyDbl',
+    ] as const;
+    for (const token of tokens) {
+      setShapeRunFormat(tb, 0, 0, { underline: token });
+      expect(getShapeRunFormat(tb, 0, 0)?.underline).toBe(
+        token === 'none' ? false : token === 'sng' ? true : token,
+      );
+    }
+    expect(() => setShapeRunFormat(tb, 0, 0, { underline: 'single' })).toThrow(
+      /valid ST_TextUnderlineType token/,
+    );
+  });
+
+  it('round-trips editable underline line and fill choices', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const tb = addSlideTextBox(slide, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(4),
+      h: inches(2),
+      text: 'follow solid none',
+    });
+    setShapeParagraphElements(tb, 0, [
+      {
+        kind: 'r',
+        text: 'follow ',
+        format: {
+          underline: 'words',
+          underlineLine: { kind: 'followText' },
+          underlineFill: { kind: 'followText' },
+        },
+      },
+      {
+        kind: 'r',
+        text: 'solid ',
+        format: {
+          underline: 'dashHeavy',
+          underlineFill: { kind: 'solid', color: '#F26B5B80' },
+        },
+      },
+      {
+        kind: 'r',
+        text: 'none',
+        format: { underline: 'wavyDbl', underlineFill: { kind: 'none' } },
+      },
+    ]);
+
+    const reloaded = await loadPresentation(await savePresentation(pres));
+    const reloadedShape = findShapeByText(getSlides(reloaded)[0]!, 'follow solid none')!;
+    expect(getShapeRunFormat(reloadedShape, 0, 0)).toMatchObject({
+      underline: 'words',
+      underlineLine: { kind: 'followText' },
+      underlineFill: { kind: 'followText' },
+    });
+    expect(getShapeRunFormat(reloadedShape, 0, 1)).toMatchObject({
+      underline: 'dashHeavy',
+      underlineFill: { kind: 'solid', color: '#F26B5B80' },
+    });
+    expect(getShapeRunFormat(reloadedShape, 0, 2)).toMatchObject({
+      underline: 'wavyDbl',
+      underlineFill: { kind: 'none' },
+    });
+  });
+
   it('round-trips strike, spc, kern, baseline, cap, highlight', async () => {
     const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
     const slide = getSlides(pres)[0]!;
