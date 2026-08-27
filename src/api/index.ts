@@ -55,6 +55,7 @@ export type {
 } from './fn.ts';
 export type { TextRunState } from '../internal/drawingml/index.ts';
 export type { IssueSeverity, ValidationIssue } from './fn.ts';
+export type { ShapeDecorativeInspection } from './fn.ts';
 export type { AnimationEffect, AnimationOptions } from './fn.ts';
 export type { ImageCrop, ImageDuotone } from './fn.ts';
 export type { ImageFit } from './fn.ts';
@@ -270,6 +271,7 @@ export {
   getShapeCustomGeometry,
   getShapeDescription,
   getShapeDecorative,
+  inspectShapeDecorative,
   getShapeEffect,
   getShapeEffects,
   getShapeEffectsEffective,

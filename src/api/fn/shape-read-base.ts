@@ -334,35 +334,66 @@ export const setShapeDescription = (shape: SlideShapeData, description: string |
   cNvPr.attrs = cNvPr.attrs.filter(
     (a) => !(a.name.namespaceURI === '' && a.name.localName === 'descr'),
   );
-  if (description !== null && description !== '') {
+  if (description !== null) {
     cNvPr.attrs.push(attr(qname('', 'descr', ''), description));
   }
   commitAndRefresh(shape);
 };
 
+export type ShapeDecorativeInspection =
+  | { kind: 'absent' }
+  | { kind: 'valid'; value: boolean }
+  | {
+      kind: 'invalid';
+      reason:
+        | 'duplicate-extension'
+        | 'missing-element'
+        | 'duplicate-element'
+        | 'missing-value'
+        | 'invalid-value';
+    };
+
+/** Inspect the Office decorative extension without guessing malformed or duplicate metadata. */
+export const inspectShapeDecorative = (shape: SlideShapeData): ShapeDecorativeInspection => {
+  const cNvPr = findCNvPr(shape);
+  if (cNvPr === null) return { kind: 'absent' };
+  const extensions = cNvPr.children
+    .filter(
+      (child): child is XmlElement =>
+        child.kind === 'element' &&
+        child.name.namespaceURI === NAME_A_EXT_LST.namespaceURI &&
+        child.name.localName === NAME_A_EXT_LST.localName,
+    )
+    .flatMap((extLst) =>
+      extLst.children.filter(
+        (child): child is XmlElement =>
+          child.kind === 'element' &&
+          child.name.namespaceURI === NAME_A_EXT.namespaceURI &&
+          child.name.localName === NAME_A_EXT.localName &&
+          getAttrValue(child, qname('', 'uri', '')) === DECORATIVE_EXTENSION_URI,
+      ),
+    );
+  if (extensions.length === 0) return { kind: 'absent' };
+  if (extensions.length > 1) return { kind: 'invalid', reason: 'duplicate-extension' };
+  const decorativeElements = extensions[0]!.children.filter(
+    (child): child is XmlElement =>
+      child.kind === 'element' &&
+      child.name.namespaceURI === NAME_ADEC_DECORATIVE.namespaceURI &&
+      child.name.localName === NAME_ADEC_DECORATIVE.localName,
+  );
+  if (decorativeElements.length === 0) return { kind: 'invalid', reason: 'missing-element' };
+  if (decorativeElements.length > 1) return { kind: 'invalid', reason: 'duplicate-element' };
+  const value = getAttrValue(decorativeElements[0]!, qname('', 'val', ''));
+  if (value === null) return { kind: 'invalid', reason: 'missing-value' };
+  if (value === '1' || value === 'true') return { kind: 'valid', value: true };
+  if (value === '0' || value === 'false') return { kind: 'valid', value: false };
+  return { kind: 'invalid', reason: 'invalid-value' };
+};
+
 /** Reads the explicit Office decorative accessibility flag, including false. */
 export const getShapeDecorative = (shape: SlideShapeData): boolean | null => {
-  const cNvPr = findCNvPr(shape);
-  if (cNvPr === null) return null;
-  const extLst = firstChildElement(cNvPr, NAME_A_EXT_LST);
-  if (extLst === null) return null;
-  for (const child of extLst.children) {
-    if (
-      child.kind !== 'element' ||
-      child.name.namespaceURI !== NS.dml ||
-      child.name.localName !== 'ext' ||
-      getAttrValue(child, qname('', 'uri', '')) !== DECORATIVE_EXTENSION_URI
-    ) {
-      continue;
-    }
-    const decorative = firstChildElement(child, NAME_ADEC_DECORATIVE);
-    if (decorative === null) return null;
-    const value = getAttrValue(decorative, qname('', 'val', ''));
-    if (value === '1' || value === 'true') return true;
-    if (value === '0' || value === 'false') return false;
-    return null;
-  }
-  return null;
+  const inspection = inspectShapeDecorative(shape);
+  return inspection.kind === 'valid' ? inspection.value : null;
 };
 
 /** Sets or clears the Office decorative accessibility extension on `cNvPr`. */
@@ -429,7 +460,7 @@ export const setShapeAltTitle = (shape: SlideShapeData, title: string | null): v
   cNvPr.attrs = cNvPr.attrs.filter(
     (a) => !(a.name.namespaceURI === '' && a.name.localName === 'title'),
   );
-  if (title !== null && title !== '') {
+  if (title !== null) {
     cNvPr.attrs.push(attr(qname('', 'title', ''), title));
   }
   commitAndRefresh(shape);

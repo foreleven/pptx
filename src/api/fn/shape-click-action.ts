@@ -56,7 +56,7 @@ export type ShapeClickAction =
 export const NAME_HLINK_CLICK_FN = qname('a', 'hlinkClick', NS.dml);
 
 // cNvPr lives at different paths depending on shape kind. Returns null
-// for kinds we don't know how to navigate yet (groups, etc.).
+// for kinds whose non-visual wrapper is not represented by this API.
 export const findCNvPr = (shape: SlideShapeData): XmlElement | null => {
   const root = shape[SHAPE_ELEMENT];
   const kind = shape[SHAPE_SNAPSHOT].kind;
@@ -69,7 +69,9 @@ export const findCNvPr = (shape: SlideShapeData): XmlElement | null => {
           ? 'nvCxnSpPr'
           : kind === 'graphicFrame'
             ? 'nvGraphicFramePr'
-            : null;
+            : kind === 'group'
+              ? 'nvGrpSpPr'
+              : null;
   if (wrapperName === null) return null;
   const wrapper = firstChildElement(root, qname('p', wrapperName, NS.pml));
   if (!wrapper) return null;
