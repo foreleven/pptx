@@ -12,6 +12,7 @@ import {
   getTableCell,
   getTableCellPosition,
   getTableCellParagraphs,
+  getTableCellRunUnderlineFillImageBytes,
   getTableCellText,
   getTableCells,
   inches,
@@ -23,7 +24,15 @@ import {
   setTableCellText,
   setTableCellTextFormat,
   setTableCellParagraphs,
+  setTableCellRunUnderlineFillImage,
 } from '../src/api/index.ts';
+
+const TINY_PNG = Uint8Array.from(
+  Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+    'base64',
+  ),
+);
 
 const fixture = (name: string): string =>
   fileURLToPath(new URL(`./fixtures/minimal/${name}`, import.meta.url));
@@ -155,6 +164,27 @@ describe('fn API: table cell access', () => {
       format: { font: 'Aptos', size: 18, color: '#F26B5B', bold: true },
       state: { dirty: false },
     });
+  });
+
+  it('embeds and resolves a table-cell picture underline fill relationship', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const table = addDemoTable(slide);
+    const cell = getTableCell(table, 0, 0);
+    setTableCellParagraphs(cell, [
+      { runs: [{ text: 'Picture underline', format: { underline: true } }] },
+    ]);
+    setTableCellRunUnderlineFillImage(cell, 0, 0, TINY_PNG);
+
+    const reloaded = await loadPresentation(await savePresentation(pres));
+    const reloadedTable = getSlideShapes(getSlides(reloaded)[0]!).find(isTableShape)!;
+    const reloadedCell = getTableCell(reloadedTable, 0, 0);
+    expect(getTableCellParagraphs(reloadedCell)[0]?.elements[0]).toMatchObject({
+      kind: 'r',
+      text: 'Picture underline',
+      format: { underlineFill: { kind: 'picture' } },
+    });
+    expect(getTableCellRunUnderlineFillImageBytes(reloadedCell, 0, 0)).toEqual(TINY_PNG);
   });
 
   it('clearTableCellFill removes a previously-set fill', async () => {

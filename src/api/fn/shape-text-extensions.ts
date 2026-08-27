@@ -23,6 +23,8 @@ const NAME_A_R = qname('a', 'r', NS.dml);
 const NAME_A_BR = qname('a', 'br', NS.dml);
 const NAME_A_FLD = qname('a', 'fld', NS.dml);
 const NAME_A_RPR = qname('a', 'rPr', NS.dml);
+const NAME_A_U_LN = qname('a', 'uLn', NS.dml);
+const NAME_A_LN = qname('a', 'ln', NS.dml);
 
 /** Namespace declaration retained on one known DrawingML text element. */
 export interface ShapeTextExtensionNamespace {
@@ -70,6 +72,16 @@ export type ShapeTextExtensionTarget =
   | { readonly kind: 'paragraphProperties'; readonly paragraphIndex: number }
   | {
       readonly kind: 'runProperties';
+      readonly paragraphIndex: number;
+      readonly elementIndex: number;
+    }
+  | {
+      readonly kind: 'runUnderlineLineProperties';
+      readonly paragraphIndex: number;
+      readonly elementIndex: number;
+    }
+  | {
+      readonly kind: 'runOutlineProperties';
       readonly paragraphIndex: number;
       readonly elementIndex: number;
     }
@@ -234,10 +246,21 @@ export const getShapeTextExtensionPayloads = (
     );
     inlineElementsOf(paragraph).forEach((inline, elementIndex) => {
       if (inline.name.localName === NAME_A_R.localName) {
+        const runProperties = firstChildElement(inline, NAME_A_RPR);
         appendPayload(
           payloads,
           { kind: 'runProperties', paragraphIndex, elementIndex },
-          firstChildElement(inline, NAME_A_RPR),
+          runProperties,
+        );
+        appendPayload(
+          payloads,
+          { kind: 'runUnderlineLineProperties', paragraphIndex, elementIndex },
+          runProperties === null ? null : firstChildElement(runProperties, NAME_A_U_LN),
+        );
+        appendPayload(
+          payloads,
+          { kind: 'runOutlineProperties', paragraphIndex, elementIndex },
+          runProperties === null ? null : firstChildElement(runProperties, NAME_A_LN),
         );
       } else if (inline.name.localName === NAME_A_FLD.localName) {
         appendPayload(payloads, { kind: 'field', paragraphIndex, elementIndex }, inline);
@@ -444,6 +467,13 @@ const resolveTarget = (textBody: XmlElement, target: ShapeTextExtensionTarget): 
   if (!inline)
     throw new RangeError(`text extension elementIndex ${target.elementIndex} is out of range.`);
   if (target.kind === 'runProperties') return ensureFirstChild(inline, NAME_A_RPR);
+  if (target.kind === 'runUnderlineLineProperties' || target.kind === 'runOutlineProperties') {
+    const runProperties = ensureFirstChild(inline, NAME_A_RPR);
+    return ensureFirstChild(
+      runProperties,
+      target.kind === 'runUnderlineLineProperties' ? NAME_A_U_LN : NAME_A_LN,
+    );
+  }
   if (inline.name.localName !== NAME_A_FLD.localName) {
     throw new TypeError(`text extension target ${target.kind} points to ${inline.name.localName}.`);
   }

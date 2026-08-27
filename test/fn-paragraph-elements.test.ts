@@ -488,4 +488,68 @@ describe('fn API: getShapeParagraphElements', () => {
       ]),
     ).toThrow('without a matching namespace declaration');
   });
+
+  it('preserves nested underline and outline extension lists at their exact run targets', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const tb = addSlideTextBox(slide, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(4),
+      h: inches(2),
+      text: 'Decorated',
+    });
+    setShapeParagraphElements(tb, 0, [
+      {
+        kind: 'r',
+        text: 'Decorated',
+        format: {
+          underline: true,
+          underlineLine: { kind: 'solid', color: '#3659E3' },
+          outline: { kind: 'solid', color: '#F26B5B' },
+        },
+      },
+    ]);
+
+    const entries = unzipSync(await savePresentation(pres));
+    const slidePart = 'ppt/slides/slide1.xml';
+    const original = strFromU8(entries[slidePart]!);
+    const changed = original
+      .replace(
+        '</a:uLn>',
+        '<a:extLst><a:ext uri="{00000000-0000-0000-0000-000000000011}"><futureLine:underline xmlns:futureLine="urn:office-kit:text-line"/></a:ext></a:extLst></a:uLn>',
+      )
+      .replace(
+        '</a:ln>',
+        '<a:extLst><a:ext uri="{00000000-0000-0000-0000-000000000012}"><futureLine:outline xmlns:futureLine="urn:office-kit:text-line"/></a:ext></a:extLst></a:ln>',
+      );
+    expect(changed).not.toBe(original);
+    entries[slidePart] = strToU8(changed);
+
+    const imported = await loadPresentation(zipSync(entries));
+    const importedShape = getSlideShapes(getSlides(imported)[0]!).at(-1)!;
+    const payloads = getShapeTextExtensionPayloads(importedShape);
+    expect(payloads.map((payload) => payload.target.kind)).toEqual([
+      'runUnderlineLineProperties',
+      'runOutlineProperties',
+    ]);
+
+    setShapeParagraphElements(importedShape, 0, [
+      {
+        kind: 'r',
+        text: 'Edited',
+        format: {
+          underline: true,
+          underlineLine: { kind: 'solid', color: '#3659E3' },
+          outline: { kind: 'solid', color: '#F26B5B' },
+        },
+      },
+    ]);
+    setShapeTextExtensionPayloads(importedShape, payloads);
+    const rebuilt = strFromU8(unzipSync(await savePresentation(imported))[slidePart]!);
+    expect(rebuilt).toContain(
+      '<futureLine:underline xmlns:futureLine="urn:office-kit:text-line"/>',
+    );
+    expect(rebuilt).toContain('<futureLine:outline xmlns:futureLine="urn:office-kit:text-line"/>');
+  });
 });

@@ -207,18 +207,22 @@ const ATTR_PRST = qname('', 'prst', '');
  * Sets `<a:pattFill>` on `host` with the given preset + colors.
  * Replaces any previous fill choice.
  */
-export const setPatternFill = (host: XmlElement, options: PatternFillOptions): void => {
-  removeAnyFill(host);
+export const buildPatternFill = (options: PatternFillOptions): XmlElement => {
   // `preset` is typed but authoring input is a boundary — reject an out-of-enum
   // token rather than emitting a schema-invalid `prst`.
   const preset = oneOf(options.preset, PATTERN_PRESETS, 'setShapePatternFill: preset');
-  const pattFill = elem(NAME_PATT_FILL, {
+  return elem(NAME_PATT_FILL, {
     attrs: [attr(ATTR_PRST, preset)],
     children: [
       elem(NAME_FG_CLR, { children: [buildColorElement(options.foreground)] }),
       elem(NAME_BG_CLR, { children: [buildColorElement(options.background)] }),
     ],
   });
+};
+
+export const setPatternFill = (host: XmlElement, options: PatternFillOptions): void => {
+  const pattFill = buildPatternFill(options);
+  removeAnyFill(host);
   host.children.splice(fillInsertionIndex(host), 0, pattFill);
 };
 

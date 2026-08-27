@@ -27,13 +27,20 @@ import {
 } from '../xml/index.ts';
 import { fontSizeHundredthPt, textNonNegativePoint, textPointSpacing } from '../bounds.ts';
 import { buildColorElement } from './color.ts';
-import { buildGradientFill, type GradientFillOptions } from './fill.ts';
+import {
+  buildGradientFill,
+  buildPatternFill,
+  type GradientFillOptions,
+  type PatternFillOptions,
+} from './fill.ts';
 import {
   applyLineStyle,
+  type ArrowOptions,
   type LineAlignment,
   type LineCap,
   type LineCompound,
   type LineDash,
+  type LineDashStop,
   type LineJoin,
 } from './stroke.ts';
 
@@ -208,9 +215,12 @@ export interface TextLineProperties {
   readonly widthPt?: number;
   readonly cap?: LineCap;
   readonly dash?: LineDash;
+  readonly customDash?: readonly LineDashStop[];
   readonly join?: LineJoin;
   readonly compound?: LineCompound;
   readonly alignment?: LineAlignment;
+  readonly head?: ArrowOptions;
+  readonly tail?: ArrowOptions;
 }
 
 /** Common editable text-outline subset plus an importer-only diagnostic carrier. */
@@ -221,6 +231,10 @@ export type TextOutline =
       readonly unsupported?: string;
     })
   | (TextLineProperties & { readonly kind: 'none'; readonly unsupported?: string })
+  | (TextLineProperties &
+      GradientFillOptions & { readonly kind: 'gradient'; readonly unsupported?: string })
+  | (TextLineProperties &
+      PatternFillOptions & { readonly kind: 'pattern'; readonly unsupported?: string })
   | { readonly kind: 'unsupported'; readonly reason: string };
 
 export type TextUnderlineLine =
@@ -237,6 +251,10 @@ export type TextUnderlineFill =
   | { readonly kind: 'followText'; readonly unsupported?: string }
   | { readonly kind: 'none'; readonly unsupported?: string }
   | { readonly kind: 'solid'; readonly color: string; readonly unsupported?: string }
+  | (GradientFillOptions & { readonly kind: 'gradient'; readonly unsupported?: string })
+  | (PatternFillOptions & { readonly kind: 'pattern'; readonly unsupported?: string })
+  | { readonly kind: 'group'; readonly unsupported?: string }
+  | { readonly kind: 'picture'; readonly relationshipId: string; readonly unsupported?: string }
   | { readonly kind: 'unsupported'; readonly reason: string };
 
 /** Common editable outer-shadow subset plus an importer-only diagnostic carrier. */
@@ -381,16 +399,33 @@ const setUnderlineFill = (rPr: XmlElement, value: TextUnderlineFill): void => {
   if (value.kind === 'unsupported') {
     throw new TypeError('TextFormat.underlineFill unsupported diagnostic state is read-only.');
   }
-  const fill =
-    value.kind === 'followText'
-      ? elem(NAME_U_FILL_TX)
-      : elem(NAME_U_FILL, {
-          children: [
-            value.kind === 'none'
-              ? elem(NAME_NO_FILL)
-              : elem(NAME_SOLID_FILL, { children: [buildColorElement(value.color)] }),
-          ],
-        });
+  let fill: XmlElement;
+  if (value.kind === 'followText') fill = elem(NAME_U_FILL_TX);
+  else {
+    let child: XmlElement;
+    if (value.kind === 'none') child = elem(NAME_NO_FILL);
+    else if (value.kind === 'solid') {
+      child = elem(NAME_SOLID_FILL, { children: [buildColorElement(value.color)] });
+    } else if (value.kind === 'gradient') {
+      child = buildGradientFill(value);
+    } else if (value.kind === 'pattern') {
+      child = buildPatternFill(value);
+    } else if (value.kind === 'group') {
+      child = elem(qname('a', 'grpFill', NS.dml));
+    } else {
+      child = elem(qname('a', 'blipFill', NS.dml), {
+        children: [
+          elem(qname('a', 'blip', NS.dml), {
+            attrs: [attr(qname('r', 'embed', NS.officeDocRels), value.relationshipId)],
+          }),
+          elem(qname('a', 'stretch', NS.dml), {
+            children: [elem(qname('a', 'fillRect', NS.dml))],
+          }),
+        ],
+      });
+    }
+    fill = elem(NAME_U_FILL, { children: [child] });
+  }
   rPr.children = rPr.children.filter(
     (child) =>
       !(
@@ -491,10 +526,18 @@ const applyTextLineProperties = (
     ...(widthEmu === undefined ? {} : { widthEmu }),
     ...(value.cap === undefined ? {} : { cap: value.cap }),
     ...(value.dash === undefined ? {} : { dash: value.dash }),
+    ...(value.customDash === undefined ? {} : { customDash: value.customDash }),
     ...(value.join === undefined ? {} : { join: value.join }),
     ...(value.compound === undefined ? {} : { compound: value.compound }),
     ...(value.alignment === undefined ? {} : { alignment: value.alignment }),
+    ...(value.head === undefined ? {} : { head: value.head }),
+    ...(value.tail === undefined ? {} : { tail: value.tail }),
   });
+  if (value.kind === 'gradient') {
+    line.children.unshift(buildGradientFill(value));
+  } else if (value.kind === 'pattern') {
+    line.children.unshift(buildPatternFill(value));
+  }
 };
 
 /** Ensure the run outline exists in the first CT_TextCharacterProperties child slot. */

@@ -4,7 +4,7 @@
 // referenced from two or more split files is centralized here.
 
 import type { OpcPackage } from '../../internal/parts/index.ts';
-import { readSlidePart } from '../../internal/presentationml/index.ts';
+import { REL_TYPES, readSlidePart } from '../../internal/presentationml/index.ts';
 import {
   NS,
   type XmlElement,
@@ -12,7 +12,17 @@ import {
   qname,
   serializeXml,
 } from '../../internal/xml/index.ts';
-import { partName } from '../../internal/opc/index.ts';
+import {
+  basename,
+  contentTypeForFormat,
+  detectImageFormat,
+  emptyRels,
+  extensionForFormat,
+  type ImageFormat,
+  nextRelId,
+  partName,
+  resolveTarget,
+} from '../../internal/opc/index.ts';
 import {
   INTERNAL_PACKAGE,
   SHAPE_ELEMENT,
@@ -165,4 +175,68 @@ export const appendAndReturnNewShape = (slide: SlideData, child: XmlElement): Sl
 export const setOpcDefault = (pkg: OpcPackage, extension: string, contentType: string): void => {
   const has = pkg.contentTypes.defaults.some((d) => d.extension.toLowerCase() === extension);
   if (!has) pkg.contentTypes.defaults.push({ extension, contentType });
+};
+
+const equalBytes = (left: Uint8Array, right: Uint8Array): boolean => {
+  if (left.byteLength !== right.byteLength) return false;
+  for (let index = 0; index < left.byteLength; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
+};
+
+/** Keep picture bullets and picture underlines on one deterministic media/relationship allocator. */
+export const ensureSlideImageRelationship = (
+  slide: SlideData,
+  bytes: Uint8Array,
+  options: { readonly format?: ImageFormat; readonly operation: string },
+): string => {
+  const format = options.format ?? detectImageFormat(bytes);
+  if (format === null) {
+    throw new Error(
+      `${options.operation}: could not detect image format. Pass options.format explicitly.`,
+    );
+  }
+  const contentType = contentTypeForFormat(format);
+  const extension = extensionForFormat(format);
+  const pkg = slide[INTERNAL_PACKAGE];
+  let mediaPart = pkg.parts.find(
+    (part) =>
+      part.name.startsWith('/ppt/media/') &&
+      part.contentType === contentType &&
+      equalBytes(part.data, bytes),
+  );
+  if (!mediaPart) {
+    let nextN = 1;
+    const mediaPattern = /^\/ppt\/media\/image(\d+)\./u;
+    for (const part of pkg.parts) {
+      const match = mediaPattern.exec(part.name);
+      if (match?.[1] === undefined) continue;
+      const n = Number.parseInt(match[1], 10);
+      if (Number.isFinite(n) && n >= nextN) nextN = n + 1;
+    }
+    const mediaName = partName(`/ppt/media/image${nextN}.${extension}`);
+    setOpcDefault(pkg, extension, contentType);
+    pkg.addPart(mediaName, contentType, bytes);
+    mediaPart = pkg.getPart(mediaName)!;
+  }
+
+  const rels = pkg.getRels(slide[SLIDE_PART_NAME]) ?? emptyRels();
+  let relationship = rels.items.find(
+    (candidate) =>
+      candidate.type === REL_TYPES.image &&
+      candidate.targetMode === 'Internal' &&
+      resolveTarget(slide[SLIDE_PART_NAME], candidate.target) === mediaPart.name,
+  );
+  if (!relationship) {
+    relationship = {
+      id: nextRelId(rels.items.map((candidate) => candidate.id)),
+      type: REL_TYPES.image,
+      target: `../media/${basename(mediaPart.name)}`,
+      targetMode: 'Internal',
+    };
+    rels.items.push(relationship);
+    pkg.setRels(slide[SLIDE_PART_NAME], rels);
+  }
+  return relationship.id;
 };

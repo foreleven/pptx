@@ -276,9 +276,12 @@ export interface LineStyle {
   readonly widthEmu?: number;
   readonly cap?: LineCap;
   readonly dash?: LineDash;
+  readonly customDash?: readonly LineDashStop[];
   readonly join?: LineJoin;
   readonly compound?: LineCompound;
   readonly alignment?: LineAlignment;
+  readonly head?: ArrowOptions;
+  readonly tail?: ArrowOptions;
 }
 
 const LINE_CAPS: ReadonlySet<string> = new Set(['rnd', 'sq', 'flat']);
@@ -352,11 +355,31 @@ export const applyLineStyle = (ln: XmlElement, style: LineStyle): void => {
     );
   }
   if (style.dash !== undefined) {
+    if (style.customDash !== undefined) {
+      throw new TypeError('applyLineStyle: dash and customDash are mutually exclusive');
+    }
     if (!isLineDash(style.dash)) {
       throw new TypeError(`applyLineStyle: invalid dash token ${JSON.stringify(style.dash)}`);
     }
     removeChildrenIn(ln, DASH_LOCALS);
     insertLnChild(ln, elem(NAME_PRST_DASH, { attrs: [attr(ATTR_VAL, style.dash)] }));
+  }
+  if (style.customDash !== undefined) {
+    if (style.customDash.length === 0) {
+      throw new RangeError('applyLineStyle: customDash must not be empty');
+    }
+    const children = style.customDash.map(({ dash, space }, index) => {
+      if (!Number.isFinite(dash) || dash < 0 || !Number.isFinite(space) || space < 0) {
+        throw new RangeError(
+          `applyLineStyle: customDash[${String(index)}] dash and space must be finite non-negative numbers`,
+        );
+      }
+      return elem(NAME_DASH_STOP, {
+        attrs: [attr(ATTR_DASH, percentageLexeme(dash)), attr(ATTR_SPACE, percentageLexeme(space))],
+      });
+    });
+    removeChildrenIn(ln, DASH_LOCALS);
+    insertLnChild(ln, elem(NAME_CUST_DASH, { children }));
   }
   if (style.join !== undefined) {
     if (!isLineJoin(style.join)) {
@@ -365,4 +388,27 @@ export const applyLineStyle = (ln: XmlElement, style: LineStyle): void => {
     removeChildrenIn(ln, JOIN_LOCALS);
     insertLnChild(ln, elem(qname('a', style.join, NS.dml)));
   }
+  const applyArrow = (end: 'head' | 'tail', options: ArrowOptions | undefined): void => {
+    if (options === undefined) return;
+    if (!['none', 'triangle', 'stealth', 'diamond', 'oval', 'arrow'].includes(options.type)) {
+      throw new TypeError(
+        `applyLineStyle: invalid ${end} arrow type ${JSON.stringify(options.type)}`,
+      );
+    }
+    const localName = end === 'head' ? 'headEnd' : 'tailEnd';
+    ln.children = ln.children.filter(
+      (child) =>
+        !(
+          child.kind === 'element' &&
+          child.name.namespaceURI === NS.dml &&
+          child.name.localName === localName
+        ),
+    );
+    const attrs = [attr(ATTR_TYPE, options.type)];
+    if (options.width !== undefined) attrs.push(attr(ATTR_W, options.width));
+    if (options.length !== undefined) attrs.push(attr(ATTR_LEN, options.length));
+    insertLnChild(ln, elem(qname('a', localName, NS.dml), { attrs }));
+  };
+  applyArrow('head', style.head);
+  applyArrow('tail', style.tail);
 };

@@ -12,10 +12,7 @@ import {
 } from '../../internal/drawingml/index.ts';
 import {
   basename,
-  contentTypeForFormat,
-  detectImageFormat,
   emptyRels,
-  extensionForFormat,
   type ImageFormat,
   nextRelId,
   partName,
@@ -43,7 +40,7 @@ import {
   type SlideData,
   type SlideShapeData,
 } from '../_internal-symbols.ts';
-import { commitAndRefresh, requireTxBody, setOpcDefault } from './_helpers.ts';
+import { commitAndRefresh, ensureSlideImageRelationship, requireTxBody } from './_helpers.ts';
 import { getPresentationTheme } from './theme.ts';
 import { getSlides } from './slide-query.ts';
 import { findCNvPr, NAME_HLINK_CLICK_FN, type ShapeClickAction } from './embedded.ts';
@@ -51,6 +48,7 @@ import {
   hyperlinkRelationshipIds,
   removeUnreferencedSlideRelationships,
 } from './hyperlink-relationships.ts';
+import { getRunUnderlineFillImageBytes, setRunUnderlineFillImage } from './run-underline-image.ts';
 import {
   emuCoordinate32,
   emuPositiveCoordinate32,
@@ -1953,6 +1951,34 @@ export const getParagraphBulletImageBytes = (
   return part?.data ?? null;
 };
 
+/** Returns the embedded bytes backing one run's direct picture underline fill. */
+export const getShapeRunUnderlineFillImageBytes = (
+  shape: SlideShapeData,
+  paragraphIndex: number,
+  runIndex: number,
+): Uint8Array | null =>
+  getRunUnderlineFillImageBytes(shape[SHAPE_SLIDE], requireRun(shape, paragraphIndex, runIndex));
+
+/** Embeds image bytes and assigns them as one run's editable `<a:uFill><a:blipFill>`. */
+export const setShapeRunUnderlineFillImage = (
+  shape: SlideShapeData,
+  paragraphIndex: number,
+  runIndex: number,
+  bytes: Uint8Array,
+  options: { readonly format?: ImageFormat } = {},
+): void => {
+  const slide = shape[SHAPE_SLIDE];
+  const run = requireRun(shape, paragraphIndex, runIndex);
+  const oldRelationshipId = setRunUnderlineFillImage(slide, run, bytes, {
+    ...options,
+    operation: 'setShapeRunUnderlineFillImage',
+  });
+  commitAndRefresh(shape);
+  if (oldRelationshipId !== null) {
+    removeUnreferencedSlideRelationships(slide, new Set([oldRelationshipId]));
+  }
+};
+
 /**
  * Reads the bullet's per-paragraph color, size, and font overrides —
  * `<a:buClr>` (theme-resolved hex), `<a:buSzPct>` / `<a:buSzPts>`
@@ -2051,57 +2077,13 @@ export const setParagraphBulletImage = (
   options: { readonly format?: ImageFormat } = {},
 ): void => {
   const paragraph = requireParagraph(shape, paragraphIndex);
-  const format = options.format ?? detectImageFormat(bytes);
-  if (format === null) {
-    throw new Error(
-      'setParagraphBulletImage: could not detect image format. Pass options.format explicitly.',
-    );
-  }
-  const contentType = contentTypeForFormat(format);
-  const extension = extensionForFormat(format);
   const pPr = ensurePPr(paragraph);
   const oldRelationshipIds = paragraphBulletRelationshipIds(pPr);
   const slide = shape[SHAPE_SLIDE];
-  const pkg = slide[INTERNAL_PACKAGE];
-
-  let mediaPart = pkg.parts.find(
-    (part) =>
-      part.name.startsWith('/ppt/media/') &&
-      part.contentType === contentType &&
-      equalBytes(part.data, bytes),
-  );
-  if (!mediaPart) {
-    let nextN = 1;
-    const mediaPattern = /^\/ppt\/media\/image(\d+)\./u;
-    for (const part of pkg.parts) {
-      const match = mediaPattern.exec(part.name);
-      if (match?.[1] === undefined) continue;
-      const n = Number.parseInt(match[1], 10);
-      if (Number.isFinite(n) && n >= nextN) nextN = n + 1;
-    }
-    const mediaName = partName(`/ppt/media/image${nextN}.${extension}`);
-    setOpcDefault(pkg, extension, contentType);
-    pkg.addPart(mediaName, contentType, bytes);
-    mediaPart = pkg.getPart(mediaName)!;
-  }
-
-  const rels = pkg.getRels(slide[SLIDE_PART_NAME]) ?? emptyRels();
-  let relationship = rels.items.find(
-    (candidate) =>
-      candidate.type === REL_TYPES.image &&
-      candidate.targetMode === 'Internal' &&
-      resolveTarget(slide[SLIDE_PART_NAME], candidate.target) === mediaPart.name,
-  );
-  if (!relationship) {
-    relationship = {
-      id: nextRelId(rels.items.map((candidate) => candidate.id)),
-      type: REL_TYPES.image,
-      target: `../media/${basename(mediaPart.name)}`,
-      targetMode: 'Internal',
-    };
-    rels.items.push(relationship);
-    pkg.setRels(slide[SLIDE_PART_NAME], rels);
-  }
+  const relationshipId = ensureSlideImageRelationship(slide, bytes, {
+    ...options,
+    operation: 'setParagraphBulletImage',
+  });
 
   // Reuse the ordinary bullet path for PowerPoint's level-aware hanging indent,
   // then replace only the marker identity with the picture relationship.
@@ -2115,7 +2097,7 @@ export const setParagraphBulletImage = (
       ),
   );
   const blip = elem(qname('a', 'blip', NS.dml), {
-    attrs: [attr(qname('r', 'embed', NS.officeDocRels), relationship.id)],
+    attrs: [attr(qname('r', 'embed', NS.officeDocRels), relationshipId)],
   });
   insertChildByRank(pPr, elem(qname('a', 'buBlip', NS.dml), { children: [blip] }), pPrChildRank);
   commitAndRefresh(shape);
@@ -2140,15 +2122,6 @@ const BULLET_CHOICE_NAMES = new Set([
 const paragraphBulletRelationshipIds = (pPr: XmlElement): ReadonlySet<string> => {
   const picture = firstChildElement(pPr, qname('a', 'buBlip', NS.dml));
   return picture ? hyperlinkRelationshipIds(picture) : new Set<string>();
-};
-
-/** Compare media payloads without relying on object identity. */
-const equalBytes = (left: Uint8Array, right: Uint8Array): boolean => {
-  if (left.byteLength !== right.byteLength) return false;
-  for (let index = 0; index < left.byteLength; index += 1) {
-    if (left[index] !== right[index]) return false;
-  }
-  return true;
 };
 
 /**

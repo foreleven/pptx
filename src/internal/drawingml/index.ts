@@ -33,6 +33,7 @@ export type {
 } from './fill.ts';
 export {
   buildGradientFill,
+  buildPatternFill,
   clearFill,
   setGradientFill,
   setNoFill,

@@ -153,6 +153,8 @@ import {
   type ColumnLayout,
   type ParaInput,
   type PieceInput,
+  type TextDecorationLineInput,
+  type TextGradientInput,
   type RenderSlideOptions,
   type TextBodyInput,
   type TextLayoutMode,
@@ -2160,6 +2162,63 @@ const renderRun = (
   if (format?.color !== undefined && format.color !== null) {
     styles.push(`color:${resolveColor(format.color, theme, '#000000')}`);
   }
+  const midpointColor = (
+    stops: readonly { readonly offset: number; readonly color: string }[],
+  ): string => {
+    const sorted = [...stops].sort((left, right) => left.offset - right.offset);
+    const before = [...sorted].reverse().find((stop) => stop.offset <= 0.5) ?? sorted[0];
+    const after = sorted.find((stop) => stop.offset >= 0.5) ?? sorted.at(-1);
+    if (
+      !before ||
+      !after ||
+      !/^#[\dA-Fa-f]{6}/u.test(before.color) ||
+      !/^#[\dA-Fa-f]{6}/u.test(after.color)
+    ) {
+      return '#000000';
+    }
+    const span = after.offset - before.offset;
+    const ratio = span === 0 ? 0 : (0.5 - before.offset) / span;
+    const channel = (start: number, end: number): string =>
+      Math.round(start + (end - start) * ratio)
+        .toString(16)
+        .padStart(2, '0');
+    return `#${channel(Number.parseInt(before.color.slice(1, 3), 16), Number.parseInt(after.color.slice(1, 3), 16))}${channel(Number.parseInt(before.color.slice(3, 5), 16), Number.parseInt(after.color.slice(3, 5), 16))}${channel(Number.parseInt(before.color.slice(5, 7), 16), Number.parseInt(after.color.slice(5, 7), 16))}`;
+  };
+  const underlineFill = format?.underlineFill;
+  if (hasUnderline && underlineFill && underlineFill.kind !== 'none') {
+    const fallbackColor =
+      underlineFill.kind === 'gradient'
+        ? midpointColor(underlineFill.stops)
+        : underlineFill.kind === 'pattern'
+          ? underlineFill.foreground
+          : underlineFill.kind === 'solid'
+            ? underlineFill.color
+            : (format?.color ?? '#000000');
+    styles.push(`text-decoration-color:${resolveColor(fallbackColor, theme, '#000000')}`);
+  }
+  if (
+    format?.underlineLine &&
+    format.underlineLine.kind !== 'unsupported' &&
+    format.underlineLine.kind !== 'followText'
+  ) {
+    if (format.underlineLine.widthPt !== undefined) {
+      styles.push(`text-decoration-thickness:${format.underlineLine.widthPt}pt`);
+    }
+    if (format.underlineLine.customDash !== undefined) styles.push('text-decoration-style:dashed');
+  }
+  const outline = format?.outline;
+  if (outline && outline.kind !== 'none' && outline.kind !== 'unsupported') {
+    const fallbackColor =
+      outline.kind === 'gradient'
+        ? midpointColor(outline.stops)
+        : outline.kind === 'pattern'
+          ? outline.foreground
+          : outline.color;
+    styles.push(
+      `-webkit-text-stroke:${outline.widthPt ?? 0.75}pt ${resolveColor(fallbackColor, theme, '#000000')}`,
+    );
+    styles.push('paint-order:stroke fill');
+  }
   // S3 — additional rPr attributes that change how the glyphs lay out.
   if (format?.spc !== undefined && format.spc !== 0) {
     // ECMA-376 `spc` is in 1/100 pt; convert to CSS px at the run's size.
@@ -2209,7 +2268,14 @@ const renderRun = (
   const content = nestedWavyUnderline
     ? `<span style="text-decoration:underline;text-decoration-style:wavy">${html}</span>`
     : html;
-  return `<span style="${styles.join(';')}">${content}</span>`;
+  const decorationDegraded =
+    underlineFill?.kind === 'picture' ||
+    underlineFill?.kind === 'group' ||
+    (outline !== undefined &&
+      outline.kind !== 'none' &&
+      outline.kind !== 'unsupported' &&
+      (outline.head !== undefined || outline.tail !== undefined));
+  return `<span${decorationDegraded ? ' data-render-diagnostic="RENDER_DEGRADED_TEXT_DECORATION"' : ''} style="${styles.join(';')}">${content}</span>`;
 };
 
 // CSS line-height factor we render text at. Keep in sync with the
@@ -2256,6 +2322,119 @@ const underlineStyleOf = (fmt: TextFormat | null): 'none' | 'single' | 'wavy' =>
   if (u === undefined || u === false || u === 'none') return 'none';
   if (typeof u === 'string' && u.startsWith('wavy')) return 'wavy';
   return 'single';
+};
+
+const textGradientInput = (value: {
+  readonly angleDeg?: number;
+  readonly stops: readonly { readonly offset: number; readonly color: string }[];
+}): TextGradientInput => ({
+  angleDeg: value.angleDeg ?? 0,
+  stops: value.stops.map((stop) => {
+    const alpha = /^#[\dA-Fa-f]{8}$/u.test(stop.color)
+      ? Number.parseInt(stop.color.slice(7), 16) / 255
+      : 1;
+    return { offset: stop.offset, color: stop.color.slice(0, 7), opacity: alpha };
+  }),
+});
+
+const presetDashArray = (dash: string | undefined, widthPx: number): readonly number[] | null => {
+  if (dash === undefined || dash === 'solid') return null;
+  const units: Record<string, readonly number[]> = {
+    dot: [1, 2],
+    sysDot: [1, 1],
+    dash: [4, 3],
+    sysDash: [3, 1],
+    lgDash: [8, 3],
+    dashDot: [4, 2, 1, 2],
+    sysDashDot: [3, 1, 1, 1],
+    lgDashDot: [8, 3, 1, 3],
+    lgDashDotDot: [8, 3, 1, 3, 1, 3],
+    sysDashDotDot: [3, 1, 1, 1, 1, 1],
+  };
+  return (units[dash] ?? [4, 3]).map((value) => value * widthPx);
+};
+
+const decorationLineInput = (
+  fmt: TextFormat | null,
+  kind: 'underline' | 'outline',
+  fillHex: string,
+  sizePx: number,
+  scale: number,
+): TextDecorationLineInput | null => {
+  if (kind === 'underline') {
+    const underline = underlineStyleOf(fmt);
+    if (underline === 'none' || underline === 'wavy') return null;
+    const line = fmt?.underlineLine;
+    const fill = fmt?.underlineFill;
+    if (line?.kind === 'none' || fill?.kind === 'none') return null;
+    const widthPx = Math.max(
+      0.6,
+      line && 'widthPt' in line && line.widthPt !== undefined
+        ? line.widthPt * PX_PER_PT * scale
+        : sizePx * 0.06,
+    );
+    const paint =
+      fill?.kind === 'gradient'
+        ? ({ kind: 'gradient', gradient: textGradientInput(fill) } as const)
+        : fill?.kind === 'pattern'
+          ? ({
+              kind: 'pattern',
+              preset: fill.preset,
+              foreground: fill.foreground,
+              background: fill.background,
+            } as const)
+          : fill?.kind === 'solid'
+            ? ({ kind: 'solid', color: fill.color } as const)
+            : line?.kind === 'solid'
+              ? ({ kind: 'solid', color: line.color } as const)
+              : ({ kind: 'solid', color: fillHex } as const);
+    const customDash = line && 'customDash' in line ? line.customDash : undefined;
+    const dasharray = customDash
+      ? customDash.flatMap((stop) => [
+          (stop.dash / 100_000) * widthPx,
+          (stop.space / 100_000) * widthPx,
+        ])
+      : presetDashArray(line && 'dash' in line ? line.dash : undefined, widthPx);
+    return {
+      paint,
+      widthPx,
+      dasharray,
+      head: line && 'head' in line ? (line.head?.type ?? null) : null,
+      tail: line && 'tail' in line ? (line.tail?.type ?? null) : null,
+      ...(fill?.kind === 'picture' || fill?.kind === 'group' ? { degraded: true } : {}),
+    };
+  }
+  const outline = fmt?.outline;
+  if (!outline || outline.kind === 'none' || outline.kind === 'unsupported') return null;
+  const widthPx = Math.max(
+    0.6,
+    outline.widthPt === undefined ? sizePx * 0.06 : outline.widthPt * PX_PER_PT * scale,
+  );
+  const paint =
+    outline.kind === 'gradient'
+      ? ({ kind: 'gradient', gradient: textGradientInput(outline) } as const)
+      : outline.kind === 'pattern'
+        ? ({
+            kind: 'pattern',
+            preset: outline.preset,
+            foreground: outline.foreground,
+            background: outline.background,
+          } as const)
+        : ({ kind: 'solid', color: outline.color } as const);
+  const dasharray = outline.customDash
+    ? outline.customDash.flatMap((stop) => [
+        (stop.dash / 100_000) * widthPx,
+        (stop.space / 100_000) * widthPx,
+      ])
+    : presetDashArray(outline.dash, widthPx);
+  return {
+    paint,
+    widthPx,
+    dasharray,
+    head: outline.head?.type ?? null,
+    tail: outline.tail?.type ?? null,
+    ...(outline.head !== undefined || outline.tail !== undefined ? { degraded: true } : {}),
+  };
 };
 const hasStrikeFmt = (fmt: TextFormat | null): boolean => {
   const s = fmt?.strike;
@@ -2407,17 +2586,9 @@ export const buildSvgTextInput = (a: SvgTextArgs): TextBodyInput => {
             }
           : null;
       const gradient =
-        fmt?.gradient && 'stops' in fmt.gradient
-          ? {
-              angleDeg: fmt.gradient.angleDeg ?? 0,
-              stops: fmt.gradient.stops.map((stop) => {
-                const alpha = /^#[\dA-Fa-f]{8}$/u.test(stop.color)
-                  ? Number.parseInt(stop.color.slice(7), 16) / 255
-                  : 1;
-                return { offset: stop.offset, color: stop.color.slice(0, 7), opacity: alpha };
-              }),
-            }
-          : null;
+        fmt?.gradient && 'stops' in fmt.gradient ? textGradientInput(fmt.gradient) : null;
+      const underlineLine = decorationLineInput(fmt, 'underline', fillHex, sizePx, scale);
+      const outlineLine = decorationLineInput(fmt, 'outline', fillHex, sizePx, scale);
       const base: Omit<PieceInput, 'text' | 'isBreak'> = {
         family,
         sizePx,
@@ -2428,6 +2599,8 @@ export const buildSvgTextInput = (a: SvgTextArgs): TextBodyInput => {
         gradient,
         shadow,
         underline: underlineStyleOf(fmt),
+        underlineLine,
+        outlineLine,
         strike: hasStrikeFmt(fmt),
         superSub,
         href: run.href ?? null,
@@ -2521,6 +2694,8 @@ const breakPiece = (): PieceInput => ({
   gradient: null,
   shadow: null,
   underline: 'none',
+  underlineLine: null,
+  outlineLine: null,
   strike: false,
   superSub: 0,
   href: null,

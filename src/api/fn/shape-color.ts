@@ -11,6 +11,7 @@ import {
   type TextLineProperties,
   type TextRunState,
 } from '../../internal/drawingml/index.ts';
+import { PATTERN_PRESETS } from '../../internal/drawingml/fill.ts';
 import {
   NS,
   type XmlElement,
@@ -121,7 +122,38 @@ const parseTextLineProperties = (
       properties.dash = dash;
     } else unsupported.push(`${label} dash ${dash ?? 'missing'}`);
   }
-  if (customDashes.length > 0) unsupported.push('custom dash');
+  const customDash = customDashes[0];
+  if (customDash) {
+    unsupported.push(...unexpectedAttributes(customDash, new Set(), `${label} custom dash`));
+    const stops: Array<{ dash: number; space: number }> = [];
+    const percentage = (raw: string): number | null => {
+      if (/^\d+$/u.test(raw)) return Number(raw);
+      const match = /^(\d+(?:\.\d+)?)%$/u.exec(raw);
+      return match ? Number(match[1]) * 1_000 : null;
+    };
+    for (const child of customDash.children) {
+      if (
+        child.kind !== 'element' ||
+        child.name.namespaceURI !== NS.dml ||
+        child.name.localName !== 'ds'
+      ) {
+        unsupported.push(
+          `${label} custom dash child ${child.kind === 'element' ? child.name.localName : child.kind}`,
+        );
+        continue;
+      }
+      unsupported.push(
+        ...unexpectedAttributes(child, new Set(['d', 'sp']), `${label} custom dash stop`),
+      );
+      const dash = percentage(getAttrValue(child, qname('', 'd', '')) ?? '');
+      const space = percentage(getAttrValue(child, qname('', 'sp', '')) ?? '');
+      if (dash === null || space === null || dash < 0 || space < 0) {
+        unsupported.push(`${label} invalid custom dash stop`);
+      } else stops.push({ dash, space });
+    }
+    if (stops.length === 0) unsupported.push(`${label} empty custom dash`);
+    else properties.customDash = stops;
+  }
 
   const joins = line.children.filter(
     (child): child is XmlElement =>
@@ -160,9 +192,32 @@ const parseTextLineProperties = (
     if (child.name.namespaceURI !== NS.dml) {
       unsupported.push(`foreign child ${child.name.localName}`);
     } else if (child.name.localName === 'headEnd' || child.name.localName === 'tailEnd') {
-      unsupported.push(`arrow ${child.name.localName}`);
+      const type = getAttrValue(child, qname('', 'type', '')) ?? 'none';
+      const width = getAttrValue(child, qname('', 'w', ''));
+      const length = getAttrValue(child, qname('', 'len', ''));
+      const allowedTypes = new Set(['none', 'triangle', 'stealth', 'diamond', 'oval', 'arrow']);
+      const allowedSizes = new Set(['sm', 'med', 'lg']);
+      unsupported.push(
+        ...unexpectedAttributes(child, new Set(['type', 'w', 'len']), `${label} arrow`),
+      );
+      if (
+        !allowedTypes.has(type) ||
+        (width !== null && !allowedSizes.has(width)) ||
+        (length !== null && !allowedSizes.has(length))
+      ) {
+        unsupported.push(`${label} invalid arrow ${child.name.localName}`);
+      } else {
+        const arrow = {
+          type: type as 'none' | 'triangle' | 'stealth' | 'diamond' | 'oval' | 'arrow',
+          ...(width === null ? {} : { width: width as 'sm' | 'med' | 'lg' }),
+          ...(length === null ? {} : { length: length as 'sm' | 'med' | 'lg' }),
+        };
+        if (child.name.localName === 'headEnd') properties.head = arrow;
+        else properties.tail = arrow;
+      }
     } else if (child.name.localName === 'extLst') {
-      unsupported.push('extensions');
+      // Opaque line extensions are preserved by the scoped text-extension
+      // carrier; they do not invalidate the known editable base line.
     } else if (!knownChildren.has(child.name.localName)) {
       unsupported.push(`child ${child.name.localName}`);
     }
@@ -173,7 +228,114 @@ const parseTextLineProperties = (
 type ParsedTextLinePaint =
   | { readonly kind: 'bare' | 'none'; readonly unsupported: string[] }
   | { readonly kind: 'solid'; readonly color: string; readonly unsupported: string[] }
+  | ({ readonly kind: 'gradient'; readonly unsupported: string[] } & {
+      readonly stops: readonly { readonly offset: number; readonly color: string }[];
+      readonly angleDeg: number;
+    })
+  | ({ readonly kind: 'pattern'; readonly unsupported: string[] } & {
+      readonly preset: (typeof PATTERN_PRESETS)[number];
+      readonly foreground: string;
+      readonly background: string;
+    })
   | { readonly kind: 'unsupported'; readonly reason: string };
+
+/** Parse the strict editable linear-gradient subset shared by text fills and line paints. */
+const parseLinearTextGradientElement = (
+  gradient: XmlElement,
+  label: string,
+  ctx?: { readonly theme: PresentationTheme | null },
+): {
+  readonly stops: readonly { readonly offset: number; readonly color: string }[];
+  readonly angleDeg: number;
+  readonly unsupported: readonly string[];
+} | null => {
+  const gsList = firstChildElement(gradient, qname('a', 'gsLst', NS.dml));
+  const linear = firstChildElement(gradient, qname('a', 'lin', NS.dml));
+  if (!gsList || !linear) return null;
+  const stops: Array<{ offset: number; color: string }> = [];
+  const unsupported: string[] = [];
+  let previous = -1;
+  for (const stop of gsList.children) {
+    if (
+      stop.kind !== 'element' ||
+      stop.name.namespaceURI !== NS.dml ||
+      stop.name.localName !== 'gs'
+    ) {
+      return null;
+    }
+    const rawPosition = getAttrValue(stop, qname('', 'pos', '')) ?? '';
+    const position = Number(rawPosition);
+    const color = stop.children.find((child): child is XmlElement => child.kind === 'element');
+    if (
+      !/^\d+$/u.test(rawPosition) ||
+      !Number.isSafeInteger(position) ||
+      position < previous ||
+      position > 100_000 ||
+      color?.name.namespaceURI !== NS.dml
+    ) {
+      return null;
+    }
+    const transforms = color.children.filter(
+      (child): child is XmlElement => child.kind === 'element',
+    );
+    let colorValue: string | null = null;
+    if (ctx) {
+      colorValue = resolveDrawingColor(color, ctx.theme);
+      if (colorValue === null) return null;
+      if (
+        color.name.localName !== 'srgbClr' ||
+        transforms.some(
+          (transform) =>
+            transform.name.namespaceURI !== NS.dml || transform.name.localName !== 'alpha',
+        )
+      ) {
+        unsupported.push(
+          `${label} scheme/transformed color resolved to fixed sRGB; future theme responsiveness lost`,
+        );
+      }
+    } else {
+      const rawColor = getAttrValue(color, qname('', 'val', ''));
+      if (
+        color.name.localName !== 'srgbClr' ||
+        rawColor === null ||
+        !/^[\dA-Fa-f]{6}$/u.test(rawColor) ||
+        transforms.length > 1 ||
+        (transforms[0] &&
+          (transforms[0].name.namespaceURI !== NS.dml || transforms[0].name.localName !== 'alpha'))
+      ) {
+        return null;
+      }
+      colorValue = `#${rawColor.toUpperCase()}`;
+    }
+    const alphaTransform = transforms.find(
+      (transform) => transform.name.namespaceURI === NS.dml && transform.name.localName === 'alpha',
+    );
+    if (alphaTransform) {
+      const rawAlpha = getAttrValue(alphaTransform, qname('', 'val', '')) ?? '';
+      const alpha = Number(rawAlpha);
+      if (!/^\d+$/u.test(rawAlpha) || alpha < 0 || alpha > 100_000) return null;
+      const alphaByte = Math.round((alpha / 100_000) * 255);
+      if (Math.round((alphaByte / 255) * 100_000) !== alpha) {
+        unsupported.push(`${label} alpha ${rawAlpha} rounded to the nearest CSS alpha byte`);
+      }
+      if (!ctx) colorValue += alphaByte.toString(16).padStart(2, '0').toUpperCase();
+    }
+    stops.push({ offset: position / 100_000, color: colorValue });
+    previous = position;
+  }
+  const rawAngle = getAttrValue(linear, qname('', 'ang', '')) ?? '';
+  const angle = Number(rawAngle);
+  if (
+    stops.length < 2 ||
+    !/^\d+$/u.test(rawAngle) ||
+    !Number.isSafeInteger(angle) ||
+    angle >= 21_600_000
+  ) {
+    return null;
+  }
+  void label;
+  return { stops, angleDeg: angle / 60_000, unsupported };
+};
 
 /** Parse the no/solid paint subset of one CT_LineProperties element. */
 const parseTextLinePaint = (
@@ -190,12 +352,74 @@ const parseTextLinePaint = (
   if (fills.length === 0) return { kind: 'bare', unsupported: [] };
   if (fills.length > 1) return { kind: 'unsupported', reason: `multiple ${label} fill choices` };
   const fill = fills[0]!;
-  const unsupported = unexpectedAttributes(fill, new Set(), `${label} ${fill.name.localName}`);
+  const allowedFillAttributes =
+    fill.name.localName === 'gradFill'
+      ? new Set(['flip', 'rotWithShape'])
+      : fill.name.localName === 'pattFill'
+        ? new Set(['prst'])
+        : new Set<string>();
+  const unsupported = unexpectedAttributes(
+    fill,
+    allowedFillAttributes,
+    `${label} ${fill.name.localName}`,
+  );
   if (fill.name.localName === 'noFill') {
     if (fill.children.some((child) => child.kind === 'element')) {
       unsupported.push(`${label} noFill children`);
     }
     return { kind: 'none', unsupported };
+  }
+  if (fill.name.localName === 'gradFill') {
+    const parsed = parseLinearTextGradientElement(fill, label, ctx);
+    return parsed === null
+      ? { kind: 'unsupported', reason: `${label} invalid gradFill` }
+      : {
+          kind: 'gradient',
+          stops: parsed.stops,
+          angleDeg: parsed.angleDeg,
+          unsupported: [...unsupported, ...parsed.unsupported],
+        };
+  }
+  if (fill.name.localName === 'pattFill') {
+    const preset = getAttrValue(fill, qname('', 'prst', ''));
+    if (preset === null || !(PATTERN_PRESETS as readonly string[]).includes(preset)) {
+      return { kind: 'unsupported', reason: `${label} invalid pattFill preset` };
+    }
+    const colorFrom = (localName: 'fgClr' | 'bgClr'): string | null => {
+      const container = firstChildElement(fill, qname('a', localName, NS.dml));
+      const color = container?.children.find(
+        (child): child is XmlElement => child.kind === 'element',
+      );
+      if (!color) return null;
+      if (ctx) {
+        const resolved = resolveDrawingColor(color, ctx.theme);
+        if (
+          resolved !== null &&
+          (color.name.localName !== 'srgbClr' ||
+            color.children.some((child) => child.kind === 'element'))
+        ) {
+          unsupported.push(
+            `${label} pattern scheme/transformed color resolved to fixed sRGB; future theme responsiveness lost`,
+          );
+        }
+        return resolved;
+      }
+      if (color.name.namespaceURI !== NS.dml || color.name.localName !== 'srgbClr') return null;
+      const raw = getAttrValue(color, qname('', 'val', ''));
+      return raw !== null && /^[\dA-Fa-f]{6}$/u.test(raw) ? `#${raw.toUpperCase()}` : null;
+    };
+    const foreground = colorFrom('fgClr');
+    const background = colorFrom('bgClr');
+    if (foreground === null || background === null) {
+      return { kind: 'unsupported', reason: `${label} pattern colors` };
+    }
+    return {
+      kind: 'pattern',
+      preset: preset as (typeof PATTERN_PRESETS)[number],
+      foreground,
+      background,
+      unsupported,
+    };
   }
   if (fill.name.localName !== 'solidFill') {
     return { kind: 'unsupported', reason: `${label} ${fill.name.localName}` };
@@ -206,18 +430,22 @@ const parseTextLinePaint = (
     return { kind: 'unsupported', reason: `${label} color ${color?.name.localName ?? 'missing'}` };
   }
   unsupported.push(...unexpectedAttributes(color, new Set(['val']), `${label} color`));
-  if (color.children.some((child) => child.kind === 'element')) {
-    unsupported.push(`${label} color transforms`);
-  }
+  const hasColorTransforms = color.children.some((child) => child.kind === 'element');
   let colorValue: string | null = null;
-  if (ctx) colorValue = resolveDrawingColor(color, ctx.theme);
-  else if (color.name.localName === 'srgbClr') {
+  if (ctx) {
+    colorValue = resolveDrawingColor(color, ctx.theme);
+    if (colorValue !== null && (color.name.localName !== 'srgbClr' || hasColorTransforms)) {
+      unsupported.push(
+        `${label} scheme/transformed color resolved to fixed sRGB; future theme responsiveness lost`,
+      );
+    }
+  } else if (color.name.localName === 'srgbClr') {
     const value = getAttrValue(color, qname('', 'val', ''));
     if (value !== null && /^[\dA-Fa-f]{6}$/u.test(value)) colorValue = `#${value.toUpperCase()}`;
   } else if (color.name.localName === 'schemeClr') {
     colorValue = getAttrValue(color, qname('', 'val', ''));
   }
-  if (color.name.localName !== 'srgbClr')
+  if (!ctx && color.name.localName !== 'srgbClr')
     unsupported.push(`${label} color ${color.name.localName}`);
   if (colorValue === null) {
     return { kind: 'unsupported', reason: unsupported.join(', ') || `${label} invalid solid fill` };
@@ -870,7 +1098,12 @@ export const parseRPrLikeElement = (
         out.underlineLine =
           paint.kind === 'solid'
             ? { kind: 'solid', color: paint.color, ...parsed.properties, ...diagnostic }
-            : { kind: paint.kind, ...parsed.properties, ...diagnostic };
+            : paint.kind === 'gradient' || paint.kind === 'pattern'
+              ? {
+                  kind: 'unsupported',
+                  reason: `underline line ${paint.kind} paint is not authorable`,
+                }
+              : { kind: paint.kind, ...parsed.properties, ...diagnostic };
       }
     }
   }
@@ -920,12 +1153,27 @@ export const parseRPrLikeElement = (
         );
         const color = colors[0];
         let colorValue: string | null = null;
-        if (
-          colors.length !== 1 ||
-          color?.name.namespaceURI !== NS.dml ||
-          color.name.localName !== 'srgbClr'
-        ) {
+        const colorTransforms =
+          color?.children.filter((child): child is XmlElement => child.kind === 'element') ?? [];
+        const needsFixedResolution =
+          color?.name.localName !== 'srgbClr' ||
+          colorTransforms.some(
+            (transform) =>
+              transform.name.namespaceURI !== NS.dml || transform.name.localName !== 'alpha',
+          );
+        if (colors.length !== 1 || color?.name.namespaceURI !== NS.dml) {
           unsupported.push(`underline fill color ${color?.name.localName ?? 'missing'}`);
+        } else if (ctx && needsFixedResolution) {
+          colorValue = resolveDrawingColor(color, ctx.theme);
+          if (colorValue === null) {
+            unsupported.push(`underline fill color ${color.name.localName}`);
+          } else {
+            unsupported.push(
+              'underline fill scheme/transformed color resolved to fixed sRGB; future theme responsiveness lost',
+            );
+          }
+        } else if (color.name.localName !== 'srgbClr') {
+          unsupported.push(`underline fill color ${color.name.localName}`);
         } else {
           unsupported.push(
             ...unexpectedAttributes(color, new Set(['val']), 'underline fill color'),
@@ -934,9 +1182,7 @@ export const parseRPrLikeElement = (
           if (!/^[\dA-Fa-f]{6}$/u.test(rawColor)) {
             unsupported.push(`underline fill color ${rawColor || 'missing'}`);
           } else {
-            const transforms = color.children.filter(
-              (child): child is XmlElement => child.kind === 'element',
-            );
+            const transforms = colorTransforms;
             let alphaHex = '';
             if (
               transforms.length > 1 ||
@@ -953,16 +1199,16 @@ export const parseRPrLikeElement = (
               const rawAlpha = getAttrValue(alpha, qname('', 'val', '')) ?? '';
               const alphaValue = Number(rawAlpha);
               const alphaByte = Math.round((alphaValue / 100_000) * 255);
-              if (
-                !/^\d+$/u.test(rawAlpha) ||
-                alphaValue < 0 ||
-                alphaValue > 100_000 ||
-                Math.round((alphaByte / 255) * 100_000) !== alphaValue
-              ) {
+              if (!/^\d+$/u.test(rawAlpha) || alphaValue < 0 || alphaValue > 100_000) {
                 unsupported.push(
                   `underline fill alpha ${rawAlpha || 'missing'} exceeds CSS hex-byte precision`,
                 );
               } else {
+                if (Math.round((alphaByte / 255) * 100_000) !== alphaValue) {
+                  unsupported.push(
+                    `underline fill alpha ${rawAlpha} rounded to the nearest CSS alpha byte`,
+                  );
+                }
                 alphaHex = alphaByte.toString(16).padStart(2, '0').toUpperCase();
               }
             }
@@ -978,6 +1224,77 @@ export const parseRPrLikeElement = (
             : {
                 kind: 'solid',
                 color: colorValue,
+                ...(unsupported.length === 0 ? {} : { unsupported: unsupported.join(', ') }),
+              };
+      } else if (fill.name.localName === 'gradFill') {
+        const gradient = parseLinearTextGradientElement(fill, 'underline fill', ctx);
+        out.underlineFill =
+          gradient === null
+            ? { kind: 'unsupported', reason: 'underline fill invalid gradFill' }
+            : {
+                kind: 'gradient',
+                stops: gradient.stops,
+                angleDeg: gradient.angleDeg,
+                ...([...unsupported, ...gradient.unsupported].length === 0
+                  ? {}
+                  : { unsupported: [...unsupported, ...gradient.unsupported].join(', ') }),
+              };
+      } else if (fill.name.localName === 'pattFill') {
+        const preset = getAttrValue(fill, qname('', 'prst', ''));
+        const colorFrom = (localName: 'fgClr' | 'bgClr'): string | null => {
+          const container = firstChildElement(fill, qname('a', localName, NS.dml));
+          const color = container?.children.find(
+            (child): child is XmlElement => child.kind === 'element',
+          );
+          if (!color || color.name.namespaceURI !== NS.dml) return null;
+          if (ctx) {
+            const resolved = resolveDrawingColor(color, ctx.theme);
+            if (
+              resolved !== null &&
+              (color.name.localName !== 'srgbClr' ||
+                color.children.some((child) => child.kind === 'element'))
+            ) {
+              unsupported.push(
+                'underline fill pattern scheme/transformed color resolved to fixed sRGB; future theme responsiveness lost',
+              );
+            }
+            return resolved;
+          }
+          if (color.name.localName !== 'srgbClr') return null;
+          const raw = getAttrValue(color, qname('', 'val', ''));
+          return raw !== null && /^[\dA-Fa-f]{6}$/u.test(raw) ? `#${raw.toUpperCase()}` : null;
+        };
+        const foreground = colorFrom('fgClr');
+        const background = colorFrom('bgClr');
+        out.underlineFill =
+          preset !== null &&
+          (PATTERN_PRESETS as readonly string[]).includes(preset) &&
+          foreground !== null &&
+          background !== null
+            ? {
+                kind: 'pattern',
+                preset: preset as (typeof PATTERN_PRESETS)[number],
+                foreground,
+                background,
+                ...(unsupported.length === 0 ? {} : { unsupported: unsupported.join(', ') }),
+              }
+            : { kind: 'unsupported', reason: 'underline fill invalid pattFill' };
+      } else if (fill.name.localName === 'grpFill') {
+        out.underlineFill = {
+          kind: 'group',
+          ...(unsupported.length === 0 ? {} : { unsupported: unsupported.join(', ') }),
+        };
+      } else if (fill.name.localName === 'blipFill') {
+        const blip = firstChildElement(fill, qname('a', 'blip', NS.dml));
+        const relationshipId = blip
+          ? getAttrValue(blip, qname('r', 'embed', NS.officeDocRels))
+          : null;
+        out.underlineFill =
+          relationshipId === null
+            ? { kind: 'unsupported', reason: 'underline fill picture relationship missing' }
+            : {
+                kind: 'picture',
+                relationshipId,
                 ...(unsupported.length === 0 ? {} : { unsupported: unsupported.join(', ') }),
               };
       } else {
@@ -1017,7 +1334,24 @@ export const parseRPrLikeElement = (
       out.outline =
         paint.kind === 'solid'
           ? { kind: 'solid', color: paint.color, ...parsed.properties, ...diagnostic }
-          : { kind: 'none', ...parsed.properties, ...diagnostic };
+          : paint.kind === 'gradient'
+            ? {
+                kind: 'gradient',
+                stops: paint.stops,
+                angleDeg: paint.angleDeg,
+                ...parsed.properties,
+                ...diagnostic,
+              }
+            : paint.kind === 'pattern'
+              ? {
+                  kind: 'pattern',
+                  preset: paint.preset,
+                  foreground: paint.foreground,
+                  background: paint.background,
+                  ...parsed.properties,
+                  ...diagnostic,
+                }
+              : { kind: 'none', ...parsed.properties, ...diagnostic };
     }
   }
   const spc = getAttrValue(rPr, qname('', 'spc', ''));

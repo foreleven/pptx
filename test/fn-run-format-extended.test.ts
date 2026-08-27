@@ -12,6 +12,7 @@ import {
   addSlideTextBox,
   findShapeByText,
   getShapeRunFormat,
+  getShapeRunUnderlineFillImageBytes,
   getShapeRunState,
   getSlidePartName,
   getSlides,
@@ -20,9 +21,11 @@ import {
   savePresentation,
   setShapeParagraphElements,
   setShapeRunFormat,
+  setShapeRunUnderlineFillImage,
 } from '../src/api/index.ts';
 import { applyLineStyle } from '../src/internal/drawingml/index.ts';
 import { NS, attr, elem, getAttrValue, qname } from '../src/internal/xml/index.ts';
+import { buildPng } from './lib/build-png.ts';
 
 const fixture = (name: string): string =>
   fileURLToPath(new URL(`./fixtures/minimal/${name}`, import.meta.url));
@@ -244,6 +247,171 @@ describe('fn API: extended run-format properties', () => {
       alignment: 'in',
     });
     expect(getShapeRunFormat(reloadedShape, 0, 1)?.outline).toEqual({ kind: 'none' });
+  });
+
+  it('round-trips complex underline paints and line geometry', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const tb = addSlideTextBox(slide, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(5),
+      h: inches(2),
+      text: 'gradientpattern',
+    });
+    setShapeParagraphElements(tb, 0, [
+      {
+        kind: 'r',
+        text: 'gradient',
+        format: {
+          underline: true,
+          underlineFill: {
+            kind: 'gradient',
+            stops: [
+              { offset: 0, color: '#3659E3' },
+              { offset: 1, color: '#F26B5B' },
+            ],
+            angleDeg: 90,
+          },
+          underlineLine: {
+            kind: 'bare',
+            customDash: [
+              { dash: 100_000, space: 25_000 },
+              { dash: 15_000, space: 45_000 },
+            ],
+            head: { type: 'triangle', width: 'lg', length: 'lg' },
+            tail: { type: 'oval', width: 'lg', length: 'lg' },
+          },
+        },
+      },
+      {
+        kind: 'r',
+        text: 'pattern',
+        format: {
+          underline: true,
+          underlineFill: {
+            kind: 'pattern',
+            preset: 'pct20',
+            foreground: '#3659E3',
+            background: '#FFFFFF',
+          },
+        },
+      },
+    ]);
+
+    const reloaded = await loadPresentation(await savePresentation(pres));
+    const shape = findShapeByText(getSlides(reloaded)[0]!, 'gradientpattern')!;
+    expect(getShapeRunFormat(shape, 0, 0)?.underlineFill).toEqual({
+      kind: 'gradient',
+      stops: [
+        { offset: 0, color: '#3659E3' },
+        { offset: 1, color: '#F26B5B' },
+      ],
+      angleDeg: 90,
+    });
+    expect(getShapeRunFormat(shape, 0, 0)?.underlineLine).toEqual({
+      kind: 'bare',
+      customDash: [
+        { dash: 100_000, space: 25_000 },
+        { dash: 15_000, space: 45_000 },
+      ],
+      head: { type: 'triangle', width: 'lg', length: 'lg' },
+      tail: { type: 'oval', width: 'lg', length: 'lg' },
+    });
+    expect(getShapeRunFormat(shape, 0, 1)?.underlineFill).toEqual({
+      kind: 'pattern',
+      preset: 'pct20',
+      foreground: '#3659E3',
+      background: '#FFFFFF',
+    });
+  });
+
+  it('embeds and resolves a picture underline fill relationship', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const tb = addSlideTextBox(slide, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(4),
+      h: inches(2),
+      text: 'picture',
+    });
+    const image = buildPng(2, 2, [54, 89, 227]);
+    setShapeRunFormat(tb, 0, 0, { underline: true });
+    setShapeRunUnderlineFillImage(tb, 0, 0, image);
+
+    const reloaded = await loadPresentation(await savePresentation(pres));
+    const shape = findShapeByText(getSlides(reloaded)[0]!, 'picture')!;
+    expect(getShapeRunFormat(shape, 0, 0)?.underlineFill).toEqual(
+      expect.objectContaining({
+        kind: 'picture',
+        relationshipId: expect.stringMatching(/^rId\d+$/u),
+      }),
+    );
+    expect(getShapeRunUnderlineFillImageBytes(shape, 0, 0)).toEqual(image);
+  });
+
+  it('round-trips gradient and pattern text outlines with custom dash and arrows', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const tb = addSlideTextBox(slide, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(5),
+      h: inches(2),
+      text: 'gradientpattern',
+    });
+    setShapeParagraphElements(tb, 0, [
+      {
+        kind: 'r',
+        text: 'gradient',
+        format: {
+          outline: {
+            kind: 'gradient',
+            stops: [
+              { offset: 0, color: '#3659E3' },
+              { offset: 1, color: '#F26B5B' },
+            ],
+            angleDeg: 90,
+            customDash: [{ dash: 100_000, space: 25_000 }],
+            head: { type: 'triangle', width: 'lg', length: 'lg' },
+            tail: { type: 'oval', width: 'lg', length: 'lg' },
+          },
+        },
+      },
+      {
+        kind: 'r',
+        text: 'pattern',
+        format: {
+          outline: {
+            kind: 'pattern',
+            preset: 'pct20',
+            foreground: '#3659E3',
+            background: '#FFFFFF',
+          },
+        },
+      },
+    ]);
+
+    const reloaded = await loadPresentation(await savePresentation(pres));
+    const shape = findShapeByText(getSlides(reloaded)[0]!, 'gradientpattern')!;
+    expect(getShapeRunFormat(shape, 0, 0)?.outline).toEqual({
+      kind: 'gradient',
+      stops: [
+        { offset: 0, color: '#3659E3' },
+        { offset: 1, color: '#F26B5B' },
+      ],
+      angleDeg: 90,
+      customDash: [{ dash: 100_000, space: 25_000 }],
+      head: { type: 'triangle', width: 'lg', length: 'lg' },
+      tail: { type: 'oval', width: 'lg', length: 'lg' },
+    });
+    expect(getShapeRunFormat(shape, 0, 1)?.outline).toEqual({
+      kind: 'pattern',
+      preset: 'pct20',
+      foreground: '#3659E3',
+      background: '#FFFFFF',
+    });
   });
 
   it('rejects a kerning threshold outside ST_TextNonNegativePoint', async () => {

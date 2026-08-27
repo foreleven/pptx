@@ -17,7 +17,7 @@ import {
 } from '../../internal/drawingml/index.ts';
 import type { Emu } from '../units.ts';
 import { REL_TYPES, buildTableCell, buildTableRow } from '../../internal/presentationml/index.ts';
-import { emptyRels, nextRelId } from '../../internal/opc/index.ts';
+import { emptyRels, type ImageFormat, nextRelId } from '../../internal/opc/index.ts';
 import {
   NS,
   type XmlElement,
@@ -65,6 +65,8 @@ import { ALIGN_TOKEN_MAP } from './shape-paragraph.ts';
 import { getPresentationTheme } from './package.ts';
 import { resolveDrawingColor } from './shapes.ts';
 import { getSlides } from './slide-query.ts';
+import { getRunUnderlineFillImageBytes, setRunUnderlineFillImage } from './run-underline-image.ts';
+import { removeUnreferencedSlideRelationships } from './hyperlink-relationships.ts';
 
 // ---------------------------------------------------------------------------
 // Table cell access.
@@ -1359,6 +1361,54 @@ export const getTableCellFill = (cell: TableCellData): string | null => {
     if (v) return `scheme:${v}`;
   }
   return null;
+};
+
+const requireTableCellRun = (
+  cell: TableCellData,
+  paragraphIndex: number,
+  runIndex: number,
+): XmlElement => {
+  const txBody = firstChildElement(cell[CELL_ELEMENT], NAME_A_TX_BODY_TBL);
+  const paragraphs = txBody ? allChildElements(txBody, NAME_A_P_TBL) : [];
+  const paragraph = paragraphs[paragraphIndex];
+  if (!paragraph)
+    throw new RangeError(`table-cell paragraph index out of range: ${paragraphIndex}`);
+  const runs = allChildElements(paragraph, NAME_A_R_TBL);
+  const run = runs[runIndex];
+  if (!run) throw new RangeError(`table-cell run index out of range: ${runIndex}`);
+  return run;
+};
+
+/** Returns the embedded bytes backing one table-cell run's picture underline fill. */
+export const getTableCellRunUnderlineFillImageBytes = (
+  cell: TableCellData,
+  paragraphIndex: number,
+  runIndex: number,
+): Uint8Array | null =>
+  getRunUnderlineFillImageBytes(
+    cell[CELL_TABLE][SHAPE_SLIDE],
+    requireTableCellRun(cell, paragraphIndex, runIndex),
+  );
+
+/** Embeds image bytes and assigns them as one table-cell run's picture underline fill. */
+export const setTableCellRunUnderlineFillImage = (
+  cell: TableCellData,
+  paragraphIndex: number,
+  runIndex: number,
+  bytes: Uint8Array,
+  options: { readonly format?: ImageFormat } = {},
+): void => {
+  const slide = cell[CELL_TABLE][SHAPE_SLIDE];
+  const oldRelationshipId = setRunUnderlineFillImage(
+    slide,
+    requireTableCellRun(cell, paragraphIndex, runIndex),
+    bytes,
+    { ...options, operation: 'setTableCellRunUnderlineFillImage' },
+  );
+  commitTableCell(cell);
+  if (oldRelationshipId !== null) {
+    removeUnreferencedSlideRelationships(slide, new Set([oldRelationshipId]));
+  }
 };
 
 /** Applies a TextFormat to every run in the cell's text. */

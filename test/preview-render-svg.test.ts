@@ -221,6 +221,109 @@ describe('renderSlideToSvg', () => {
     expect(svg).toContain('hello svg');
   });
 
+  it('svg text mode keeps complex underline and outline paints visible', async () => {
+    const { pres, slide } = await blankSlide();
+    const box = addSlideTextBox(slide, {
+      x: inches(1),
+      y: inches(1),
+      w: inches(5),
+      h: inches(1),
+      text: 'decorated',
+    });
+    setShapeRunFormat(box, 0, 0, {
+      underline: true,
+      underlineFill: {
+        kind: 'gradient',
+        stops: [
+          { offset: 0, color: '#3659E3' },
+          { offset: 1, color: '#F26B5B' },
+        ],
+        angleDeg: 90,
+      },
+      underlineLine: {
+        kind: 'bare',
+        customDash: [{ dash: 100_000, space: 25_000 }],
+        head: { type: 'triangle' },
+        tail: { type: 'oval' },
+      },
+      outline: {
+        kind: 'pattern',
+        preset: 'pct20',
+        foreground: '#3659E3',
+        background: '#FFFFFF',
+        widthPt: 1,
+      },
+    });
+    const svg = renderSlideToSvg(pres, slide, { textLayout: 'svg' });
+    expect(svg).toContain('<linearGradient id="text-decoration-');
+    expect(svg).toContain('<pattern id="text-decoration-');
+    expect(svg).toContain('stroke-dasharray=');
+    expect(svg).toContain('marker-start="url(#text-underline-head-triangle-');
+    expect(svg).toContain('marker-end="url(#text-underline-tail-oval-');
+    expect(svg).toContain('paint-order="stroke fill"');
+  });
+
+  it('foreignObject text degrades gradient decorations to their midpoint color', async () => {
+    const { pres, slide } = await blankSlide();
+    const box = addSlideTextBox(slide, {
+      x: inches(1),
+      y: inches(1),
+      w: inches(5),
+      h: inches(1),
+      text: 'fallback',
+    });
+    setShapeRunFormat(box, 0, 0, {
+      underline: true,
+      underlineFill: {
+        kind: 'gradient',
+        stops: [
+          { offset: 0, color: '#3659E3' },
+          { offset: 1, color: '#F26B5B' },
+        ],
+        angleDeg: 90,
+      },
+      outline: {
+        kind: 'gradient',
+        stops: [
+          { offset: 0, color: '#3659E3' },
+          { offset: 1, color: '#F26B5B' },
+        ],
+        angleDeg: 90,
+      },
+    });
+    const svg = renderSlideToSvg(pres, slide, { textLayout: 'foreignObject' });
+    expect(svg.toUpperCase()).toContain('TEXT-DECORATION-COLOR:#94629F');
+    expect(svg.toUpperCase()).toContain('-WEBKIT-TEXT-STROKE:0.75PT #94629F');
+  });
+
+  it('marks deterministic group-fill and outline-arrow fallbacks with a render diagnostic', async () => {
+    const { pres, slide } = await blankSlide();
+    const box = addSlideTextBox(slide, {
+      x: inches(1),
+      y: inches(1),
+      w: inches(5),
+      h: inches(1),
+      text: 'degraded',
+    });
+    setShapeRunFormat(box, 0, 0, {
+      color: '#3659E3',
+      underline: true,
+      underlineFill: { kind: 'group' },
+      outline: {
+        kind: 'solid',
+        color: '#F26B5B',
+        head: { type: 'triangle' },
+        tail: { type: 'oval' },
+      },
+    });
+    const foreignObject = renderSlideToSvg(pres, slide, { textLayout: 'foreignObject' });
+    const svgText = renderSlideToSvg(pres, slide, { textLayout: 'svg' });
+    expect(foreignObject).toContain('data-render-diagnostic="RENDER_DEGRADED_TEXT_DECORATION"');
+    expect(svgText).toContain('data-render-diagnostic="RENDER_DEGRADED_TEXT_DECORATION"');
+    expect(svgText).toContain('stroke="#3659E3"');
+    expect(svgText).toContain('stroke="#F26B5B"');
+  });
+
   it('svg text mode: bold + explicit color from setShapeRunFormat appear in output', async () => {
     const { pres, slide } = await blankSlide();
     const box = addSlideTextBox(slide, {

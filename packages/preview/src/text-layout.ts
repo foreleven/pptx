@@ -153,10 +153,31 @@ export interface PieceInput {
    *  `wavyDbl`, `wavyHeavy`) — SVG/resvg has no `text-decoration-style`
    *  support, so the engine draws it as an explicit path (see `wavyPath`). */
   readonly underline: 'none' | 'single' | 'wavy';
+  readonly underlineLine?: TextDecorationLineInput | null;
+  readonly outlineLine?: TextDecorationLineInput | null;
   readonly strike: boolean;
   readonly superSub: 0 | 1 | -1; // 1 superscript, -1 subscript
   readonly href: string | null;
   readonly isBreak: boolean; // <a:br>
+}
+
+export type TextDecorationPaintInput =
+  | { readonly kind: 'solid'; readonly color: string }
+  | { readonly kind: 'gradient'; readonly gradient: TextGradientInput }
+  | {
+      readonly kind: 'pattern';
+      readonly preset: string;
+      readonly foreground: string;
+      readonly background: string;
+    };
+
+export interface TextDecorationLineInput {
+  readonly paint: TextDecorationPaintInput;
+  readonly widthPx: number;
+  readonly dasharray: readonly number[] | null;
+  readonly head: 'none' | 'triangle' | 'stealth' | 'diamond' | 'oval' | 'arrow' | null;
+  readonly tail: 'none' | 'triangle' | 'stealth' | 'diamond' | 'oval' | 'arrow' | null;
+  readonly degraded?: boolean;
 }
 
 export interface TextShadowInput {
@@ -881,7 +902,14 @@ const emitLine = (line: Line, baselineY: number, dx: number): string => {
   const x0 = line.anchorX + dx + GRID_NUDGE_X;
   const shadow = emitTextShadows(groups, line.textAnchor, x0, baselineY);
   const text = `<text x="${fmt(x0)}" y="${fmt(baselineY)}" text-anchor="${line.textAnchor}" xml:space="preserve">${tspans}</text>`;
-  return gradientDefs + shadow + text + emitWavyUnderlines(groups, line.textAnchor, x0, baselineY);
+  return (
+    gradientDefs +
+    emitDecorationDefs(groups) +
+    shadow +
+    text +
+    emitComplexUnderlines(groups, line.textAnchor, x0, baselineY) +
+    emitWavyUnderlines(groups, line.textAnchor, x0, baselineY)
+  );
 };
 
 const gradientId = (gradient: TextGradientInput): string => {
@@ -911,6 +939,85 @@ const emitGradientDefs = (groups: readonly Group[]): string => {
       )
       .join('');
     return `<linearGradient id="${id}" x1="${fmt(50 - dx)}%" y1="${fmt(50 - dy)}%" x2="${fmt(50 + dx)}%" y2="${fmt(50 + dy)}%">${stops}</linearGradient>`;
+  });
+  return `<defs>${definitions.join('')}</defs>`;
+};
+
+const decorationPaintId = (paint: TextDecorationPaintInput): string => {
+  const signature = JSON.stringify(paint);
+  let hash = 2_166_136_261;
+  for (let index = 0; index < signature.length; index += 1) {
+    hash ^= signature.charCodeAt(index);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return `text-decoration-${(hash >>> 0).toString(16)}`;
+};
+
+const decorationPaintValue = (paint: TextDecorationPaintInput): string =>
+  paint.kind === 'solid' ? paint.color : `url(#${decorationPaintId(paint)})`;
+
+const decorationLineGradient = (
+  paint: Extract<TextDecorationPaintInput, { readonly kind: 'gradient' }>,
+  x1: number,
+  x2: number,
+  y: number,
+  width: number,
+): { readonly definition: string; readonly value: string } => {
+  const signature = `${decorationPaintId(paint)}:${fmt(x1)}:${fmt(x2)}:${fmt(y)}:${fmt(width)}`;
+  let hash = 2_166_136_261;
+  for (let index = 0; index < signature.length; index += 1) {
+    hash ^= signature.charCodeAt(index);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  const id = `${decorationPaintId(paint)}-line-${(hash >>> 0).toString(16)}`;
+  const radians = (paint.gradient.angleDeg * Math.PI) / 180;
+  const centerX = (x1 + x2) / 2;
+  const halfX = (Math.cos(radians) * (x2 - x1)) / 2;
+  const halfY = (Math.sin(radians) * width) / 2;
+  const stops = paint.gradient.stops
+    .map(
+      (stop) =>
+        `<stop offset="${fmt(stop.offset * 100)}%" stop-color="${stop.color}" stop-opacity="${fmt(stop.opacity)}"/>`,
+    )
+    .join('');
+  return {
+    definition: `<defs><linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="${fmt(centerX - halfX)}" y1="${fmt(y - halfY)}" x2="${fmt(centerX + halfX)}" y2="${fmt(y + halfY)}">${stops}</linearGradient></defs>`,
+    value: `url(#${id})`,
+  };
+};
+
+/** Emit deterministic gradient/pattern paints used by underline paths and glyph outlines. */
+const emitDecorationDefs = (groups: readonly Group[]): string => {
+  const paints = new Map<string, TextDecorationPaintInput>();
+  for (const group of groups) {
+    for (const line of [group.piece.underlineLine, group.piece.outlineLine]) {
+      if (line !== null && line !== undefined && line.paint.kind !== 'solid') {
+        paints.set(decorationPaintId(line.paint), line.paint);
+      }
+    }
+  }
+  if (paints.size === 0) return '';
+  const definitions = [...paints.entries()].map(([id, paint]) => {
+    if (paint.kind === 'gradient') {
+      const radians = (paint.gradient.angleDeg * Math.PI) / 180;
+      const dx = Math.cos(radians) * 50;
+      const dy = Math.sin(radians) * 50;
+      const stops = paint.gradient.stops
+        .map(
+          (stop) =>
+            `<stop offset="${fmt(stop.offset * 100)}%" stop-color="${stop.color}" stop-opacity="${fmt(stop.opacity)}"/>`,
+        )
+        .join('');
+      return `<linearGradient id="${id}" x1="${fmt(50 - dx)}%" y1="${fmt(50 - dy)}%" x2="${fmt(50 + dx)}%" y2="${fmt(50 + dy)}%">${stops}</linearGradient>`;
+    }
+    if (paint.kind === 'solid') return '';
+    // pct20 is the public authoring example. Other legal presets retain a
+    // visible deterministic foreground hatch instead of disappearing.
+    const opacityMatch = /^pct(\d+)$/u.exec(paint.preset);
+    const opacity = opacityMatch
+      ? Math.max(0.05, Math.min(0.95, Number(opacityMatch[1]) / 100))
+      : 0.5;
+    return `<pattern id="${id}" width="6" height="6" patternUnits="userSpaceOnUse"><rect width="6" height="6" fill="${paint.background}"/><path d="M0 6L6 0M-1 1L1-1M5 7L7 5" stroke="${paint.foreground}" stroke-width="${fmt(Math.max(0.6, opacity * 3))}"/></pattern>`;
   });
   return `<defs>${definitions.join('')}</defs>`;
 };
@@ -1040,6 +1147,66 @@ const emitWavyUnderlines = (
   return parts.join('');
 };
 
+const emitComplexUnderlines = (
+  groups: readonly Group[],
+  textAnchor: 'start' | 'middle' | 'end',
+  x0: number,
+  baselineY: number,
+): string => {
+  if (!groups.some((group) => group.piece.underlineLine !== null)) return '';
+  const totalWidth = groups.reduce((sum, group) => sum + group.width, 0);
+  let cursor =
+    textAnchor === 'middle' ? x0 - totalWidth / 2 : textAnchor === 'end' ? x0 - totalWidth : x0;
+  const parts: string[] = [];
+  for (const group of groups) {
+    const line = group.piece.underlineLine ?? null;
+    if (line !== null && group.width > 0) {
+      const y = baselineY - baselineShiftPxOf(group.piece) + renderedSizePxOf(group.piece) * 0.12;
+      const gradient =
+        line.paint.kind === 'gradient'
+          ? decorationLineGradient(line.paint, cursor, cursor + group.width, y, line.widthPx)
+          : null;
+      if (gradient !== null) parts.push(gradient.definition);
+      const attrs = [
+        `x1="${fmt(cursor)}"`,
+        `x2="${fmt(cursor + group.width)}"`,
+        `y1="${fmt(y)}"`,
+        `y2="${fmt(y)}"`,
+        `stroke="${gradient?.value ?? decorationPaintValue(line.paint)}"`,
+        `stroke-width="${fmt(line.widthPx)}"`,
+        'fill="none"',
+      ];
+      if (line.degraded) attrs.push('data-render-diagnostic="RENDER_DEGRADED_TEXT_DECORATION"');
+      if (line.dasharray && line.dasharray.length > 0) {
+        attrs.push(`stroke-dasharray="${line.dasharray.map((value) => fmt(value)).join(' ')}"`);
+      }
+      const marker = (
+        end: 'head' | 'tail',
+        type: TextDecorationLineInput['head'],
+      ): string | null => {
+        if (type === null || type === 'none') return null;
+        const id = `text-underline-${end}-${type}-${decorationPaintId(line.paint)}`;
+        const body =
+          type === 'oval'
+            ? `<circle cx="5" cy="5" r="4" fill="${decorationPaintValue(line.paint)}"/>`
+            : type === 'diamond'
+              ? `<path d="M1 5L5 1L9 5L5 9Z" fill="${decorationPaintValue(line.paint)}"/>`
+              : `<path d="M1 1L9 5L1 9Z" fill="${decorationPaintValue(line.paint)}"/>`;
+        parts.push(
+          `<defs><marker id="${id}" markerWidth="8" markerHeight="8" refX="5" refY="5" orient="auto-start-reverse" markerUnits="strokeWidth" viewBox="0 0 10 10">${body}</marker></defs>`,
+        );
+        attrs.push(`${end === 'head' ? 'marker-start' : 'marker-end'}="url(#${id})"`);
+        return id;
+      };
+      marker('head', line.head);
+      marker('tail', line.tail);
+      parts.push(`<line ${attrs.join(' ')}/>`);
+    }
+    cursor += group.width;
+  }
+  return parts.join('');
+};
+
 // Calibrated purely for legibility at typical body-text sizes (no ground-truth
 // wavy-underline spec to match — OOXML doesn't define the wave's geometry,
 // only that it must render as one): amplitude and period scale with the
@@ -1082,6 +1249,8 @@ const samePiece = (a: PieceInput, b: PieceInput): boolean =>
   a.fillHex === b.fillHex &&
   JSON.stringify(a.gradient) === JSON.stringify(b.gradient) &&
   JSON.stringify(a.shadow) === JSON.stringify(b.shadow) &&
+  JSON.stringify(a.underlineLine) === JSON.stringify(b.underlineLine) &&
+  JSON.stringify(a.outlineLine) === JSON.stringify(b.outlineLine) &&
   a.underline === b.underline &&
   a.strike === b.strike &&
   a.superSub === b.superSub &&
@@ -1095,12 +1264,26 @@ const tspan = (g: Group): string => {
     `font-size="${fmt(sizePx)}"`,
     `fill="${p.gradient ? `url(#${gradientId(p.gradient)})` : p.fillHex}"`,
   ];
+  const outlineLine = p.outlineLine ?? null;
+  if (outlineLine !== null) {
+    attrs.push(`stroke="${decorationPaintValue(outlineLine.paint)}"`);
+    attrs.push(`stroke-width="${fmt(outlineLine.widthPx)}"`);
+    attrs.push('paint-order="stroke fill"');
+    if (outlineLine.degraded) {
+      attrs.push('data-render-diagnostic="RENDER_DEGRADED_TEXT_DECORATION"');
+    }
+    if (outlineLine.dasharray && outlineLine.dasharray.length > 0) {
+      attrs.push(
+        `stroke-dasharray="${outlineLine.dasharray.map((value) => fmt(value)).join(' ')}"`,
+      );
+    }
+  }
   if (p.bold) attrs.push('font-weight="700"');
   if (p.italic) attrs.push('font-style="italic"');
   const deco: string[] = [];
   // 'wavy' is drawn as an explicit path by emitWavyUnderlines — resvg has no
   // text-decoration-style support to lean on here.
-  if (p.underline === 'single') deco.push('underline');
+  if (p.underline === 'single' && (p.underlineLine ?? null) === null) deco.push('underline');
   if (p.strike) deco.push('line-through');
   if (deco.length) attrs.push(`text-decoration="${deco.join(' ')}"`);
   if (p.letterSpacingPx !== 0) attrs.push(`letter-spacing="${fmt(p.letterSpacingPx)}"`);
