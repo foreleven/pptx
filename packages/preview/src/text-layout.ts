@@ -148,7 +148,7 @@ export interface PieceInput {
   readonly letterSpacingPx: number;
   readonly fillHex: string;
   readonly gradient: TextGradientInput | null;
-  readonly shadow: TextShadowInput | null;
+  readonly shadows: readonly TextShadowInput[];
   /** `'wavy'` covers every `ST_TextUnderlineType` wavy variant (`wavy`,
    *  `wavyDbl`, `wavyHeavy`) — SVG/resvg has no `text-decoration-style`
    *  support, so the engine draws it as an explicit path (see `wavyPath`). */
@@ -1058,35 +1058,37 @@ const emitTextShadows = (
   x0: number,
   baselineY: number,
 ): string => {
-  if (!groups.some((group) => group.piece.shadow !== null)) return '';
+  if (!groups.some((group) => group.piece.shadows.length > 0)) return '';
   const totalWidth = groups.reduce((sum, group) => sum + group.width, 0);
   let cursor =
     textAnchor === 'middle' ? x0 - totalWidth / 2 : textAnchor === 'end' ? x0 - totalWidth : x0;
   const parts: string[] = [];
   for (const group of groups) {
-    const shadow = group.piece.shadow;
-    if (shadow !== null && group.text.length > 0) {
-      const signature = `${shadow.color}:${shadow.opacity}:${shadow.blurPx}:${shadow.offsetXpx}:${shadow.offsetYpx}:${cursor}:${baselineY}:${group.text}`;
-      const id = shadowId(signature);
-      const sigma = shadow.blurPx / 2;
-      parts.push(
-        `<defs><filter id="${id}" x="-100%" y="-100%" width="300%" height="300%" color-interpolation-filters="sRGB"><feGaussianBlur in="SourceAlpha" stdDeviation="${fmt(sigma)}" result="blur"/><feOffset in="blur" dx="${fmt(shadow.offsetXpx)}" dy="${fmt(shadow.offsetYpx)}" result="offset"/><feFlood flood-color="${shadow.color}" flood-opacity="${fmt(shadow.opacity)}" result="color"/><feComposite in="color" in2="offset" operator="in"/></filter></defs>`,
-      );
+    if (group.piece.shadows.length > 0 && group.text.length > 0) {
       const piece = group.piece;
-      const attrs = [
-        `x="${fmt(cursor)}"`,
-        `y="${fmt(baselineY)}"`,
-        `font-family="${escapeXml(piece.family)}"`,
-        `font-size="${fmt(renderedSizePxOf(piece))}"`,
-        `fill="#000000"`,
-        `filter="url(#${id})"`,
-        'xml:space="preserve"',
-      ];
-      if (piece.bold) attrs.push('font-weight="700"');
-      if (piece.italic) attrs.push('font-style="italic"');
-      if (piece.letterSpacingPx !== 0) attrs.push(`letter-spacing="${fmt(piece.letterSpacingPx)}"`);
-      if (piece.superSub !== 0) attrs.push(`baseline-shift="${fmt(baselineShiftPxOf(piece))}"`);
-      parts.push(`<text ${attrs.join(' ')}>${escapeXml(group.text)}</text>`);
+      for (const shadow of group.piece.shadows) {
+        const signature = `${shadow.color}:${shadow.opacity}:${shadow.blurPx}:${shadow.offsetXpx}:${shadow.offsetYpx}:${cursor}:${baselineY}:${group.text}`;
+        const id = shadowId(signature);
+        const sigma = shadow.blurPx / 2;
+        parts.push(
+          `<defs><filter id="${id}" x="-100%" y="-100%" width="300%" height="300%" color-interpolation-filters="sRGB"><feGaussianBlur in="SourceAlpha" stdDeviation="${fmt(sigma)}" result="blur"/><feOffset in="blur" dx="${fmt(shadow.offsetXpx)}" dy="${fmt(shadow.offsetYpx)}" result="offset"/><feFlood flood-color="${shadow.color}" flood-opacity="${fmt(shadow.opacity)}" result="color"/><feComposite in="color" in2="offset" operator="in"/></filter></defs>`,
+        );
+        const attrs = [
+          `x="${fmt(cursor)}"`,
+          `y="${fmt(baselineY)}"`,
+          `font-family="${escapeXml(piece.family)}"`,
+          `font-size="${fmt(renderedSizePxOf(piece))}"`,
+          `fill="#000000"`,
+          `filter="url(#${id})"`,
+          'xml:space="preserve"',
+        ];
+        if (piece.bold) attrs.push('font-weight="700"');
+        if (piece.italic) attrs.push('font-style="italic"');
+        if (piece.letterSpacingPx !== 0)
+          attrs.push(`letter-spacing="${fmt(piece.letterSpacingPx)}"`);
+        if (piece.superSub !== 0) attrs.push(`baseline-shift="${fmt(baselineShiftPxOf(piece))}"`);
+        parts.push(`<text ${attrs.join(' ')}>${escapeXml(group.text)}</text>`);
+      }
     }
     cursor += group.width;
   }
@@ -1248,7 +1250,7 @@ const samePiece = (a: PieceInput, b: PieceInput): boolean =>
   a.letterSpacingPx === b.letterSpacingPx &&
   a.fillHex === b.fillHex &&
   JSON.stringify(a.gradient) === JSON.stringify(b.gradient) &&
-  JSON.stringify(a.shadow) === JSON.stringify(b.shadow) &&
+  JSON.stringify(a.shadows) === JSON.stringify(b.shadows) &&
   JSON.stringify(a.underlineLine) === JSON.stringify(b.underlineLine) &&
   JSON.stringify(a.outlineLine) === JSON.stringify(b.outlineLine) &&
   a.underline === b.underline &&

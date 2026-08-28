@@ -48,7 +48,14 @@ export type {
   ShadowOptions,
   ShapeEffectOptions,
 } from './effects.ts';
-export { buildEffectList, clearEffects, setEffects, setGlow, setShadow } from './effects.ts';
+export {
+  buildEffectList,
+  clearEffects,
+  parseEffectList,
+  setEffects,
+  setGlow,
+  setShadow,
+} from './effects.ts';
 export type {
   ArrowOptions,
   LineAlignment,

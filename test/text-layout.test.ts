@@ -75,7 +75,7 @@ const piece = (text: string, over: Partial<PieceInput> = {}): PieceInput => ({
   letterSpacingPx: 0,
   fillHex: '#000000',
   gradient: null,
-  shadow: null,
+  shadows: [],
   underline: 'none',
   strike: false,
   superSub: 0,
@@ -172,13 +172,15 @@ describe('layoutTextSvg', () => {
       body([
         para([
           piece('Shadow', {
-            shadow: {
-              color: '#3659E3',
-              opacity: 0.5,
-              blurPx: 4,
-              offsetXpx: 2,
-              offsetYpx: 3,
-            },
+            shadows: [
+              {
+                color: '#3659E3',
+                opacity: 0.5,
+                blurPx: 4,
+                offsetXpx: 2,
+                offsetYpx: 3,
+              },
+            ],
           }),
         ]),
       ]),

@@ -7,9 +7,8 @@ import {
   isLineCompound,
   isLineDash,
   isLineJoin,
+  parseEffectList,
   type Effect,
-  type EffectBlend,
-  type PresetShadow,
   type TextFormat,
   type TextLineProperties,
   type TextRunState,
@@ -750,109 +749,7 @@ const parseTextEffects = (
 ): readonly Effect[] | undefined => {
   const effectLst = firstChildElement(rPr, qname('a', 'effectLst', NS.dml));
   if (!effectLst) return undefined;
-
-  const integerAttr = (element: XmlElement, name: string): number => {
-    const value = Number.parseInt(getAttrValue(element, qname('', name, '')) ?? '0', 10);
-    return Number.isSafeInteger(value) ? value : 0;
-  };
-  const fractionAttr = (element: XmlElement, name: string): number | undefined => {
-    const raw = getAttrValue(element, qname('', name, ''));
-    if (raw === null) return undefined;
-    const value = Number(raw);
-    if (!Number.isFinite(value)) return undefined;
-    return Math.abs(value) > 1 ? value / 100_000 : value;
-  };
-  const readColor = (
-    host: XmlElement,
-  ): { color: string; opacity?: number; unsupported?: string } => {
-    const color = host.children.find(
-      (child): child is XmlElement =>
-        child.kind === 'element' &&
-        child.name.namespaceURI === NS.dml &&
-        ['srgbClr', 'schemeClr', 'sysClr', 'prstClr'].includes(child.name.localName),
-    );
-    if (!color) return { color: '#000000' };
-    const resolved = resolveDrawingColor(color, theme) ?? '#000000';
-    const alpha = firstChildElement(color, qname('a', 'alpha', NS.dml));
-    const opacity = alpha ? fractionAttr(alpha, 'val') : undefined;
-    const normalizedTransforms = color.children.filter(
-      (child): child is XmlElement =>
-        child.kind === 'element' &&
-        child.name.namespaceURI === NS.dml &&
-        child.name.localName !== 'alpha',
-    );
-    const normalized = /^#[\dA-F]{8}$/iu.test(resolved) ? resolved.slice(0, 7) : resolved;
-    return {
-      color: normalized.toUpperCase(),
-      ...(opacity === undefined ? {} : { opacity }),
-      ...(normalizedTransforms.length === 0
-        ? {}
-        : {
-            unsupported: `effect color transforms ${normalizedTransforms
-              .map((transform) => transform.name.localName)
-              .join(', ')} normalized to sRGB`,
-          }),
-    };
-  };
-
-  const effects: Effect[] = [];
-  for (const child of effectLst.children) {
-    if (child.kind !== 'element' || child.name.namespaceURI !== NS.dml) continue;
-    if (child.name.localName === 'blur') {
-      const grow = getAttrValue(child, qname('', 'grow', ''));
-      effects.push({
-        kind: 'blur',
-        radiusEmu: integerAttr(child, 'rad'),
-        ...(grow === null ? {} : { grow: grow !== '0' && grow !== 'false' }),
-      });
-    } else if (child.name.localName === 'fillOverlay') {
-      const solidFill = firstChildElement(child, qname('a', 'solidFill', NS.dml));
-      const color = readColor(solidFill ?? child);
-      const blendRaw = getAttrValue(child, qname('', 'blend', '')) ?? 'over';
-      const blend: EffectBlend = ['over', 'mult', 'screen', 'darken', 'lighten'].includes(blendRaw)
-        ? (blendRaw as EffectBlend)
-        : 'over';
-      effects.push({ kind: 'fillOverlay', ...color, blend });
-    } else if (child.name.localName === 'glow') {
-      effects.push({ kind: 'glow', ...readColor(child), radiusEmu: integerAttr(child, 'rad') });
-    } else if (child.name.localName === 'innerShdw' || child.name.localName === 'outerShdw') {
-      effects.push({
-        kind: child.name.localName,
-        ...readColor(child),
-        blurEmu: integerAttr(child, 'blurRad'),
-        distEmu: integerAttr(child, 'dist'),
-        angleDeg: integerAttr(child, 'dir') / 60_000,
-      });
-    } else if (child.name.localName === 'prstShdw') {
-      const presetRaw = getAttrValue(child, qname('', 'prst', '')) ?? 'shdw1';
-      const preset = /^shdw(?:[1-9]|1\d|20)$/u.test(presetRaw)
-        ? (presetRaw as PresetShadow)
-        : 'shdw1';
-      effects.push({
-        kind: 'prstShdw',
-        preset,
-        ...readColor(child),
-        distEmu: integerAttr(child, 'dist'),
-        angleDeg: integerAttr(child, 'dir') / 60_000,
-      });
-    } else if (child.name.localName === 'reflection') {
-      const startOpacity = fractionAttr(child, 'stA');
-      const endOpacity = fractionAttr(child, 'endA');
-      const scaleY = fractionAttr(child, 'sy');
-      effects.push({
-        kind: 'reflection',
-        blurEmu: integerAttr(child, 'blurRad'),
-        distEmu: integerAttr(child, 'dist'),
-        angleDeg: integerAttr(child, 'dir') / 60_000,
-        ...(startOpacity === undefined ? {} : { startOpacity }),
-        ...(endOpacity === undefined ? {} : { endOpacity }),
-        ...(scaleY === undefined ? {} : { scaleY }),
-      });
-    } else if (child.name.localName === 'softEdge') {
-      effects.push({ kind: 'softEdge', radiusEmu: integerAttr(child, 'rad') });
-    }
-  }
-  return effects;
+  return parseEffectList(effectLst, (color) => resolveDrawingColor(color, theme));
 };
 // -- Color transforms (ECMA-376 §20.1.2.3.x) --------------------------------
 //

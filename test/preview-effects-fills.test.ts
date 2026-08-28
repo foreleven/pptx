@@ -119,16 +119,16 @@ describe('renderSlideToSvg: reflection effect', () => {
     const svg = await renderWithReflection();
     const grad = svg.match(/<linearGradient[\s\S]*?<\/linearGradient>/)?.[0] ?? '';
     // stA 50000 → 0.5 at the contact edge; endA 300 → ~0 at the far edge.
-    expect(grad).toContain('stop-opacity="0.500"');
+    expect(grad).toContain('stop-opacity="0.5"');
     expect(grad).toContain('stop-opacity="0.003"');
     // The reflection group's negative Y scale flips its local mask axis, so
     // the contact-edge alpha is stored at offset 1 and renders at the top.
-    expect(grad).toMatch(/offset="1"[^>]*stop-opacity="0\.500"/);
+    expect(grad).toMatch(/offset="1"[^>]*stop-opacity="0\.5"/);
   });
 
   it('applies the authored blur radius to the reflected copy', async () => {
     const svg = await renderWithReflection();
-    expect(svg).toContain('<feGaussianBlur stdDeviation="0.33"/>');
+    expect(svg).toContain('<feGaussianBlur stdDeviation="0.333"/>');
     expect(svg).toMatch(/filter="url\(#[^)]+\)"[^>]*data-pptx-reflection="1"/);
   });
 

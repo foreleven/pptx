@@ -10,6 +10,7 @@ import {
   type ShapeEffectOptions,
   type ShadowOptions,
   clearEffects as clearEffectsImpl,
+  parseEffectList,
   setEffects,
   setGlow,
   setShadow,
@@ -71,7 +72,7 @@ export type ShapeEffect =
  * Lengths are EMU; angles are degrees clockwise from 3 o'clock;
  * opacity is a unit fraction (0..1) when the spec exposes one.
  */
-export type ShapeEffectAny =
+type ShapeEffectAnyCore =
   | {
       readonly kind: 'fillOverlay';
       readonly color: string;
@@ -124,6 +125,11 @@ export type ShapeEffectAny =
     }
   | { readonly kind: 'softEdge'; readonly radiusEmu: number }
   | { readonly kind: 'blur'; readonly radiusEmu: number; readonly grow?: boolean };
+
+export type ShapeEffectAny = ShapeEffectAnyCore & {
+  /** Import-only normalization/degradation explanation. */
+  readonly unsupported?: string;
+};
 
 export const getShapeEffect = (shape: SlideShapeData): ShapeEffect | null => {
   const spPr = firstChildElement(shape[SHAPE_ELEMENT], qname('p', 'spPr', NS.pml));
@@ -187,136 +193,31 @@ const parseEffectLst = (
   effectLst: XmlElement,
   theme: PresentationTheme | null,
 ): ShapeEffectAny[] => {
-  const readEffectColor = (host: XmlElement): { color: string; opacity?: number } => {
-    let inner: XmlElement | null = null;
-    for (const c of host.children) {
-      if (c.kind !== 'element' || c.name.namespaceURI !== NS.dml) continue;
-      if (
-        c.name.localName === 'srgbClr' ||
-        c.name.localName === 'schemeClr' ||
-        c.name.localName === 'sysClr' ||
-        c.name.localName === 'prstClr'
-      ) {
-        inner = c;
-        break;
-      }
-    }
-    if (!inner) return { color: '' };
-    let opacity: number | undefined;
-    const alphaEl = firstChildElement(inner, qname('a', 'alpha', NS.dml));
-    if (alphaEl) {
-      const a = getAttrValue(alphaEl, qname('', 'val', ''));
-      if (a !== null) {
-        let n = Number.parseFloat(a);
-        if (Number.isFinite(n)) {
-          if (Math.abs(n) > 1) n = n / 100000;
-          opacity = n;
-        }
-      }
-    }
-    const hex = resolveDrawingColor(inner, theme);
-    // Effects expose opacity as its own field, so do not duplicate the same
-    // alpha transform in the returned color string.
-    const color =
-      opacity !== undefined && /^#[0-9A-F]{8}$/.test(hex ?? '') ? hex!.slice(0, 7) : (hex ?? '');
-    return { color, ...(opacity !== undefined ? { opacity } : {}) };
-  };
-
-  const out: ShapeEffectAny[] = [];
-  for (const child of effectLst.children) {
-    if (child.kind !== 'element' || child.name.namespaceURI !== NS.dml) continue;
-    const local = child.name.localName;
-    if (local === 'fillOverlay') {
-      const solidFill = firstChildElement(child, qname('a', 'solidFill', NS.dml));
-      const c = readEffectColor(solidFill ?? child);
-      const rawBlend = getAttrValue(child, qname('', 'blend', '')) ?? 'over';
-      const blend: EffectBlend = ['over', 'mult', 'screen', 'darken', 'lighten'].includes(rawBlend)
-        ? (rawBlend as EffectBlend)
-        : 'over';
-      out.push({
-        kind: 'fillOverlay',
-        color: c.color,
-        blend,
-        ...(c.opacity === undefined ? {} : { opacity: c.opacity }),
-      });
-    } else if (local === 'outerShdw' || local === 'innerShdw') {
-      const blur = Number.parseInt(getAttrValue(child, qname('', 'blurRad', '')) ?? '0', 10) || 0;
-      const dist = Number.parseInt(getAttrValue(child, qname('', 'dist', '')) ?? '0', 10) || 0;
-      const dir = Number.parseInt(getAttrValue(child, qname('', 'dir', '')) ?? '0', 10) || 0;
-      const c = readEffectColor(child);
-      out.push({
-        kind: local,
-        color: c.color,
-        blurEmu: blur,
-        distEmu: dist,
-        angleDeg: dir / 60000,
-        ...(c.opacity !== undefined ? { opacity: c.opacity } : {}),
-      });
-    } else if (local === 'glow') {
-      const rad = Number.parseInt(getAttrValue(child, qname('', 'rad', '')) ?? '0', 10) || 0;
-      const c = readEffectColor(child);
-      out.push({
-        kind: 'glow',
-        color: c.color,
-        radiusEmu: rad,
-        ...(c.opacity !== undefined ? { opacity: c.opacity } : {}),
-      });
-    } else if (local === 'prstShdw') {
-      const dist = Number.parseInt(getAttrValue(child, qname('', 'dist', '')) ?? '0', 10) || 0;
-      const dir = Number.parseInt(getAttrValue(child, qname('', 'dir', '')) ?? '0', 10) || 0;
-      const rawPreset = getAttrValue(child, qname('', 'prst', '')) ?? 'shdw1';
-      const preset = /^shdw(?:[1-9]|1\d|20)$/u.test(rawPreset)
-        ? (rawPreset as PresetShadow)
-        : 'shdw1';
-      const c = readEffectColor(child);
-      out.push({
-        kind: 'prstShdw',
-        preset,
-        color: c.color,
-        distEmu: dist,
-        angleDeg: dir / 60000,
-        ...(c.opacity !== undefined ? { opacity: c.opacity } : {}),
-      });
-    } else if (local === 'reflection') {
-      const blur = Number.parseInt(getAttrValue(child, qname('', 'blurRad', '')) ?? '0', 10) || 0;
-      const dist = Number.parseInt(getAttrValue(child, qname('', 'dist', '')) ?? '0', 10) || 0;
-      const dir = Number.parseInt(getAttrValue(child, qname('', 'dir', '')) ?? '0', 10) || 0;
-      // `stA`/`endA` are ST_PositiveFixedPercentage (0..100000); `sy` is
-      // ST_Percentage and may be negative to encode the mirror flip.
-      const pctFraction = (name: string): number | undefined => {
-        const raw = getAttrValue(child, qname('', name, ''));
-        if (raw === null) return undefined;
-        let n = Number.parseFloat(raw);
-        if (!Number.isFinite(n)) return undefined;
-        if (Math.abs(n) > 1) n = n / 100000;
-        return n;
+  return parseEffectList(effectLst, (color) => resolveDrawingColor(color, theme)).map((effect) => {
+    if (effect.kind === 'reflection') {
+      const { endOpacity, ...rest } = effect;
+      return {
+        ...rest,
+        blurEmu: effect.blurEmu ?? 0,
+        distEmu: effect.distEmu ?? 0,
+        angleDeg: effect.angleDeg ?? 0,
+        ...(endOpacity === undefined ? {} : { opacity: endOpacity }),
       };
-      const opacity = pctFraction('endA');
-      const startOpacity = pctFraction('stA');
-      const scaleY = pctFraction('sy');
-      out.push({
-        kind: 'reflection',
-        blurEmu: blur,
-        distEmu: dist,
-        angleDeg: dir / 60000,
-        ...(opacity !== undefined ? { opacity } : {}),
-        ...(startOpacity !== undefined ? { startOpacity } : {}),
-        ...(scaleY !== undefined ? { scaleY } : {}),
-      });
-    } else if (local === 'softEdge') {
-      const rad = Number.parseInt(getAttrValue(child, qname('', 'rad', '')) ?? '0', 10) || 0;
-      out.push({ kind: 'softEdge', radiusEmu: rad });
-    } else if (local === 'blur') {
-      const rad = Number.parseInt(getAttrValue(child, qname('', 'rad', '')) ?? '0', 10) || 0;
-      const grow = getAttrValue(child, qname('', 'grow', ''));
-      out.push({
-        kind: 'blur',
-        radiusEmu: rad,
-        ...(grow === null ? {} : { grow: grow !== '0' && grow !== 'false' }),
-      });
     }
-  }
-  return out;
+    if (effect.kind === 'blur') return { ...effect, radiusEmu: effect.radiusEmu ?? 0 };
+    if (effect.kind === 'softEdge') return effect;
+    if (effect.kind === 'fillOverlay') return effect;
+    if (effect.kind === 'glow') return { ...effect, radiusEmu: effect.radiusEmu ?? 0 };
+    if (effect.kind === 'prstShdw') {
+      return { ...effect, distEmu: effect.distEmu ?? 0, angleDeg: effect.angleDeg ?? 0 };
+    }
+    return {
+      ...effect,
+      blurEmu: effect.blurEmu ?? 0,
+      distEmu: effect.distEmu ?? 0,
+      angleDeg: effect.angleDeg ?? 0,
+    };
+  });
 };
 
 export const getShapeEffects = (

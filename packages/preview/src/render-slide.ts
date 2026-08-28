@@ -163,6 +163,7 @@ import {
   type TextWarpPreview,
   type VerticalLayout,
 } from './text-layout.ts';
+import { buildSvgEffectPlan, type SvgEffect, type SvgEffectPlan } from './effects.ts';
 
 export type { RenderSlideOptions, TextMeasurer, FontSpec, MeasureResult } from './text-layout.ts';
 
@@ -2145,24 +2146,10 @@ const textEffectFill = (
 };
 
 const textEffectShadow = (
-  effects: readonly Effect[] | null | undefined,
+  effect: Effect,
   scale: number,
   authoredColor = '#000000',
-): PieceInput['shadow'] => {
-  if (!effects || effects.length === 0) return null;
-  const prioritizedKinds: readonly Effect['kind'][] = [
-    'outerShdw',
-    'prstShdw',
-    'glow',
-    'reflection',
-    'innerShdw',
-    'blur',
-    'softEdge',
-  ];
-  const effect = prioritizedKinds
-    .flatMap((kind) => effects.filter((item) => item.kind === kind))
-    .at(-1);
-  if (!effect) return null;
+): PieceInput['shadows'][number] | null => {
   const px = (emu: number): number => (emu / EMU_PER_PX) * scale;
   if (effect.kind === 'outerShdw' || effect.kind === 'innerShdw') {
     const radians = ((effect.angleDeg ?? 0) * Math.PI) / 180;
@@ -2219,6 +2206,16 @@ const textEffectShadow = (
     offsetYpx: 0,
   };
 };
+
+const textEffectShadows = (
+  effects: readonly Effect[] | null | undefined,
+  scale: number,
+  authoredColor = '#000000',
+): readonly PieceInput['shadows'][number][] =>
+  effects?.flatMap((effect) => {
+    const shadow = textEffectShadow(effect, scale, authoredColor);
+    return shadow === null ? [] : [shadow];
+  }) ?? [];
 
 // `effectivePt` is the post-autofit font size in points. Callers pass
 // `format.size` (the authored size, if any) scaled by the body's
@@ -2357,13 +2354,17 @@ const renderRun = (
       `text-shadow:${format.textShadow.offsetXPt}pt ${format.textShadow.offsetYPt}pt ${format.textShadow.blurPt}pt ${format.textShadow.color}${alpha}`,
     );
   } else {
-    const approximation = textEffectShadow(format?.effects, 1, format?.color ?? '#000000');
-    if (approximation !== null) {
-      const alpha = Math.round(approximation.opacity * 255)
-        .toString(16)
-        .padStart(2, '0');
+    const approximations = textEffectShadows(format?.effects, 1, format?.color ?? '#000000');
+    if (approximations.length > 0) {
       styles.push(
-        `text-shadow:${approximation.offsetXpx}px ${approximation.offsetYpx}px ${approximation.blurPx}px ${approximation.color}${alpha}`,
+        `text-shadow:${approximations
+          .map((approximation) => {
+            const alpha = Math.round(approximation.opacity * 255)
+              .toString(16)
+              .padStart(2, '0');
+            return `${approximation.offsetXpx}px ${approximation.offsetYpx}px ${approximation.blurPx}px ${approximation.color}${alpha}`;
+          })
+          .join(',')}`,
       );
     }
   }
@@ -2705,7 +2706,9 @@ export const buildSvgTextInput = (a: SvgTextArgs): TextBodyInput => {
               offsetYpx: fmt.textShadow.offsetYPt * scale * PX_PER_PT,
             }
           : null;
-      const shadow = compatibilityShadow ?? textEffectShadow(fmt?.effects, scale, fillHex);
+      const shadows = compatibilityShadow
+        ? [compatibilityShadow]
+        : textEffectShadows(fmt?.effects, scale, fillHex);
       const gradient =
         fmt?.gradient && 'stops' in fmt.gradient ? textGradientInput(fmt.gradient) : null;
       const underlineLine = decorationLineInput(fmt, 'underline', fillHex, sizePx, scale);
@@ -2718,7 +2721,7 @@ export const buildSvgTextInput = (a: SvgTextArgs): TextBodyInput => {
         letterSpacingPx,
         fillHex,
         gradient,
-        shadow,
+        shadows,
         underline: underlineStyleOf(fmt),
         underlineLine,
         outlineLine,
@@ -2813,7 +2816,7 @@ const breakPiece = (): PieceInput => ({
   letterSpacingPx: 0,
   fillHex: '#000000',
   gradient: null,
-  shadow: null,
+  shadows: [],
   underline: 'none',
   underlineLine: null,
   outlineLine: null,
@@ -6715,19 +6718,17 @@ const renderShape = (
   // Effects (`<a:effectLst>`): outerShdw / innerShdw / glow / softEdge
   // / reflection / blur. Build a single SVG <filter> chain so multiple
   // effects compose the way PowerPoint composes them.
-  const fx = buildEffectsFilter(pres, shape);
-  const filterAttr = fx ? ` filter="url(#${fx.id})"` : '';
-  let fxDefs = fx ? fx.defs : '';
+  const fx = buildShapeEffectPlan(pres, shape, { x, y, w, h });
+  const filterAttr = fx?.filterId ? ` filter="url(#${fx.filterId})"` : '';
+  const fxDefs = fx ? fx.defs : '';
   // Reflection can't live in the `<filter>` chain (SVG has no flip-and-fade
   // primitive), so duplicate the complete raw shape — geometry and text —
   // before the geometry-only effects filter wraps the original.
-  const reflection = buildReflection(pres, shape, rawShapeContent, { x, y, w, h });
+  const reflectedShapeContent = fx?.reflect(rawShapeContent) ?? '';
   // Apply the filter to the geometry only — text overlays use foreignObject
   // and react badly to feGaussianBlur (DOM gets rasterized).
   geomSvg = `<g${filterAttr}>${geomSvg}</g>`;
-  if (reflection) fxDefs += reflection.defs;
   const originalShapeContent = `<g${transform}>${geomSvg}</g>${placedText}`;
-  const reflectedShapeContent = reflection?.svg ?? '';
 
   // B6 — Shape-level hyperlinks + slide-jump click actions. Wrap the
   // rendered shape in an SVG <a href> so the playground preview is
@@ -6796,201 +6797,91 @@ const renderShape = (
 // ---------------------------------------------------------------------------
 // Effects → SVG filter.
 
-interface EffectsResult {
-  readonly id: string;
+interface ShapeEffectPlan extends SvgEffectPlan {
   readonly defs: string;
 }
 
-interface ReflectionResult {
-  readonly svg: string;
-  readonly defs: string;
-}
-
-// Builds the reflection: a vertically mirrored copy of the shape's raw
-// geometry and text placed below its bottom edge, faded by an opacity mask.
-// PowerPoint encodes the mirror as a negative `sy`; `stA`/`endA` give the
-// alpha at the near (contact) and far edges, `dist` the gap below the shape.
-const buildReflection = (
+const buildShapeEffectPlan = (
   pres: PresentationData,
   shape: SlideShapeData,
-  shapeRaw: string,
   box: { x: number; y: number; w: number; h: number },
-): ReflectionResult | null => {
+): ShapeEffectPlan | null => {
   let effects: readonly ReturnType<typeof getShapeEffects>[number][];
   try {
     effects = getShapeEffectsEffective(pres, shape);
   } catch {
     return null;
   }
-  const refl = effects.find((e) => e.kind === 'reflection');
-  if (!refl || refl.kind !== 'reflection') return null;
 
-  // Honor the authored vertical scale (signed: negative = the flip);
-  // default to a full-height mirror when the deck omits `sy`, since a
-  // reflection with no flip isn't a reflection.
-  const f = refl.scaleY ?? -1;
-  const startA = refl.startOpacity ?? 1;
-  const endA = refl.opacity ?? 0;
-  // Geometry coords are emitted in px (see `E`), so the transform math
-  // works in px too: contact edge at the shape's bottom, gap pushed down.
-  const contactPx = (box.y + box.h) / EMU_PER_PX;
-  const distPx = refl.distEmu / EMU_PER_PX;
-  // scale(1,f) about y=contactPx, then translate the whole thing down by dist.
-  const transform = `translate(0 ${(distPx + contactPx * (1 - f)).toFixed(2)}) scale(1 ${f})`;
-
-  const maskId = mintId();
-  const gradId = mintId();
-  const blurPx = refl.blurEmu / EMU_PER_PX / 2;
-  const filterId = blurPx > 0 ? mintId() : null;
-  // The mask lives on the negatively scaled reflection group, so its local
-  // objectBoundingBox Y axis is visually inverted with the shape. Put endA at
-  // local y=0 and startA at y=1 so the rendered contact edge is the darker one.
-  // White luminance × stop-opacity becomes the reflected alpha.
-  const defs =
-    `<defs><linearGradient id="${gradId}" x1="0" y1="0" x2="0" y2="1">` +
-    `<stop offset="0" stop-color="#fff" stop-opacity="${endA.toFixed(3)}"/>` +
-    `<stop offset="1" stop-color="#fff" stop-opacity="${startA.toFixed(3)}"/>` +
-    `</linearGradient>` +
-    `<mask id="${maskId}" maskContentUnits="objectBoundingBox">` +
-    `<rect width="1" height="1" fill="url(#${gradId})"/></mask>` +
-    (filterId
-      ? `<filter id="${filterId}" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="${blurPx.toFixed(2)}"/></filter>`
-      : '') +
-    `</defs>`;
-  const filterAttr = filterId ? ` filter="url(#${filterId})"` : '';
-  const svg = `<g transform="${transform}" mask="url(#${maskId})"${filterAttr} data-pptx-reflection="1">${shapeRaw}</g>`;
-  return { svg, defs };
-};
-
-const buildEffectsFilter = (
-  pres: PresentationData,
-  shape: SlideShapeData,
-): EffectsResult | null => {
-  let effects: readonly ReturnType<typeof getShapeEffects>[number][];
-  try {
-    effects = getShapeEffectsEffective(pres, shape);
-  } catch {
-    return null;
-  }
-  if (effects.length === 0) return null;
-
-  const id = mintId();
-  const primitives: string[] = [];
-  // Chain primitives by passing each result as `in` to the next merge.
-  // The shape's original alpha + RGB live in SourceGraphic / SourceAlpha.
-  const layers: string[] = [];
-
-  for (const e of effects) {
-    if (e.kind === 'fillOverlay') {
-      const i = primitives.length;
-      const flood = `overlayFlood${i}`;
-      const clipped = `overlayClip${i}`;
-      const out = `overlayOut${i}`;
-      const mode = e.blend === 'mult' ? 'multiply' : e.blend === 'over' ? 'normal' : e.blend;
-      primitives.push(
-        `<feFlood flood-color="${e.color || '#000000'}" flood-opacity="${(e.opacity ?? 1).toFixed(3)}" result="${flood}"/>`,
-        `<feComposite in="${flood}" in2="SourceAlpha" operator="in" result="${clipped}"/>`,
-        `<feBlend in="SourceGraphic" in2="${clipped}" mode="${mode}" result="${out}"/>`,
-      );
-      layers.length = 0;
-      layers.push(out);
-    } else if (e.kind === 'outerShdw' || e.kind === 'prstShdw') {
-      // dist + angle → dx, dy in EMU → px.
-      const rad = (e.angleDeg * Math.PI) / 180;
-      const dx = (e.distEmu * Math.cos(rad)) / EMU_PER_PX;
-      const dy = (e.distEmu * Math.sin(rad)) / EMU_PER_PX;
-      const blurPx = e.kind === 'outerShdw' ? e.blurEmu / EMU_PER_PX / 2 : 25_400 / EMU_PER_PX / 2;
-      const opacity = e.opacity ?? 1;
-      const color = e.color || '#000000';
-      // feDropShadow handles the whole shadow primitive in one go.
-      const out = `shdwOut${primitives.length}`;
-      primitives.push(
-        `<feDropShadow dx="${dx.toFixed(2)}" dy="${dy.toFixed(2)}" stdDeviation="${blurPx.toFixed(2)}" flood-color="${color}" flood-opacity="${opacity.toFixed(3)}" result="${out}"/>`,
-      );
-      layers.push(out);
-    } else if (e.kind === 'innerShdw') {
-      // SVG has no innerShadow primitive — synthesize via:
-      //   inset = (sourceAlpha offset, blurred) - sourceAlpha (inverted)
-      // and re-flood with the shadow color.
-      const rad = (e.angleDeg * Math.PI) / 180;
-      const dx = (e.distEmu * Math.cos(rad)) / EMU_PER_PX;
-      const dy = (e.distEmu * Math.sin(rad)) / EMU_PER_PX;
-      const blurPx = e.blurEmu / EMU_PER_PX / 2;
-      const color = e.color || '#000000';
-      const opacity = e.opacity ?? 1;
-      const i = primitives.length;
-      primitives.push(
-        `<feGaussianBlur in="SourceAlpha" stdDeviation="${blurPx.toFixed(2)}" result="innerBlur${i}"/>`,
-        `<feOffset in="innerBlur${i}" dx="${dx.toFixed(2)}" dy="${dy.toFixed(2)}" result="innerOff${i}"/>`,
-        `<feComposite in="innerOff${i}" in2="SourceAlpha" operator="arithmetic" k2="-1" k3="1" result="innerMask${i}"/>`,
-        `<feFlood flood-color="${color}" flood-opacity="${opacity.toFixed(3)}" result="innerCol${i}"/>`,
-        `<feComposite in="innerCol${i}" in2="innerMask${i}" operator="in" result="innerOut${i}"/>`,
-      );
-      layers.push(`innerOut${i}`);
-    } else if (e.kind === 'glow') {
-      // PowerPoint / LibreOffice keep the glow color near-opaque for most of
-      // the `rad` reach and feather only at the outer edge. Compositing flood
-      // 'in' a single wide Gaussian caps peak alpha at ~0.5 and over-diffuses,
-      // so decouple the saturated band (a large dilation) from the feather (a
-      // small blur): dilate by half the full reach, then blur lightly.
-      const radiusPx = e.radiusEmu / EMU_PER_PX;
-      const dilatePx = radiusPx * 0.5;
-      const featherPx = radiusPx * 0.3;
-      const color = e.color || '#FFFFFF';
-      const opacity = e.opacity ?? 1;
-      const i = primitives.length;
-      primitives.push(
-        `<feMorphology in="SourceAlpha" operator="dilate" radius="${dilatePx.toFixed(2)}" result="glowExp${i}"/>`,
-        `<feGaussianBlur in="glowExp${i}" stdDeviation="${featherPx.toFixed(2)}" result="glowBlur${i}"/>`,
-        `<feFlood flood-color="${color}" flood-opacity="${opacity.toFixed(3)}" result="glowCol${i}"/>`,
-        `<feComposite in="glowCol${i}" in2="glowBlur${i}" operator="in" result="glowOut${i}"/>`,
-      );
-      layers.push(`glowOut${i}`);
-    } else if (e.kind === 'softEdge') {
-      const blurPx = e.radiusEmu / EMU_PER_PX / 2;
-      // Soft-edge feathers the shape's mask. Replace the source by a
-      // blurred version of itself.
-      const i = primitives.length;
-      primitives.push(
-        `<feGaussianBlur in="SourceGraphic" stdDeviation="${blurPx.toFixed(2)}" result="softOut${i}"/>`,
-      );
-      // softEdge replaces the source; we drop earlier layers and the
-      // unmodified source is no longer painted on top.
-      layers.length = 0;
-      layers.push(`softOut${i}`);
-    } else if (e.kind === 'blur') {
-      const blurPx = e.radiusEmu / EMU_PER_PX / 2;
-      const i = primitives.length;
-      primitives.push(
-        `<feGaussianBlur in="SourceGraphic" stdDeviation="${blurPx.toFixed(2)}" result="blurOut${i}"/>`,
-      );
-      layers.length = 0;
-      layers.push(`blurOut${i}`);
+  const normalized: SvgEffect[] = [];
+  for (const effect of effects) {
+    if (effect.kind === 'fillOverlay') {
+      normalized.push({
+        kind: effect.kind,
+        color: effect.color || '#000000',
+        blend: effect.blend,
+        ...(effect.opacity === undefined ? {} : { opacity: effect.opacity }),
+      });
+    } else if (effect.kind === 'outerShdw' || effect.kind === 'innerShdw') {
+      normalized.push({
+        kind: effect.kind === 'outerShdw' ? 'outerShadow' : 'innerShadow',
+        color: effect.color || '#000000',
+        blurPx: effect.blurEmu / EMU_PER_PX,
+        distancePx: effect.distEmu / EMU_PER_PX,
+        angleDeg: effect.angleDeg,
+        ...(effect.opacity === undefined ? {} : { opacity: effect.opacity }),
+      });
+    } else if (effect.kind === 'prstShdw') {
+      normalized.push({
+        kind: 'presetShadow',
+        color: effect.color || '#000000',
+        blurPx: 25_400 / EMU_PER_PX,
+        distancePx: effect.distEmu / EMU_PER_PX,
+        angleDeg: effect.angleDeg,
+        ...(effect.opacity === undefined ? {} : { opacity: effect.opacity }),
+      });
+    } else if (effect.kind === 'glow') {
+      normalized.push({
+        kind: effect.kind,
+        color: effect.color || '#FFFFFF',
+        radiusPx: effect.radiusEmu / EMU_PER_PX,
+        ...(effect.opacity === undefined ? {} : { opacity: effect.opacity }),
+      });
+    } else if (effect.kind === 'reflection') {
+      normalized.push({
+        kind: effect.kind,
+        blurPx: effect.blurEmu / EMU_PER_PX,
+        distancePx: effect.distEmu / EMU_PER_PX,
+        angleDeg: effect.angleDeg,
+        ...(effect.startOpacity === undefined ? {} : { startOpacity: effect.startOpacity }),
+        ...(effect.opacity === undefined ? {} : { endOpacity: effect.opacity }),
+        ...(effect.scaleY === undefined ? {} : { scaleY: effect.scaleY }),
+      });
+    } else if (effect.kind === 'softEdge') {
+      normalized.push({ kind: effect.kind, radiusPx: effect.radiusEmu / EMU_PER_PX });
+    } else if (effect.kind === 'blur') {
+      normalized.push({
+        kind: effect.kind,
+        radiusPx: effect.radiusEmu / EMU_PER_PX,
+        ...(effect.grow === undefined ? {} : { grow: effect.grow }),
+      });
     }
-    // Reflection is handled outside the filter chain (see buildReflection):
-    // SVG `<filter>` has no flip-and-fade primitive.
   }
+  if (normalized.length === 0) return null;
 
-  // Compose: paint each effect layer plus the original SourceGraphic.
-  // Shadows want to sit behind the source; glow behind too; innerShdw
-  // and softEdge already replace bits of the source. Doing the merge
-  // in order produces reasonable layering for the common cases.
-  if (layers.length === 0) return null;
-
-  // Always paint the original source last so it sits on top of shadows /
-  // glows. softEdge/blur replaced the source so we don't double-paint.
-  const replacedSource = effects.some(
-    (e) => e.kind === 'softEdge' || e.kind === 'blur' || e.kind === 'fillOverlay',
-  );
-  const mergeChildren = layers.map((l) => `<feMergeNode in="${l}"/>`).join('');
-  const sourceMerge = replacedSource ? '' : '<feMergeNode in="SourceGraphic"/>';
-  primitives.push(`<feMerge>${mergeChildren}${sourceMerge}</feMerge>`);
-
-  const defs = `<defs><filter id="${id}" x="-25%" y="-25%" width="150%" height="150%">${primitives.join('')}</filter></defs>`;
-  return { id, defs };
+  const plan = buildSvgEffectPlan(normalized, {
+    id: mintId(),
+    bounds: {
+      x: box.x / EMU_PER_PX,
+      y: box.y / EMU_PER_PX,
+      width: box.w / EMU_PER_PX,
+      height: box.h / EMU_PER_PX,
+    },
+    reflectionMaskMode: 'objectBoundingBox',
+    reflectionDataAttribute: { name: 'data-pptx-reflection', value: '1' },
+  });
+  return { ...plan, defs: plan.defs === '' ? '' : `<defs>${plan.defs}</defs>` };
 };
-
-// ---------------------------------------------------------------------------
 // Slide composition.
 
 // getSlideShapes / getSlideLayoutShapes / getSlideMasterShapes flatten group

@@ -38,13 +38,46 @@ import {
   setShapeText,
 } from '../src/api/index.ts';
 import { readZip, writeZip } from '../src/internal/opc/index.ts';
-import { renderSlideToSvg } from '../packages/preview/src/index.ts';
+import { buildSvgEffectPlan, renderSlideToSvg } from '../packages/preview/src/index.ts';
 import { buildPng } from './lib/build-png.ts';
 import { attrsOf, countTags, textContentOf } from './lib/svg-query.ts';
 
 const fixturePath = fileURLToPath(new URL('./fixtures/minimal/blank.pptx', import.meta.url));
 
 const loadBlank = async () => loadPresentation(await readFile(fixturePath));
+
+describe('shared SVG effect plan', () => {
+  it('chains source transforms without discarding earlier effect layers', () => {
+    const plan = buildSvgEffectPlan(
+      [
+        {
+          kind: 'outerShadow',
+          color: '#000000',
+          blurPx: 5,
+          distancePx: 3,
+          angleDeg: 90,
+          opacity: 0.45,
+        },
+        { kind: 'fillOverlay', color: '#F26B5B', opacity: 0.4, blend: 'mult' },
+        { kind: 'blur', radiusPx: 4 },
+        {
+          kind: 'innerShadow',
+          color: '#3659E3',
+          blurPx: 4,
+          distancePx: 2,
+          angleDeg: 45,
+          opacity: 0.65,
+        },
+      ],
+      { id: 'composed', bounds: { x: 0, y: 0, width: 100, height: 40 } },
+    );
+    expect(plan.defs).toContain('<feBlend in="SourceGraphic"');
+    expect(plan.defs).toContain('<feGaussianBlur in="overlayOut1"');
+    expect(plan.defs).toContain(
+      '<feMergeNode in="shadowOut0"/><feMergeNode in="blurOut4"/><feMergeNode in="innerOut5"/>',
+    );
+  });
+});
 
 const blankSlide = async () => {
   const pres = await loadBlank();
@@ -350,6 +383,47 @@ describe('renderSlideToSvg', () => {
     expect(foreignObject).toContain('text-shadow:0px 7px 1px #3659E3a6');
     expect(svgText).toContain('flood-color="#3659E3"');
     expect(svgText).toContain('dy="7"');
+  });
+
+  it('keeps every composed text effect perceptible instead of selecting one winner', async () => {
+    const { pres, slide } = await blankSlide();
+    const box = addSlideTextBox(slide, {
+      x: inches(1),
+      y: inches(1),
+      w: inches(5),
+      h: inches(1),
+      text: 'composed effects',
+    });
+    setShapeRunFormat(box, 0, 0, {
+      color: '#3659E3',
+      effects: [
+        { kind: 'glow', color: '#35B9C6', radiusEmu: 57150, opacity: 0.5 },
+        {
+          kind: 'outerShdw',
+          color: '#000000',
+          blurEmu: 47625,
+          distEmu: 28575,
+          angleDeg: 45,
+          opacity: 0.45,
+        },
+        {
+          kind: 'reflection',
+          blurEmu: 9525,
+          distEmu: 9525,
+          angleDeg: 90,
+          startOpacity: 0.65,
+          endOpacity: 0,
+          scaleY: -1,
+        },
+      ],
+    });
+
+    const foreignObject = renderSlideToSvg(pres, slide, { textLayout: 'foreignObject' });
+    const svgText = renderSlideToSvg(pres, slide, { textLayout: 'svg' });
+    expect(foreignObject).toMatch(/text-shadow:[^;]*#35B9C6[^;]*,[^;]*#000000[^;]*,[^;]*#3659E3/u);
+    expect(svgText).toContain('flood-color="#35B9C6"');
+    expect(svgText).toContain('flood-color="#000000"');
+    expect(svgText).toContain('flood-color="#3659E3"');
   });
 
   it('marks deterministic group-fill and outline-arrow fallbacks with a render diagnostic', async () => {

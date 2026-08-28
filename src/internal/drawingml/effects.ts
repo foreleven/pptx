@@ -6,7 +6,15 @@
 // insertion slot using `effectInsertionIndex`.
 
 import { emuExtent } from '../bounds.ts';
-import { NS, type XmlElement, attr, elem, qname } from '../xml/index.ts';
+import {
+  NS,
+  type XmlElement,
+  attr,
+  elem,
+  firstChildElement,
+  getAttrValue,
+  qname,
+} from '../xml/index.ts';
 import { buildColorElement } from './color.ts';
 
 const NAME_EFFECT_LST = qname('a', 'effectLst', NS.dml);
@@ -127,6 +135,147 @@ type EffectCore =
 export type Effect = EffectCore & {
   /** Import-only normalization/degradation explanation; ignored by renderers. */
   readonly unsupported?: string;
+};
+
+/** Parse one fixed `CT_EffectList`, materializing unsupported details with a diagnostic. */
+export const parseEffectList = (
+  effectLst: XmlElement,
+  resolveColor: (color: XmlElement) => string | null,
+): readonly Effect[] => {
+  const effects: Effect[] = [];
+  for (const child of effectLst.children) {
+    if (child.kind !== 'element' || child.name.namespaceURI !== NS.dml) continue;
+    const unsupported: string[] = [];
+    const integer = (name: string): number => {
+      const raw = getAttrValue(child, qname('', name, ''));
+      if (raw === null) return 0;
+      const value = Number(raw);
+      if (Number.isSafeInteger(value)) return value;
+      unsupported.push(`${child.name.localName}@${name} ${raw} normalized to 0`);
+      return 0;
+    };
+    const fraction = (name: string): number | undefined => {
+      const raw = getAttrValue(child, qname('', name, ''));
+      if (raw === null) return undefined;
+      const value = Number(raw);
+      if (!Number.isFinite(value)) {
+        unsupported.push(`${child.name.localName}@${name} ${raw} omitted`);
+        return undefined;
+      }
+      return Math.abs(value) > 1 ? value / 100_000 : value;
+    };
+    const color = (host: XmlElement): { color: string; opacity?: number } => {
+      const element = host.children.find(
+        (candidate): candidate is XmlElement =>
+          candidate.kind === 'element' &&
+          candidate.name.namespaceURI === NS.dml &&
+          ['srgbClr', 'schemeClr', 'sysClr', 'prstClr'].includes(candidate.name.localName),
+      );
+      if (!element) {
+        unsupported.push(`${child.name.localName} missing color normalized to #000000`);
+        return { color: '#000000' };
+      }
+      const resolved = resolveColor(element) ?? '#000000';
+      if (element.name.localName !== 'srgbClr') {
+        unsupported.push(`${element.name.localName} normalized to sRGB`);
+      }
+      const transforms = element.children.filter(
+        (candidate): candidate is XmlElement =>
+          candidate.kind === 'element' &&
+          candidate.name.namespaceURI === NS.dml &&
+          candidate.name.localName !== 'alpha',
+      );
+      if (transforms.length > 0) {
+        unsupported.push(
+          `effect color transforms ${transforms.map((transform) => transform.name.localName).join(', ')} normalized to sRGB`,
+        );
+      }
+      const alpha = firstChildElement(element, qname('a', 'alpha', NS.dml));
+      const opacity = alpha
+        ? (() => {
+            const raw = getAttrValue(alpha, qname('', 'val', ''));
+            const value = raw === null ? Number.NaN : Number(raw);
+            if (!Number.isFinite(value)) {
+              unsupported.push(`alpha ${raw ?? 'missing'} omitted`);
+              return undefined;
+            }
+            return Math.abs(value) > 1 ? value / 100_000 : value;
+          })()
+        : undefined;
+      const normalized = /^#[\dA-F]{8}$/iu.test(resolved) ? resolved.slice(0, 7) : resolved;
+      return {
+        color: normalized.toUpperCase(),
+        ...(opacity === undefined ? {} : { opacity }),
+      };
+    };
+    const diagnostic = (): Pick<Effect, 'unsupported'> =>
+      unsupported.length === 0 ? {} : { unsupported: unsupported.join(', ') };
+    const local = child.name.localName;
+    if (local === 'blur') {
+      const grow = getAttrValue(child, qname('', 'grow', ''));
+      effects.push({
+        kind: 'blur',
+        radiusEmu: integer('rad'),
+        ...(grow === null ? {} : { grow: grow !== '0' && grow !== 'false' }),
+        ...diagnostic(),
+      });
+    } else if (local === 'fillOverlay') {
+      const solidFill = firstChildElement(child, NAME_SOLID_FILL);
+      const paint = color(solidFill ?? child);
+      const raw = getAttrValue(child, ATTR_BLEND) ?? 'over';
+      const blend = ['over', 'mult', 'screen', 'darken', 'lighten'].includes(raw)
+        ? (raw as EffectBlend)
+        : (() => {
+            unsupported.push(`fillOverlay@blend ${raw} normalized to over`);
+            return 'over' as const;
+          })();
+      effects.push({ kind: 'fillOverlay', ...paint, blend, ...diagnostic() });
+    } else if (local === 'glow') {
+      effects.push({ kind: 'glow', ...color(child), radiusEmu: integer('rad'), ...diagnostic() });
+    } else if (local === 'innerShdw' || local === 'outerShdw') {
+      effects.push({
+        kind: local,
+        ...color(child),
+        blurEmu: integer('blurRad'),
+        distEmu: integer('dist'),
+        angleDeg: integer('dir') / 60_000,
+        ...diagnostic(),
+      });
+    } else if (local === 'prstShdw') {
+      const raw = getAttrValue(child, ATTR_PRESET) ?? 'shdw1';
+      const preset = /^shdw(?:[1-9]|1\d|20)$/u.test(raw)
+        ? (raw as PresetShadow)
+        : (() => {
+            unsupported.push(`prstShdw@prst ${raw} normalized to shdw1`);
+            return 'shdw1' as const;
+          })();
+      effects.push({
+        kind: 'prstShdw',
+        preset,
+        ...color(child),
+        distEmu: integer('dist'),
+        angleDeg: integer('dir') / 60_000,
+        ...diagnostic(),
+      });
+    } else if (local === 'reflection') {
+      const startOpacity = fraction('stA');
+      const endOpacity = fraction('endA');
+      const scaleY = fraction('sy');
+      effects.push({
+        kind: 'reflection',
+        blurEmu: integer('blurRad'),
+        distEmu: integer('dist'),
+        angleDeg: integer('dir') / 60_000,
+        ...(startOpacity === undefined ? {} : { startOpacity }),
+        ...(endOpacity === undefined ? {} : { endOpacity }),
+        ...(scaleY === undefined ? {} : { scaleY }),
+        ...diagnostic(),
+      });
+    } else if (local === 'softEdge') {
+      effects.push({ kind: 'softEdge', radiusEmu: integer('rad'), ...diagnostic() });
+    }
+  }
+  return effects;
 };
 
 /** Backward-compatible shape authoring name. */

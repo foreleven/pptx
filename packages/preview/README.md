@@ -21,10 +21,10 @@ lays text out as pure SVG `<text>` (no `<foreignObject>`) and paints it with
 
 ## Entry points
 
-| Import                          | Runtime        | Use                                                 |
-| ------------------------------- | -------------- | --------------------------------------------------- |
-| `@office-kit/pptx-preview`      | browser + Node | `renderSlideToSvg` → an SVG string                  |
-| `@office-kit/pptx-preview/node` | Node only      | `renderSlideToImage` / `renderSlideToRgba` → pixels |
+| Import                          | Runtime        | Use                                                                                          |
+| ------------------------------- | -------------- | -------------------------------------------------------------------------------------------- |
+| `@office-kit/pptx-preview`      | browser + Node | `renderSlideToSvg` → an SVG string; `buildSvgEffectPlan` → reusable filter/reflection markup |
+| `@office-kit/pptx-preview/node` | Node only      | `renderSlideToImage` / `renderSlideToRgba` → pixels                                          |
 
 The browser entry pulls in **no** Node built-ins (no `node:fs`, resvg, or
 fontkit), so it bundles cleanly for the web.
@@ -41,6 +41,11 @@ const pres = await loadPresentation(bytes);
 const svg = renderSlideToSvg(pres, getSlides(pres)[0]);
 // → '<svg …>…</svg>'  (text laid out via <foreignObject> — the browser wraps it)
 ```
+
+Advanced SVG emitters can call `buildSvgEffectPlan(effects, { id, bounds })`
+with normalized CSS-pixel effect values. The returned plan exposes reusable
+definitions, an optional filter ID, and a reflection wrapper; source-changing
+effects remain chained while glow and shadow layers continue to compose.
 
 ### PNG / RGBA (Node, no browser)
 
