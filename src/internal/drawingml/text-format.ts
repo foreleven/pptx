@@ -27,6 +27,7 @@ import {
 } from '../xml/index.ts';
 import { fontSizeHundredthPt, textNonNegativePoint, textPointSpacing } from '../bounds.ts';
 import { buildColorElement } from './color.ts';
+import { buildEffectList, type Effect } from './effects.ts';
 import {
   buildGradientFill,
   buildPatternFill,
@@ -206,6 +207,8 @@ export interface TextFormat {
   highlight?: string | null;
   /** One editable CSS-compatible outer text shadow, or `null` to clear run effects. */
   textShadow?: TextShadow | null;
+  /** Complete editable DrawingML `effectLst`, or `null` to clear run effects. */
+  effects?: readonly Effect[] | null;
   /** One editable linear text gradient, or `null` to clear the direct run fill. */
   gradient?: TextGradient | null;
 }
@@ -508,6 +511,20 @@ const setTextShadow = (rPr: XmlElement, value: TextShadow | null): void => {
   insertChildByRank(rPr, elem(NAME_EFFECT_LST, { children: [shadow] }), rprChildRank);
 };
 
+const setTextEffects = (rPr: XmlElement, value: readonly Effect[] | null): void => {
+  rPr.children = rPr.children.filter(
+    (child) =>
+      !(
+        child.kind === 'element' &&
+        child.name.namespaceURI === NS.dml &&
+        (child.name.localName === 'effectLst' || child.name.localName === 'effectDag')
+      ),
+  );
+  if (value === null) return;
+  const effectLst = buildEffectList(value);
+  if (effectLst !== null) insertChildByRank(rPr, effectLst, rprChildRank);
+};
+
 /** Apply the editable CT_LineProperties subset to one text line host. */
 const applyTextLineProperties = (
   line: XmlElement,
@@ -551,6 +568,11 @@ const ensureRunOutline = (rPr: XmlElement): XmlElement => {
 
 /** Mutates `rPr` in place per `format`. */
 export const applyRunFormat = (rPr: XmlElement, format: TextFormat): void => {
+  if (format.textShadow !== undefined && format.effects !== undefined) {
+    throw new TypeError(
+      'TextFormat.textShadow and TextFormat.effects cannot be authored together.',
+    );
+  }
   let attrs = rPr.attrs;
   if (format.size !== undefined) {
     // Hundredths of a point per the schema (ST_TextFontSize: 1..4000 pt).
@@ -618,6 +640,7 @@ export const applyRunFormat = (rPr: XmlElement, format: TextFormat): void => {
   if (format.highlight !== undefined) setHighlight(rPr, format.highlight);
   if (format.underlineLine !== undefined) setUnderlineLine(rPr, format.underlineLine);
   if (format.underlineFill !== undefined) setUnderlineFill(rPr, format.underlineFill);
+  if (format.effects !== undefined) setTextEffects(rPr, format.effects);
   if (format.textShadow !== undefined) setTextShadow(rPr, format.textShadow);
   if (format.outline !== undefined) {
     if (format.outline.kind === 'unsupported') {

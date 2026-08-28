@@ -61,6 +61,8 @@ export type { ImageCrop, ImageDuotone } from './fn.ts';
 export type { ImageFit } from './fn.ts';
 export type {
   ArrowOptions,
+  Effect,
+  EffectBlend,
   GlowOptions,
   GradientFillOptions,
   GradientStop,
@@ -74,6 +76,7 @@ export type {
   LineJoin,
   PatternFillOptions,
   PatternPreset,
+  PresetShadow,
   ShapeEffectOptions,
   ShadowOptions,
 } from '../internal/drawingml/index.ts';

@@ -123,8 +123,9 @@ const mergeRPrLayer = (base: Partial<TextFormat>, layer: Partial<TextFormat>): v
   if (base.highlight === undefined && layer.highlight !== undefined) {
     base.highlight = layer.highlight;
   }
-  if (base.textShadow === undefined && layer.textShadow !== undefined) {
-    base.textShadow = layer.textShadow;
+  if (base.textShadow === undefined && base.effects === undefined) {
+    if (layer.effects !== undefined) base.effects = layer.effects;
+    else if (layer.textShadow !== undefined) base.textShadow = layer.textShadow;
   }
 };
 

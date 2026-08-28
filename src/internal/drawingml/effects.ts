@@ -11,9 +11,12 @@ import { buildColorElement } from './color.ts';
 
 const NAME_EFFECT_LST = qname('a', 'effectLst', NS.dml);
 const NAME_BLUR = qname('a', 'blur', NS.dml);
+const NAME_FILL_OVERLAY = qname('a', 'fillOverlay', NS.dml);
+const NAME_SOLID_FILL = qname('a', 'solidFill', NS.dml);
 const NAME_OUTER_SHDW = qname('a', 'outerShdw', NS.dml);
 const NAME_INNER_SHDW = qname('a', 'innerShdw', NS.dml);
 const NAME_GLOW = qname('a', 'glow', NS.dml);
+const NAME_PRESET_SHDW = qname('a', 'prstShdw', NS.dml);
 const NAME_REFLECTION = qname('a', 'reflection', NS.dml);
 const NAME_SOFT_EDGE = qname('a', 'softEdge', NS.dml);
 const NAME_ALPHA = qname('a', 'alpha', NS.dml);
@@ -25,6 +28,8 @@ const ATTR_ALGN = qname('', 'algn', '');
 const ATTR_ROT_WITH_SHAPE = qname('', 'rotWithShape', '');
 const ATTR_RAD = qname('', 'rad', '');
 const ATTR_GROW = qname('', 'grow', '');
+const ATTR_BLEND = qname('', 'blend', '');
+const ATTR_PRESET = qname('', 'prst', '');
 const ATTR_START_ALPHA = qname('', 'stA', '');
 const ATTR_END_ALPHA = qname('', 'endA', '');
 const ATTR_SCALE_Y = qname('', 'sy', '');
@@ -53,7 +58,31 @@ export interface GlowOptions {
   readonly radiusEmu?: number;
 }
 
-export type ShapeEffectOptions =
+export type EffectBlend = 'over' | 'mult' | 'screen' | 'darken' | 'lighten';
+export type PresetShadow =
+  | 'shdw1'
+  | 'shdw2'
+  | 'shdw3'
+  | 'shdw4'
+  | 'shdw5'
+  | 'shdw6'
+  | 'shdw7'
+  | 'shdw8'
+  | 'shdw9'
+  | 'shdw10'
+  | 'shdw11'
+  | 'shdw12'
+  | 'shdw13'
+  | 'shdw14'
+  | 'shdw15'
+  | 'shdw16'
+  | 'shdw17'
+  | 'shdw18'
+  | 'shdw19'
+  | 'shdw20';
+
+/** Editable fixed children of DrawingML `CT_EffectList` (excluding `effectDag`). */
+export type Effect =
   | {
       readonly kind: 'blur';
       /** Blur radius in EMU. */
@@ -61,11 +90,25 @@ export type ShapeEffectOptions =
       /** Whether the blurred bounds expand beyond the original geometry. */
       readonly grow?: boolean;
     }
+  | {
+      readonly kind: 'fillOverlay';
+      readonly color: string;
+      readonly opacity?: number;
+      readonly blend: EffectBlend;
+    }
   | ({ readonly kind: 'glow'; readonly opacity?: number } & GlowOptions)
   | {
       readonly kind: 'innerShdw' | 'outerShdw';
       readonly color: string;
       readonly blurEmu?: number;
+      readonly distEmu?: number;
+      readonly angleDeg?: number;
+      readonly opacity?: number;
+    }
+  | {
+      readonly kind: 'prstShdw';
+      readonly preset: PresetShadow;
+      readonly color: string;
       readonly distEmu?: number;
       readonly angleDeg?: number;
       readonly opacity?: number;
@@ -80,6 +123,9 @@ export type ShapeEffectOptions =
       readonly scaleY?: number;
     }
   | { readonly kind: 'softEdge'; readonly radiusEmu: number };
+
+/** Backward-compatible shape authoring name. */
+export type ShapeEffectOptions = Effect;
 
 /**
  * Computes the index inside `host.children` where an `<a:effectLst>`
@@ -141,12 +187,26 @@ const angle = (value: number | undefined, label: string): string => {
   return String(Math.round((((degrees % 360) + 360) % 360) * 60000));
 };
 
-const buildComposedEffect = (effect: ShapeEffectOptions): XmlElement => {
+const buildComposedEffect = (effect: Effect): XmlElement => {
   if (effect.kind === 'blur') {
     return elem(NAME_BLUR, {
       attrs: [
         attr(ATTR_RAD, String(emuExtent(effect.radiusEmu ?? 0, 'setShapeEffects: blur radiusEmu'))),
         attr(ATTR_GROW, effect.grow === false ? '0' : '1'),
+      ],
+    });
+  }
+  if (effect.kind === 'fillOverlay') {
+    const blends = new Set<EffectBlend>(['over', 'mult', 'screen', 'darken', 'lighten']);
+    if (!blends.has(effect.blend)) {
+      throw new TypeError(
+        `effect fillOverlay blend must be a supported token, got ${effect.blend}`,
+      );
+    }
+    return elem(NAME_FILL_OVERLAY, {
+      attrs: [attr(ATTR_BLEND, effect.blend)],
+      children: [
+        elem(NAME_SOLID_FILL, { children: [colorWithAlpha(effect.color, effect.opacity)] }),
       ],
     });
   }
@@ -176,6 +236,24 @@ const buildComposedEffect = (effect: ShapeEffectOptions): XmlElement => {
         ...(effect.kind === 'outerShdw'
           ? [attr(ATTR_ALGN, 'tl'), attr(ATTR_ROT_WITH_SHAPE, '0')]
           : []),
+      ],
+      children: [colorWithAlpha(effect.color, effect.opacity)],
+    });
+  }
+  if (effect.kind === 'prstShdw') {
+    if (!/^shdw(?:[1-9]|1\d|20)$/u.test(effect.preset)) {
+      throw new TypeError(
+        `effect prstShdw preset must be shdw1 through shdw20, got ${effect.preset}`,
+      );
+    }
+    return elem(NAME_PRESET_SHDW, {
+      attrs: [
+        attr(ATTR_PRESET, effect.preset),
+        attr(
+          ATTR_DIST,
+          String(emuExtent(effect.distEmu ?? 0, 'setShapeEffects: prstShdw distEmu')),
+        ),
+        attr(ATTR_DIR, angle(effect.angleDeg, 'setShapeEffects: prstShdw angleDeg')),
       ],
       children: [colorWithAlpha(effect.color, effect.opacity)],
     });
@@ -225,16 +303,17 @@ const buildComposedEffect = (effect: ShapeEffectOptions): XmlElement => {
 };
 
 /** Replace the current effect list with one schema-ordered composed list. */
-export const setEffects = (host: XmlElement, effects: readonly ShapeEffectOptions[]): void => {
-  removeEffectLst(host);
-  if (effects.length === 0) return;
-  const order: Readonly<Record<ShapeEffectOptions['kind'], number>> = {
+export const buildEffectList = (effects: readonly Effect[]): XmlElement | null => {
+  if (effects.length === 0) return null;
+  const order: Readonly<Record<Effect['kind'], number>> = {
     blur: 0,
-    glow: 1,
-    innerShdw: 2,
-    outerShdw: 3,
-    reflection: 4,
-    softEdge: 5,
+    fillOverlay: 1,
+    glow: 2,
+    innerShdw: 3,
+    outerShdw: 4,
+    prstShdw: 5,
+    reflection: 6,
+    softEdge: 7,
   };
   const kinds = new Set<string>();
   for (const effect of effects) {
@@ -245,7 +324,14 @@ export const setEffects = (host: XmlElement, effects: readonly ShapeEffectOption
   const children = [...effects]
     .sort((left, right) => order[left.kind] - order[right.kind])
     .map(buildComposedEffect);
-  host.children.splice(effectInsertionIndex(host), 0, elem(NAME_EFFECT_LST, { children }));
+  return elem(NAME_EFFECT_LST, { children });
+};
+
+export const setEffects = (host: XmlElement, effects: readonly Effect[]): void => {
+  removeEffectLst(host);
+  const effectLst = buildEffectList(effects);
+  if (effectLst === null) return;
+  host.children.splice(effectInsertionIndex(host), 0, effectLst);
 };
 
 /**

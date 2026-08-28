@@ -96,4 +96,41 @@ describe('fn API: getShapeEffects', () => {
       { kind: 'blur', radiusEmu: 38100, grow: false },
     ]);
   });
+
+  it('round-trips fill overlay and preset shadow without dropping either effect', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const shape = addSlideShape(slide, {
+      preset: 'rect',
+      x: inches(0),
+      y: inches(0),
+      w: inches(3),
+      h: inches(2),
+    });
+    setShapeEffects(shape, [
+      { kind: 'fillOverlay', color: '#F26B5B', opacity: 0.4, blend: 'mult' },
+      {
+        kind: 'prstShdw',
+        preset: 'shdw14',
+        color: '#112233',
+        distEmu: 38100,
+        angleDeg: 45,
+        opacity: 0.45,
+      },
+    ]);
+
+    const reloaded = await loadPresentation(await savePresentation(pres));
+    const rebuiltShape = getSlideShapes(getSlides(reloaded)[0]!).at(-1)!;
+    expect(getShapeEffects(reloaded, rebuiltShape)).toEqual([
+      { kind: 'fillOverlay', color: '#F26B5B', opacity: 0.4, blend: 'mult' },
+      {
+        kind: 'prstShdw',
+        preset: 'shdw14',
+        color: '#112233',
+        distEmu: 38100,
+        angleDeg: 45,
+        opacity: 0.45,
+      },
+    ]);
+  });
 });

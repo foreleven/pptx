@@ -5,6 +5,8 @@ import { getShapePlaceholderIdx, getShapePlaceholderType } from './shape-read-ba
 import { getSlideLayout } from './shape-slide-read.ts';
 import {
   type GlowOptions,
+  type EffectBlend,
+  type PresetShadow,
   type ShapeEffectOptions,
   type ShadowOptions,
   clearEffects as clearEffectsImpl,
@@ -71,6 +73,12 @@ export type ShapeEffect =
  */
 export type ShapeEffectAny =
   | {
+      readonly kind: 'fillOverlay';
+      readonly color: string;
+      readonly opacity?: number;
+      readonly blend: EffectBlend;
+    }
+  | {
       readonly kind: 'outerShdw';
       readonly color: string;
       readonly opacity?: number;
@@ -91,6 +99,14 @@ export type ShapeEffectAny =
       readonly color: string;
       readonly opacity?: number;
       readonly radiusEmu: number;
+    }
+  | {
+      readonly kind: 'prstShdw';
+      readonly preset: PresetShadow;
+      readonly color: string;
+      readonly opacity?: number;
+      readonly distEmu: number;
+      readonly angleDeg: number;
     }
   | {
       readonly kind: 'reflection';
@@ -210,7 +226,20 @@ const parseEffectLst = (
   for (const child of effectLst.children) {
     if (child.kind !== 'element' || child.name.namespaceURI !== NS.dml) continue;
     const local = child.name.localName;
-    if (local === 'outerShdw' || local === 'innerShdw') {
+    if (local === 'fillOverlay') {
+      const solidFill = firstChildElement(child, qname('a', 'solidFill', NS.dml));
+      const c = readEffectColor(solidFill ?? child);
+      const rawBlend = getAttrValue(child, qname('', 'blend', '')) ?? 'over';
+      const blend: EffectBlend = ['over', 'mult', 'screen', 'darken', 'lighten'].includes(rawBlend)
+        ? (rawBlend as EffectBlend)
+        : 'over';
+      out.push({
+        kind: 'fillOverlay',
+        color: c.color,
+        blend,
+        ...(c.opacity === undefined ? {} : { opacity: c.opacity }),
+      });
+    } else if (local === 'outerShdw' || local === 'innerShdw') {
       const blur = Number.parseInt(getAttrValue(child, qname('', 'blurRad', '')) ?? '0', 10) || 0;
       const dist = Number.parseInt(getAttrValue(child, qname('', 'dist', '')) ?? '0', 10) || 0;
       const dir = Number.parseInt(getAttrValue(child, qname('', 'dir', '')) ?? '0', 10) || 0;
@@ -230,6 +259,22 @@ const parseEffectLst = (
         kind: 'glow',
         color: c.color,
         radiusEmu: rad,
+        ...(c.opacity !== undefined ? { opacity: c.opacity } : {}),
+      });
+    } else if (local === 'prstShdw') {
+      const dist = Number.parseInt(getAttrValue(child, qname('', 'dist', '')) ?? '0', 10) || 0;
+      const dir = Number.parseInt(getAttrValue(child, qname('', 'dir', '')) ?? '0', 10) || 0;
+      const rawPreset = getAttrValue(child, qname('', 'prst', '')) ?? 'shdw1';
+      const preset = /^shdw(?:[1-9]|1\d|20)$/u.test(rawPreset)
+        ? (rawPreset as PresetShadow)
+        : 'shdw1';
+      const c = readEffectColor(child);
+      out.push({
+        kind: 'prstShdw',
+        preset,
+        color: c.color,
+        distEmu: dist,
+        angleDeg: dir / 60000,
         ...(c.opacity !== undefined ? { opacity: c.opacity } : {}),
       });
     } else if (local === 'reflection') {

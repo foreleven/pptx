@@ -40,8 +40,15 @@ export {
   setPatternFill,
   setSolidFill,
 } from './fill.ts';
-export type { GlowOptions, ShadowOptions, ShapeEffectOptions } from './effects.ts';
-export { clearEffects, setEffects, setGlow, setShadow } from './effects.ts';
+export type {
+  Effect,
+  EffectBlend,
+  GlowOptions,
+  PresetShadow,
+  ShadowOptions,
+  ShapeEffectOptions,
+} from './effects.ts';
+export { buildEffectList, clearEffects, setEffects, setGlow, setShadow } from './effects.ts';
 export type {
   ArrowOptions,
   LineAlignment,

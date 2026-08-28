@@ -137,6 +137,7 @@ import {
   type ChartTextStyle,
   type CustomGeometry,
   type GradientFillOptions,
+  type Effect,
   type ShapeFill,
   type ShapeStroke,
   type SlideData,
@@ -2113,6 +2114,106 @@ const formatAutoNum = (token: string, n: number): string => {
   }
 };
 
+const textEffectFill = (
+  effects: readonly Effect[] | null | undefined,
+  authoredColor: string,
+): string | null => {
+  const overlay = effects?.find((effect) => effect.kind === 'fillOverlay');
+  if (!overlay || overlay.kind !== 'fillOverlay') return null;
+  const base = /^#[\dA-F]{6}$/iu.test(authoredColor) ? authoredColor : '#000000';
+  const over = /^#[\dA-F]{6}$/iu.test(overlay.color) ? overlay.color : '#000000';
+  const channels = (value: string): [number, number, number] => [
+    Number.parseInt(value.slice(1, 3), 16),
+    Number.parseInt(value.slice(3, 5), 16),
+    Number.parseInt(value.slice(5, 7), 16),
+  ];
+  const [br, bg, bb] = channels(base);
+  const [or, og, ob] = channels(over);
+  const blend = (left: number, right: number): number => {
+    if (overlay.blend === 'mult') return (left * right) / 255;
+    if (overlay.blend === 'screen') return 255 - ((255 - left) * (255 - right)) / 255;
+    if (overlay.blend === 'darken') return Math.min(left, right);
+    if (overlay.blend === 'lighten') return Math.max(left, right);
+    return right;
+  };
+  const opacity = overlay.opacity ?? 1;
+  const channel = (left: number, right: number): string =>
+    Math.round(left + (blend(left, right) - left) * opacity)
+      .toString(16)
+      .padStart(2, '0');
+  return `#${channel(br, or)}${channel(bg, og)}${channel(bb, ob)}`;
+};
+
+const textEffectShadow = (
+  effects: readonly Effect[] | null | undefined,
+  scale: number,
+): PieceInput['shadow'] => {
+  if (!effects || effects.length === 0) return null;
+  const prioritizedKinds: readonly Effect['kind'][] = [
+    'outerShdw',
+    'prstShdw',
+    'glow',
+    'reflection',
+    'innerShdw',
+    'blur',
+    'softEdge',
+  ];
+  const effect = prioritizedKinds
+    .flatMap((kind) => effects.filter((item) => item.kind === kind))
+    .at(-1);
+  if (!effect) return null;
+  const px = (emu: number): number => (emu / EMU_PER_PX) * scale;
+  if (effect.kind === 'outerShdw' || effect.kind === 'innerShdw') {
+    const radians = ((effect.angleDeg ?? 0) * Math.PI) / 180;
+    const direction = effect.kind === 'innerShdw' ? -1 : 1;
+    return {
+      color: effect.color || '#000000',
+      opacity: effect.opacity ?? 1,
+      blurPx: px(effect.blurEmu ?? 0),
+      offsetXpx: direction * px(effect.distEmu ?? 0) * Math.cos(radians),
+      offsetYpx: direction * px(effect.distEmu ?? 0) * Math.sin(radians),
+    };
+  }
+  if (effect.kind === 'prstShdw') {
+    const radians = ((effect.angleDeg ?? 0) * Math.PI) / 180;
+    return {
+      color: effect.color || '#000000',
+      opacity: effect.opacity ?? 1,
+      blurPx: px(25_400),
+      offsetXpx: px(effect.distEmu ?? 0) * Math.cos(radians),
+      offsetYpx: px(effect.distEmu ?? 0) * Math.sin(radians),
+    };
+  }
+  if (effect.kind === 'glow') {
+    return {
+      color: effect.color || '#FFFFFF',
+      opacity: effect.opacity ?? 1,
+      blurPx: px(effect.radiusEmu ?? 0),
+      offsetXpx: 0,
+      offsetYpx: 0,
+    };
+  }
+  if (effect.kind === 'reflection') {
+    const radians = ((effect.angleDeg ?? 0) * Math.PI) / 180;
+    return {
+      color: '#000000',
+      opacity: effect.startOpacity ?? 0.5,
+      blurPx: px(effect.blurEmu ?? 0),
+      offsetXpx: px(effect.distEmu ?? 0) * Math.cos(radians),
+      offsetYpx: px(effect.distEmu ?? 0) * Math.sin(radians),
+    };
+  }
+  if (effect.kind === 'fillOverlay') return null;
+  if (effect.kind !== 'blur' && effect.kind !== 'softEdge') return null;
+  return {
+    color: '#000000',
+    opacity: effect.kind === 'softEdge' ? 0.35 : 0.5,
+    blurPx: px(effect.radiusEmu ?? 0),
+    offsetXpx: 0,
+    offsetYpx: 0,
+  };
+};
+
 // `effectivePt` is the post-autofit font size in points. Callers pass
 // `format.size` (the authored size, if any) scaled by the body's
 // autofit factor, or the placeholder default scaled the same way.
@@ -2162,6 +2263,8 @@ const renderRun = (
   if (format?.color !== undefined && format.color !== null) {
     styles.push(`color:${resolveColor(format.color, theme, '#000000')}`);
   }
+  const effectFill = textEffectFill(format?.effects, format?.color ?? '#000000');
+  if (effectFill !== null) styles.push(`color:${effectFill}`);
   const midpointColor = (
     stops: readonly { readonly offset: number; readonly color: string }[],
   ): string => {
@@ -2247,6 +2350,16 @@ const renderRun = (
     styles.push(
       `text-shadow:${format.textShadow.offsetXPt}pt ${format.textShadow.offsetYPt}pt ${format.textShadow.blurPt}pt ${format.textShadow.color}${alpha}`,
     );
+  } else {
+    const approximation = textEffectShadow(format?.effects, 1);
+    if (approximation !== null) {
+      const alpha = Math.round(approximation.opacity * 255)
+        .toString(16)
+        .padStart(2, '0');
+      styles.push(
+        `text-shadow:${approximation.offsetXpx}px ${approximation.offsetYpx}px ${approximation.blurPx}px ${approximation.color}${alpha}`,
+      );
+    }
   }
   if (format?.gradient && 'stops' in format.gradient) {
     const cssAngle = ((((format.gradient.angleDeg ?? 0) + 90) % 360) + 360) % 360;
@@ -2566,16 +2679,17 @@ export const buildSvgTextInput = (a: SvgTextArgs): TextBodyInput => {
       }
       const family = (a.resolveFamily ?? substituteFamily)(fmt?.font ?? a.themeFace);
       const sizePx = run.sizePt * scale * PX_PER_PT;
-      const fillHex =
+      let fillHex =
         fmt?.color !== undefined && fmt.color !== null
           ? resolveColor(fmt.color, a.theme, '#000000')
           : a.defaultColor;
+      fillHex = textEffectFill(fmt?.effects, fillHex) ?? fillHex;
       const superSub: 0 | 1 | -1 =
         fmt?.baseline !== undefined && fmt.baseline !== 0 ? (fmt.baseline > 0 ? 1 : -1) : 0;
       const letterSpacingPx =
         fmt?.spc !== undefined && fmt.spc !== 0 ? (fmt.spc / 100) * PX_PER_PT : 0;
       const caps = fmt?.cap === 'all' || fmt?.cap === 'small';
-      const shadow =
+      const compatibilityShadow =
         fmt?.textShadow && 'color' in fmt.textShadow
           ? {
               color: fmt.textShadow.color,
@@ -2585,6 +2699,7 @@ export const buildSvgTextInput = (a: SvgTextArgs): TextBodyInput => {
               offsetYpx: fmt.textShadow.offsetYPt * scale * PX_PER_PT,
             }
           : null;
+      const shadow = compatibilityShadow ?? textEffectShadow(fmt?.effects, scale);
       const gradient =
         fmt?.gradient && 'stops' in fmt.gradient ? textGradientInput(fmt.gradient) : null;
       const underlineLine = decorationLineInput(fmt, 'underline', fillHex, sizePx, scale);
@@ -6760,12 +6875,25 @@ const buildEffectsFilter = (
   const layers: string[] = [];
 
   for (const e of effects) {
-    if (e.kind === 'outerShdw') {
+    if (e.kind === 'fillOverlay') {
+      const i = primitives.length;
+      const flood = `overlayFlood${i}`;
+      const clipped = `overlayClip${i}`;
+      const out = `overlayOut${i}`;
+      const mode = e.blend === 'mult' ? 'multiply' : e.blend === 'over' ? 'normal' : e.blend;
+      primitives.push(
+        `<feFlood flood-color="${e.color || '#000000'}" flood-opacity="${(e.opacity ?? 1).toFixed(3)}" result="${flood}"/>`,
+        `<feComposite in="${flood}" in2="SourceAlpha" operator="in" result="${clipped}"/>`,
+        `<feBlend in="SourceGraphic" in2="${clipped}" mode="${mode}" result="${out}"/>`,
+      );
+      layers.length = 0;
+      layers.push(out);
+    } else if (e.kind === 'outerShdw' || e.kind === 'prstShdw') {
       // dist + angle → dx, dy in EMU → px.
       const rad = (e.angleDeg * Math.PI) / 180;
       const dx = (e.distEmu * Math.cos(rad)) / EMU_PER_PX;
       const dy = (e.distEmu * Math.sin(rad)) / EMU_PER_PX;
-      const blurPx = e.blurEmu / EMU_PER_PX / 2;
+      const blurPx = e.kind === 'outerShdw' ? e.blurEmu / EMU_PER_PX / 2 : 25_400 / EMU_PER_PX / 2;
       const opacity = e.opacity ?? 1;
       const color = e.color || '#000000';
       // feDropShadow handles the whole shadow primitive in one go.
@@ -6845,7 +6973,9 @@ const buildEffectsFilter = (
 
   // Always paint the original source last so it sits on top of shadows /
   // glows. softEdge/blur replaced the source so we don't double-paint.
-  const replacedSource = effects.some((e) => e.kind === 'softEdge' || e.kind === 'blur');
+  const replacedSource = effects.some(
+    (e) => e.kind === 'softEdge' || e.kind === 'blur' || e.kind === 'fillOverlay',
+  );
   const mergeChildren = layers.map((l) => `<feMergeNode in="${l}"/>`).join('');
   const sourceMerge = replacedSource ? '' : '<feMergeNode in="SourceGraphic"/>';
   primitives.push(`<feMerge>${mergeChildren}${sourceMerge}</feMerge>`);

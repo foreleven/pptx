@@ -104,6 +104,105 @@ describe('fn API: getShapeRunFormat', () => {
     });
   });
 
+  it('round-trips every editable text effect as one composed effect list', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const tb = addSlideTextBox(slide, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(5),
+      h: inches(2),
+      text: 'effects',
+    });
+    setShapeRunFormat(tb, 0, 0, {
+      effects: [
+        { kind: 'softEdge', radiusEmu: 38100 },
+        {
+          kind: 'prstShdw',
+          preset: 'shdw14',
+          color: '#112233',
+          distEmu: 25400,
+          angleDeg: 45,
+          opacity: 0.45,
+        },
+        { kind: 'outerShdw', color: '#223344', blurEmu: 50800, distEmu: 38100, angleDeg: 90 },
+        {
+          kind: 'reflection',
+          blurEmu: 12700,
+          distEmu: 12700,
+          angleDeg: 90,
+          startOpacity: 0.65,
+          endOpacity: 0,
+          scaleY: -1,
+        },
+        { kind: 'glow', color: '#35B9C6', radiusEmu: 76200, opacity: 0.5 },
+        { kind: 'fillOverlay', color: '#F26B5B', opacity: 0.4, blend: 'mult' },
+        { kind: 'blur', radiusEmu: 50800, grow: true },
+        {
+          kind: 'innerShdw',
+          color: '#334455',
+          blurEmu: 50800,
+          distEmu: 25400,
+          angleDeg: 45,
+          opacity: 0.65,
+        },
+      ],
+    });
+
+    const reloaded = await loadPresentation(await savePresentation(pres));
+    const reloadedShape = findShapeByText(getSlides(reloaded)[0]!, 'effects')!;
+    expect(getShapeRunFormat(reloadedShape, 0, 0)?.effects).toEqual([
+      { kind: 'blur', radiusEmu: 50800, grow: true },
+      { kind: 'fillOverlay', color: '#F26B5B', opacity: 0.4, blend: 'mult' },
+      { kind: 'glow', color: '#35B9C6', radiusEmu: 76200, opacity: 0.5 },
+      {
+        kind: 'innerShdw',
+        color: '#334455',
+        blurEmu: 50800,
+        distEmu: 25400,
+        angleDeg: 45,
+        opacity: 0.65,
+      },
+      { kind: 'outerShdw', color: '#223344', blurEmu: 50800, distEmu: 38100, angleDeg: 90 },
+      {
+        kind: 'prstShdw',
+        preset: 'shdw14',
+        color: '#112233',
+        distEmu: 25400,
+        angleDeg: 45,
+        opacity: 0.45,
+      },
+      {
+        kind: 'reflection',
+        blurEmu: 12700,
+        distEmu: 12700,
+        angleDeg: 90,
+        startOpacity: 0.65,
+        endOpacity: 0,
+        scaleY: -1,
+      },
+      { kind: 'softEdge', radiusEmu: 38100 },
+    ]);
+  });
+
+  it('rejects authoring complete effects and the text-shadow compatibility field together', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const tb = addSlideTextBox(slide, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(5),
+      h: inches(2),
+      text: 'conflict',
+    });
+    expect(() =>
+      setShapeRunFormat(tb, 0, 0, {
+        textShadow: { color: '#000000', blurPt: 2, offsetXPt: 1, offsetYPt: 1 },
+        effects: [{ kind: 'glow', color: '#35B9C6', radiusEmu: 76200 }],
+      }),
+    ).toThrow(/cannot be authored together/u);
+  });
+
   it('underline encodes both boolean and explicit token', async () => {
     const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
     const slide = getSlides(pres)[0]!;

@@ -296,6 +296,31 @@ describe('renderSlideToSvg', () => {
     expect(svg.toUpperCase()).toContain('-WEBKIT-TEXT-STROKE:0.75PT #94629F');
   });
 
+  it('keeps complete text effects perceptible in both preview text modes', async () => {
+    const { pres, slide } = await blankSlide();
+    const box = addSlideTextBox(slide, {
+      x: inches(1),
+      y: inches(1),
+      w: inches(5),
+      h: inches(1),
+      text: 'effect fallback',
+    });
+    setShapeRunFormat(box, 0, 0, {
+      color: '#3659E3',
+      effects: [
+        { kind: 'fillOverlay', color: '#F26B5B', opacity: 0.4, blend: 'mult' },
+        { kind: 'glow', color: '#35B9C6', radiusEmu: 76200, opacity: 0.5 },
+      ],
+    });
+
+    const foreignObject = renderSlideToSvg(pres, slide, { textLayout: 'foreignObject' });
+    const svgText = renderSlideToSvg(pres, slide, { textLayout: 'svg' });
+    expect(foreignObject).toContain('text-shadow:');
+    expect(foreignObject).toContain('color:#3544a9');
+    expect(svgText).toContain('flood-color="#35B9C6"');
+    expect(svgText).toContain('filter="url(#text-shadow-');
+  });
+
   it('marks deterministic group-fill and outline-arrow fallbacks with a render diagnostic', async () => {
     const { pres, slide } = await blankSlide();
     const box = addSlideTextBox(slide, {

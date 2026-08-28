@@ -21,6 +21,7 @@ import {
   inches,
   loadPresentation,
   savePresentation,
+  setShapeEffects,
   setShapeFill,
 } from '@office-kit/pptx';
 import { type ZipEntry, readZip, writeZip } from '../src/internal/opc/index.ts';
@@ -153,6 +154,40 @@ describe('renderSlideToSvg: reflection effect', () => {
     const nearEdgeStrength = blueStrengthAt(110, 315);
     const farEdgeStrength = blueStrengthAt(110, 455);
     expect(nearEdgeStrength).toBeGreaterThan(farEdgeStrength * 2);
+  });
+});
+
+describe('renderSlideToSvg: complete fixed effect list', () => {
+  it('keeps fill overlay and preset shadow visible on editable geometry', async () => {
+    const pres = await loadPresentation(await readFile(fixturePath));
+    const layout = findSlideLayout(pres, 'Blank');
+    if (!layout) throw new Error('Blank layout missing');
+    const slide = addSlide(pres, { layout });
+    const rect = addSlideShape(slide, {
+      preset: 'rect',
+      x: inches(1),
+      y: inches(1),
+      w: inches(2),
+      h: inches(2),
+    });
+    setShapeFill(rect, '#3659E3');
+    setShapeEffects(rect, [
+      { kind: 'fillOverlay', color: '#F26B5B', opacity: 0.4, blend: 'mult' },
+      {
+        kind: 'prstShdw',
+        preset: 'shdw14',
+        color: '#112233',
+        distEmu: 38100,
+        angleDeg: 45,
+        opacity: 0.45,
+      },
+    ]);
+
+    const svg = renderSlideToSvg(pres, slide, { textLayout: 'svg' });
+    expect(svg).toContain('<feBlend');
+    expect(svg).toContain('mode="multiply"');
+    expect(svg).toContain('flood-color="#F26B5B"');
+    expect(svg).toContain('flood-color="#112233"');
   });
 });
 
