@@ -762,7 +762,9 @@ const parseTextEffects = (
     if (!Number.isFinite(value)) return undefined;
     return Math.abs(value) > 1 ? value / 100_000 : value;
   };
-  const readColor = (host: XmlElement): { color: string; opacity?: number } => {
+  const readColor = (
+    host: XmlElement,
+  ): { color: string; opacity?: number; unsupported?: string } => {
     const color = host.children.find(
       (child): child is XmlElement =>
         child.kind === 'element' &&
@@ -773,8 +775,24 @@ const parseTextEffects = (
     const resolved = resolveDrawingColor(color, theme) ?? '#000000';
     const alpha = firstChildElement(color, qname('a', 'alpha', NS.dml));
     const opacity = alpha ? fractionAttr(alpha, 'val') : undefined;
+    const normalizedTransforms = color.children.filter(
+      (child): child is XmlElement =>
+        child.kind === 'element' &&
+        child.name.namespaceURI === NS.dml &&
+        child.name.localName !== 'alpha',
+    );
     const normalized = /^#[\dA-F]{8}$/iu.test(resolved) ? resolved.slice(0, 7) : resolved;
-    return { color: normalized.toUpperCase(), ...(opacity === undefined ? {} : { opacity }) };
+    return {
+      color: normalized.toUpperCase(),
+      ...(opacity === undefined ? {} : { opacity }),
+      ...(normalizedTransforms.length === 0
+        ? {}
+        : {
+            unsupported: `effect color transforms ${normalizedTransforms
+              .map((transform) => transform.name.localName)
+              .join(', ')} normalized to sRGB`,
+          }),
+    };
   };
 
   const effects: Effect[] = [];

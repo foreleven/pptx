@@ -82,7 +82,7 @@ export type PresetShadow =
   | 'shdw20';
 
 /** Editable fixed children of DrawingML `CT_EffectList` (excluding `effectDag`). */
-export type Effect =
+type EffectCore =
   | {
       readonly kind: 'blur';
       /** Blur radius in EMU. */
@@ -123,6 +123,11 @@ export type Effect =
       readonly scaleY?: number;
     }
   | { readonly kind: 'softEdge'; readonly radiusEmu: number };
+
+export type Effect = EffectCore & {
+  /** Import-only normalization/degradation explanation; ignored by renderers. */
+  readonly unsupported?: string;
+};
 
 /** Backward-compatible shape authoring name. */
 export type ShapeEffectOptions = Effect;

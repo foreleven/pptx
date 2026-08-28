@@ -2147,6 +2147,7 @@ const textEffectFill = (
 const textEffectShadow = (
   effects: readonly Effect[] | null | undefined,
   scale: number,
+  authoredColor = '#000000',
 ): PieceInput['shadow'] => {
   if (!effects || effects.length === 0) return null;
   const prioritizedKinds: readonly Effect['kind'][] = [
@@ -2195,12 +2196,17 @@ const textEffectShadow = (
   }
   if (effect.kind === 'reflection') {
     const radians = ((effect.angleDeg ?? 0) * Math.PI) / 180;
+    // Text layout does not expose glyph geometry for a true mirrored copy.
+    // Keep the reflection perceptible in PNG/SVG previews as a same-color,
+    // semi-transparent directional echo with a visible minimum separation.
+    const distancePx = px(effect.distEmu ?? 0) + 6 * scale;
+    const offset = (value: number): number => (Math.abs(value) < 1e-9 ? 0 : value);
     return {
-      color: '#000000',
+      color: /^#[\dA-F]{6}$/iu.test(authoredColor) ? authoredColor : '#000000',
       opacity: effect.startOpacity ?? 0.5,
       blurPx: px(effect.blurEmu ?? 0),
-      offsetXpx: px(effect.distEmu ?? 0) * Math.cos(radians),
-      offsetYpx: px(effect.distEmu ?? 0) * Math.sin(radians),
+      offsetXpx: offset(distancePx * Math.cos(radians)),
+      offsetYpx: offset(distancePx * Math.sin(radians)),
     };
   }
   if (effect.kind === 'fillOverlay') return null;
@@ -2351,7 +2357,7 @@ const renderRun = (
       `text-shadow:${format.textShadow.offsetXPt}pt ${format.textShadow.offsetYPt}pt ${format.textShadow.blurPt}pt ${format.textShadow.color}${alpha}`,
     );
   } else {
-    const approximation = textEffectShadow(format?.effects, 1);
+    const approximation = textEffectShadow(format?.effects, 1, format?.color ?? '#000000');
     if (approximation !== null) {
       const alpha = Math.round(approximation.opacity * 255)
         .toString(16)
@@ -2699,7 +2705,7 @@ export const buildSvgTextInput = (a: SvgTextArgs): TextBodyInput => {
               offsetYpx: fmt.textShadow.offsetYPt * scale * PX_PER_PT,
             }
           : null;
-      const shadow = compatibilityShadow ?? textEffectShadow(fmt?.effects, scale);
+      const shadow = compatibilityShadow ?? textEffectShadow(fmt?.effects, scale, fillHex);
       const gradient =
         fmt?.gradient && 'stops' in fmt.gradient ? textGradientInput(fmt.gradient) : null;
       const underlineLine = decorationLineInput(fmt, 'underline', fillHex, sizePx, scale);

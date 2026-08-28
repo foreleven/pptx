@@ -321,6 +321,37 @@ describe('renderSlideToSvg', () => {
     expect(svgText).toContain('filter="url(#text-shadow-');
   });
 
+  it('keeps text reflection perceptible as an explicit downward same-color preview fallback', async () => {
+    const { pres, slide } = await blankSlide();
+    const box = addSlideTextBox(slide, {
+      x: inches(1),
+      y: inches(1),
+      w: inches(5),
+      h: inches(1),
+      text: 'reflection fallback',
+    });
+    setShapeRunFormat(box, 0, 0, {
+      color: '#3659E3',
+      effects: [
+        {
+          kind: 'reflection',
+          blurEmu: 9525,
+          distEmu: 9525,
+          angleDeg: 90,
+          startOpacity: 0.65,
+          endOpacity: 0,
+          scaleY: -1,
+        },
+      ],
+    });
+
+    const foreignObject = renderSlideToSvg(pres, slide, { textLayout: 'foreignObject' });
+    const svgText = renderSlideToSvg(pres, slide, { textLayout: 'svg' });
+    expect(foreignObject).toContain('text-shadow:0px 7px 1px #3659E3a6');
+    expect(svgText).toContain('flood-color="#3659E3"');
+    expect(svgText).toContain('dy="7"');
+  });
+
   it('marks deterministic group-fill and outline-arrow fallbacks with a render diagnostic', async () => {
     const { pres, slide } = await blankSlide();
     const box = addSlideTextBox(slide, {
