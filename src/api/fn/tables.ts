@@ -17,7 +17,13 @@ import {
 } from '../../internal/drawingml/index.ts';
 import type { Emu } from '../units.ts';
 import { REL_TYPES, buildTableCell, buildTableRow } from '../../internal/presentationml/index.ts';
-import { emptyRels, type ImageFormat, nextRelId } from '../../internal/opc/index.ts';
+import {
+  emptyRels,
+  type ImageFormat,
+  nextRelId,
+  partName,
+  resolveTarget,
+} from '../../internal/opc/index.ts';
 import {
   NS,
   type XmlElement,
@@ -53,7 +59,7 @@ import {
   lineWidthEmu,
   normalizeGuid,
 } from '../../internal/bounds.ts';
-import { commitSlideData, refreshSlideData } from './_helpers.ts';
+import { commitSlideData, ensureSlideImageRelationship, refreshSlideData } from './_helpers.ts';
 import { parseRPrLikeElement, parseTextRunState } from './shape-color.ts';
 import {
   type ShapeEndParagraphProperties,
@@ -61,7 +67,7 @@ import {
   type ShapeParagraphElement,
   readParagraphElements,
 } from './shape-runs.ts';
-import { ALIGN_TOKEN_MAP } from './shape-paragraph.ts';
+import { ALIGN_TOKEN_MAP, readParagraphBulletPropertiesDirect } from './shape-paragraph.ts';
 import { getPresentationTheme } from './package.ts';
 import { resolveDrawingColor } from './shapes.ts';
 import { getSlides } from './slide-query.ts';
@@ -71,7 +77,10 @@ import {
   setRunDirectFillImage,
   setRunUnderlineFillImage,
 } from './run-underline-image.ts';
-import { removeUnreferencedSlideRelationships } from './hyperlink-relationships.ts';
+import {
+  hyperlinkRelationshipIds,
+  removeUnreferencedSlideRelationships,
+} from './hyperlink-relationships.ts';
 
 // ---------------------------------------------------------------------------
 // Table cell access.
@@ -674,6 +683,13 @@ export const setTableCellParagraphs = (
   if (paragraphs.length === 0)
     throw new RangeError('setTableCellParagraphs requires at least one paragraph');
   const txBody = ensureCellTxBody(cell);
+  const oldPictureBulletRelationships = new Set<string>();
+  for (const paragraph of allChildElements(txBody, NAME_A_P_TBL)) {
+    const pPr = firstChildElement(paragraph, NAME_A_PPR_TBL);
+    const picture = pPr && firstChildElement(pPr, qname('a', 'buBlip', NS.dml));
+    if (!picture) continue;
+    for (const id of hyperlinkRelationshipIds(picture)) oldPictureBulletRelationships.add(id);
+  }
   const authored = paragraphs.map((input) => {
     if (input.runs.length === 0)
       throw new RangeError('each table-cell paragraph requires at least one run');
@@ -718,6 +734,10 @@ export const setTableCellParagraphs = (
   );
   txBody.children.push(...authored);
   commitTableCell(cell);
+  removeUnreferencedSlideRelationships(
+    cell[CELL_TABLE][SHAPE_SLIDE],
+    oldPictureBulletRelationships,
+  );
 };
 
 /**
@@ -1273,6 +1293,19 @@ export interface TableCellParagraph {
   readonly align: ParagraphAlignment | null;
   /** Direct paragraph direction, or `null` when the cell paragraph inherits it. */
   readonly rtl: boolean | null;
+  /** Zero-based direct list level (`lvl`), defaulting to `0`. */
+  readonly level: number;
+  /** Direct character/automatic/none bullet identity; picture bullets use `picture: true`. */
+  readonly bullet: BulletStyle | null;
+  /** Literal direct `<a:buAutoNum type>` token, including malformed producer values. */
+  readonly autoNumberRaw: string | null;
+  readonly picture: boolean;
+  readonly color: string | null;
+  readonly colorExactSrgb: boolean | null;
+  readonly sizePct: number | null;
+  readonly sizePts: number | null;
+  readonly sizeValid: boolean;
+  readonly font: string | null;
   /** Runs / fields / breaks in document order, with their literal `<a:rPr>` format. */
   readonly elements: ReadonlyArray<ShapeParagraphElement>;
   /** Direct `<a:endParaRPr>` terminal-character properties, or `null` when absent. */
@@ -1308,6 +1341,7 @@ export const getTableCellParagraphs = (
     const pPr = firstChildElement(p, qname('a', 'pPr', NS.dml));
     const algn = pPr ? getAttrValue(pPr, qname('', 'algn', '')) : null;
     const rtlToken = pPr ? getAttrValue(pPr, qname('', 'rtl', '')) : null;
+    const levelToken = pPr ? getAttrValue(pPr, qname('', 'lvl', '')) : null;
     // Normalise the raw OOXML token (`ctr`, `l`, …) to the friendly form the
     // rest of the API uses, mirroring the shape-text alignment cascade. A
     // token outside the map is malformed input and reads as unset.
@@ -1318,10 +1352,34 @@ export const getTableCellParagraphs = (
         : rtlToken === '0' || rtlToken === 'false'
           ? false
           : null;
+    const parsedLevel = levelToken === null ? 0 : Number.parseInt(levelToken, 10);
+    const level =
+      Number.isInteger(parsedLevel) && parsedLevel >= 0 && parsedLevel <= 8 ? parsedLevel : 0;
+    const bullet =
+      pPr === null
+        ? {
+            bullet: null,
+            picture: false,
+            color: null,
+            colorExactSrgb: null,
+            sizePct: null,
+            sizePts: null,
+            sizeValid: true,
+            font: null,
+          }
+        : readParagraphBulletPropertiesDirect(
+            pPr,
+            presentation === undefined ? null : getPresentationTheme(presentation),
+          );
+    const autoNumber = pPr && firstChildElement(pPr, qname('a', 'buAutoNum', NS.dml));
+    const autoNumberRaw = autoNumber ? getAttrValue(autoNumber, qname('', 'type', '')) : null;
     const endProperties = firstChildElement(p, NAME_A_END_PARA_RPR_TBL);
     out.push({
       align,
       rtl,
+      level,
+      ...bullet,
+      autoNumberRaw,
       elements: readParagraphElements(p, ctx),
       endParagraph:
         endProperties === null
@@ -1387,6 +1445,95 @@ const requireTableCellRun = (
   const run = runs[runIndex];
   if (!run) throw new RangeError(`table-cell run index out of range: ${runIndex}`);
   return run;
+};
+
+const requireTableCellParagraph = (cell: TableCellData, paragraphIndex: number): XmlElement => {
+  const txBody = firstChildElement(cell[CELL_ELEMENT], NAME_A_TX_BODY_TBL);
+  const paragraphs = txBody ? allChildElements(txBody, NAME_A_P_TBL) : [];
+  const paragraph = paragraphs[paragraphIndex];
+  if (!paragraph) {
+    throw new RangeError(`table-cell paragraph index out of range: ${paragraphIndex}`);
+  }
+  return paragraph;
+};
+
+const tableParagraphBulletRelationshipIds = (paragraph: XmlElement): ReadonlySet<string> => {
+  const pPr = firstChildElement(paragraph, NAME_A_PPR_TBL);
+  const picture = pPr && firstChildElement(pPr, qname('a', 'buBlip', NS.dml));
+  return picture ? hyperlinkRelationshipIds(picture) : new Set<string>();
+};
+
+/** Returns whether one table-cell paragraph directly uses a picture bullet. */
+export const isTableCellParagraphBulletPicture = (
+  cell: TableCellData,
+  paragraphIndex: number,
+): boolean => {
+  const paragraph = requireTableCellParagraph(cell, paragraphIndex);
+  const pPr = firstChildElement(paragraph, NAME_A_PPR_TBL);
+  return pPr !== null && firstChildElement(pPr, qname('a', 'buBlip', NS.dml)) !== null;
+};
+
+/** Returns the embedded bytes backing one table-cell paragraph's direct picture bullet. */
+export const getTableCellParagraphBulletImageBytes = (
+  cell: TableCellData,
+  paragraphIndex: number,
+): Uint8Array | null => {
+  const paragraph = requireTableCellParagraph(cell, paragraphIndex);
+  const pPr = firstChildElement(paragraph, NAME_A_PPR_TBL);
+  const picture = pPr && firstChildElement(pPr, qname('a', 'buBlip', NS.dml));
+  const blip = picture && firstChildElement(picture, qname('a', 'blip', NS.dml));
+  const relationshipId = blip && getAttrValue(blip, qname('r', 'embed', NS.officeDocRels));
+  if (!relationshipId) return null;
+  const slide = cell[CELL_TABLE][SHAPE_SLIDE];
+  const pkg = slide[INTERNAL_PACKAGE];
+  const relationship = pkg
+    .getRels(slide[SLIDE_PART_NAME])
+    ?.items.find((candidate) => candidate.id === relationshipId);
+  if (!relationship || relationship.targetMode === 'External') return null;
+  const mediaName = relationship.target.startsWith('/')
+    ? partName(relationship.target)
+    : resolveTarget(slide[SLIDE_PART_NAME], relationship.target);
+  return pkg.getPart(mediaName)?.data ?? null;
+};
+
+/** Embeds image bytes and assigns them as one table-cell paragraph's editable picture bullet. */
+export const setTableCellParagraphBulletImage = (
+  cell: TableCellData,
+  paragraphIndex: number,
+  bytes: Uint8Array,
+  options: { readonly format?: ImageFormat } = {},
+): void => {
+  const paragraph = requireTableCellParagraph(cell, paragraphIndex);
+  const oldRelationshipIds = tableParagraphBulletRelationshipIds(paragraph);
+  const slide = cell[CELL_TABLE][SHAPE_SLIDE];
+  const relationshipId = ensureSlideImageRelationship(slide, bytes, {
+    ...options,
+    operation: 'setTableCellParagraphBulletImage',
+  });
+
+  applyBulletToParagraph(paragraph, 'bullet');
+  const pPr = firstChildElement(paragraph, NAME_A_PPR_TBL);
+  if (!pPr) throw new Error('setTableCellParagraphBulletImage: paragraph properties missing');
+  const markerIndex = pPr.children.findIndex(
+    (child) =>
+      child.kind === 'element' &&
+      child.name.namespaceURI === NS.dml &&
+      child.name.localName === 'buChar',
+  );
+  if (markerIndex < 0) throw new Error('setTableCellParagraphBulletImage: marker insertion failed');
+  pPr.children.splice(
+    markerIndex,
+    1,
+    elem(qname('a', 'buBlip', NS.dml), {
+      children: [
+        elem(qname('a', 'blip', NS.dml), {
+          attrs: [attr(qname('r', 'embed', NS.officeDocRels), relationshipId)],
+        }),
+      ],
+    }),
+  );
+  commitTableCell(cell);
+  removeUnreferencedSlideRelationships(slide, oldRelationshipIds);
 };
 
 /** Returns the embedded bytes backing one table-cell run's picture underline fill. */

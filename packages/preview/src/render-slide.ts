@@ -117,6 +117,7 @@ import {
   getTableCellBorders,
   getTableCellFill,
   getTableCellParagraphs,
+  getTableCellParagraphBulletImageBytes,
   getTableCellRunFillImageBytes,
   getTableCellSpan,
   getTableCellTextDirection,
@@ -1985,6 +1986,33 @@ const formatAutoNum = (token: string, n: number): string => {
   }
 };
 
+const autoNumberStart = (style: ReturnType<typeof getParagraphBullet>): number =>
+  style !== null && typeof style === 'object' && 'autoNum' in style ? (style.startAt ?? 1) : 1;
+
+/** Deterministic numbering labels shared by ordinary text and table-cell text. */
+const autoNumberLabels = (paragraphs: readonly ParaData[]): Array<string | null> => {
+  const labels: Array<string | null> = Array.from({ length: paragraphs.length }, () => null);
+  const counters: Array<{ type: string; startAt: number; value: number }> = [];
+  for (let index = 0; index < paragraphs.length; index += 1) {
+    const paragraph = paragraphs[index]!;
+    const type = bulletAutoNumType(paragraph.bulletStyle);
+    if (type === null) {
+      // A nested character/picture bullet interrupts only its own level. Keep
+      // ancestor numbering alive so parent → child → parent continues at 2.
+      counters.length = Math.min(counters.length, paragraph.level);
+      continue;
+    }
+    counters.length = Math.min(counters.length, paragraph.level + 1);
+    const startAt = autoNumberStart(paragraph.bulletStyle);
+    const current = counters[paragraph.level];
+    const value =
+      current && current.type === type && current.startAt === startAt ? current.value + 1 : startAt;
+    counters[paragraph.level] = { type, startAt, value };
+    labels[index] = formatAutoNum(type, value);
+  }
+  return labels;
+};
+
 const textEffectFill = (
   effects: readonly Effect[] | null | undefined,
   authoredColor: string,
@@ -2320,6 +2348,61 @@ interface ParaData {
   readonly spcAftPts: number | null;
   readonly indent: ReturnType<typeof getParagraphIndent>;
 }
+
+/**
+ * `<a:buClrTx/>` (and an omitted bullet colour) follows the paragraph text.
+ * Use the first visible run, matching PowerPoint's marker formatting rule,
+ * rather than the text body's fallback colour. This matters when a white run
+ * sits on a dark fill while the deck's default body colour is dark.
+ */
+const paragraphMarkerTextColor = (
+  para: ParaData,
+  theme: PresentationTheme | null,
+  fallback: string,
+): string => {
+  const run = para.runs.find(
+    (candidate) => candidate.text !== '\n' && candidate.text.trim() !== '',
+  );
+  if (!run) return fallback;
+  const hyperlinkColor =
+    run.href && safeHyperlink(run.href)
+      ? theme
+        ? normalizeHex(theme.hyperlink)
+        : '#0563C1'
+      : null;
+  const base =
+    hyperlinkColor ??
+    (run.fmt?.color !== undefined && run.fmt.color !== null
+      ? resolveColor(run.fmt.color, theme, '#000000')
+      : fallback);
+  return textEffectFill(run.fmt?.effects, base) ?? base;
+};
+
+/** Shared foreign-object marker paint, size, and typeface for shapes and table cells. */
+const markerGlyphCssStyles = (
+  para: ParaData,
+  theme: PresentationTheme | null,
+  fallbackColor: string,
+  baseSizePx: number,
+  scale: number,
+): string[] => {
+  const color = para.bulletDetail.color
+    ? resolveColor(para.bulletDetail.color, theme, '#000000')
+    : paragraphMarkerTextColor(para, theme, fallbackColor);
+  const sizePx =
+    para.bulletDetail.sizePct !== null
+      ? baseSizePx * para.bulletDetail.sizePct
+      : para.bulletDetail.sizePts !== null
+        ? para.bulletDetail.sizePts * PX_PER_PT * scale
+        : baseSizePx;
+  return [
+    `color:${color}`,
+    `font-size:${sizePx.toFixed(2)}px`,
+    para.bulletDetail.font
+      ? `font-family:${escapeXml(para.bulletDetail.font)}, ${DEFAULT_FONT}`
+      : `font-family:${DEFAULT_BULLET_FONT}, ${DEFAULT_FONT}`,
+  ];
+};
 
 // Collapses every ST_TextUnderlineType token onto the 3 styles the SVG text
 // engine actually distinguishes (see PieceInput.underline): the wavy family
@@ -2758,7 +2841,7 @@ const buildBullet = (a: SvgTextArgs, para: ParaData, pi: number): BulletInput | 
         : baseSizePx;
   const fillHex = para.bulletDetail.color
     ? resolveColor(para.bulletDetail.color, a.theme, '#000000')
-    : a.defaultColor;
+    : paragraphMarkerTextColor(para, a.theme, a.defaultColor);
   return {
     text: char,
     family: (a.resolveFamily ?? substituteFamily)(para.bulletDetail.font ?? DEFAULT_BULLET_FONT),
@@ -3124,30 +3207,7 @@ export const resolveTextBodyModel = (
   // Numbering pre-pass — assign an autonum index per paragraph for
   // consecutive numbered paragraphs at the same level. Resets on a
   // non-numbered paragraph or a level change.
-  const numberLabels: Array<string | null> = Array.from({ length: paraData.length }, () => null);
-  {
-    let counter = 0;
-    let activeLevel = -1;
-    let activeType: string | null = null;
-    for (let i = 0; i < paraData.length; i++) {
-      const para = paraData[i]!;
-      const num = bulletAutoNumType(para.bulletStyle);
-      if (num === null) {
-        counter = 0;
-        activeLevel = -1;
-        activeType = null;
-        continue;
-      }
-      if (para.level !== activeLevel || num !== activeType) {
-        counter = 1;
-        activeLevel = para.level;
-        activeType = num;
-      } else {
-        counter += 1;
-      }
-      numberLabels[i] = formatAutoNum(num, counter);
-    }
-  }
+  const numberLabels = autoNumberLabels(paraData);
 
   // A bare `<a:normAutofit/>` (no baked `fontScale`, so it defaults to 1) means
   // "shrink text to fit the box" — PowerPoint computes that reduction at display
@@ -3384,25 +3444,8 @@ const renderTextBody = (
       // Bullet style overrides: color, size %, fixed pt size, font face.
       const bulletStyles: string[] = [
         `margin-right:${(0.4 * defaultPt * PX_PER_PT * autoFitScale).toFixed(2)}px`,
+        ...markerGlyphCssStyles(para, theme, activeDeckTextColor, baseBulletPx, autoFitScale),
       ];
-      if (para.bulletDetail.color) {
-        bulletStyles.push(`color:${resolveColor(para.bulletDetail.color, theme, '#000000')}`);
-      }
-      if (para.bulletDetail.sizePct !== null) {
-        bulletStyles.push(`font-size:${(para.bulletDetail.sizePct * 100).toFixed(1)}%`);
-      } else if (para.bulletDetail.sizePts !== null) {
-        bulletStyles.push(
-          `font-size:${(para.bulletDetail.sizePts * PX_PER_PT * autoFitScale).toFixed(2)}px`,
-        );
-      } else {
-        // No authored size → the first-run size, matching the SVG path.
-        bulletStyles.push(`font-size:${baseBulletPx.toFixed(2)}px`);
-      }
-      bulletStyles.push(
-        para.bulletDetail.font
-          ? `font-family:${escapeXml(para.bulletDetail.font)}, ${DEFAULT_FONT}`
-          : `font-family:${DEFAULT_BULLET_FONT}, ${DEFAULT_FONT}`,
-      );
       prefix = `<span style="${bulletStyles.join(';')}">${escapeXml(char)}</span>`;
     }
     paragraphs.push(
@@ -5764,8 +5807,7 @@ const renderChart = (
 // wrapping, and the svg ↔ foreignObject split for free.
 
 // Builds the per-paragraph layout model the shared text engine consumes from a
-// cell's structured paragraphs. Table cells have no bullets, levels, indents,
-// or paragraph spacing, so those fields are inert. A run's effective point
+// cell's structured paragraphs. A run's effective point
 // size resolves to its explicit `<a:rPr sz>` when present, else the table-cell
 // default: @office-kit/pptx doesn't model `<a:tblStyle>` text props, so unstyled cells
 // fall to PowerPoint's authored default cell size (18 pt — what it writes for a
@@ -5799,15 +5841,25 @@ const cellParaData = (
       });
       if (el.kind === 'r') nativeRunIndex += 1;
     }
+    let bulletImageHref: string | null = null;
+    if (para.picture) {
+      try {
+        const bytes = getTableCellParagraphBulletImageBytes(cell, paragraphIndex);
+        if (bytes) bulletImageHref = bytesToDataUrl(bytes);
+      } catch {}
+    }
     return {
       align: para.align ?? 'left',
-      level: 0,
-      bulletStyle: null,
-      bulletDetail: { color: null, sizePct: null, sizePts: null, font: null },
-      bulletIsPicture: false,
-      // Table cells never carry picture bullets (no <a:pPr> bullet model
-      // in <a:tc> text bodies).
-      bulletImageHref: null,
+      level: para.level,
+      bulletStyle: para.bullet,
+      bulletDetail: {
+        color: para.color,
+        sizePct: para.sizePct,
+        sizePts: para.sizePts,
+        font: para.font,
+      },
+      bulletIsPicture: para.picture,
+      bulletImageHref,
       runs,
       lineSpacing: null,
       spcBefPts: null,
@@ -5859,12 +5911,13 @@ const renderTableCellText = (
   // works in EMU (it divides by EMU_PER_PX internally), so project the px box
   // back to EMU.
   if (ctx.mode === 'svg') {
+    const numberLabels = autoNumberLabels(paraData);
     return buildAndLayoutSvgText({
       pres,
       shape,
       theme,
       paraData,
-      numberLabels: paraData.map(() => null),
+      numberLabels,
       autoFitScale: 1,
       lineHeightScale: 1,
       defaultPt: DEFAULT_BODY_PT,
@@ -5887,8 +5940,9 @@ const renderTableCellText = (
   const justify = vAnchor === 'top' ? 'flex-start' : vAnchor === 'bottom' ? 'flex-end' : 'center';
   const familyFont = themeFace ? `${escapeXml(themeFace)}, ${DEFAULT_FONT}` : DEFAULT_FONT;
   const verticalStyles = verticalTextCss(textDirection);
+  const numberLabels = autoNumberLabels(paraData);
   const body = paraData
-    .map((para) => {
+    .map((para, paragraphIndex) => {
       const runHtml = para.runs
         .map((run) =>
           renderRun(
@@ -5902,7 +5956,31 @@ const renderTableCellText = (
         )
         .join('');
       const textAlign = ALIGNMENT_TO_CSS[para.align] ?? 'left';
-      return `<p style="margin:0;padding:0;text-align:${textAlign};line-height:1.2">${runHtml || '&#8203;'}</p>`;
+      const explicitChar =
+        para.bulletStyle !== null &&
+        typeof para.bulletStyle === 'object' &&
+        'char' in para.bulletStyle
+          ? para.bulletStyle.char
+          : null;
+      const label = numberLabels[paragraphIndex];
+      const showBullet =
+        para.bulletStyle === 'bullet' ||
+        explicitChar !== null ||
+        label !== null ||
+        para.bulletIsPicture ||
+        (para.bulletStyle !== 'none' && para.level > 0);
+      const firstRunBulletPt =
+        para.runs.find((run) => run.text !== '\n' && run.text !== '')?.sizePt ?? DEFAULT_BODY_PT;
+      const markerStyles = [
+        'margin-right:.4em',
+        ...markerGlyphCssStyles(para, theme, color, firstRunBulletPt * PX_PER_PT, 1),
+      ].join(';');
+      const marker = para.bulletImageHref
+        ? `<img src="${para.bulletImageHref}" alt="" style="width:1em;height:1em;display:inline-block;vertical-align:baseline;margin-right:.4em"/>`
+        : showBullet
+          ? `<span style="${markerStyles}">${escapeXml(para.bulletIsPicture ? '■' : (label ?? explicitChar ?? bulletChar(para.level)))}</span>`
+          : '';
+      return `<p style="margin:0;padding:0;text-align:${textAlign};line-height:1.2">${marker}${runHtml || '&#8203;'}</p>`;
     })
     .join('');
   return `<foreignObject x="${px(innerX)}" y="${px(innerY)}" width="${px(innerW)}" height="${px(innerH)}"><div xmlns="http://www.w3.org/1999/xhtml" style="display:flex;flex-direction:column;justify-content:${justify};width:100%;height:100%;box-sizing:border-box;overflow:hidden;font-family:${familyFont};color:${color};word-break:break-word;${verticalStyles}">${body}</div></foreignObject>`;

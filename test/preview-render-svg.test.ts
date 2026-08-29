@@ -26,6 +26,8 @@ import {
   loadPresentation,
   type PatternPreset,
   savePresentation,
+  setParagraphBullet,
+  setParagraphLevel,
   setShapeFill,
   setShapeFlip,
   setShapeGradientFill,
@@ -1151,5 +1153,75 @@ describe('master bullet inheritance', () => {
     // The python-pptx master's bodyStyle lvl1 authors buChar="•"; no
     // slide-level bullet exists, so the glyph must come from the cascade.
     expect(textContentOf(svg)).toContain('•');
+  });
+});
+
+describe('automatic numbering preview', () => {
+  it('uses the first run color when the marker has no explicit bullet color', async () => {
+    const { pres, slide } = await blankSlide();
+    const text = addSlideTextBox(slide, {
+      x: inches(1),
+      y: inches(1),
+      w: inches(5),
+      h: inches(1),
+      text: 'Visible on dark backgrounds',
+    });
+    setShapeParagraphElements(text, 0, [
+      { kind: 'r', text: '   ', format: { color: '#17233C' } },
+      { kind: 'r', text: 'Visible on dark backgrounds', format: { color: '#FFFFFF' } },
+    ]);
+    setParagraphBullet(text, 0, { autoNum: 'arabicPeriod', startAt: 5 });
+
+    const svgText = renderSlideToSvg(pres, slide, { textLayout: 'svg' });
+    expect(svgText).toMatch(/<text[^>]*fill="#FFFFFF"[^>]*>5\.<\/text>/u);
+
+    const foreignObject = renderSlideToSvg(pres, slide, { textLayout: 'foreignObject' });
+    expect(foreignObject).toMatch(/<span style="[^"]*color:#FFFFFF[^"]*">5\.<\/span>/u);
+  });
+
+  it('keeps ancestor counters across nested automatic and character bullets', async () => {
+    const { pres, slide } = await blankSlide();
+    const text = addSlideTextBox(slide, {
+      x: inches(1),
+      y: inches(1),
+      w: inches(5),
+      h: inches(3),
+      text: 'Parent one\nNumbered child\nParent two\nCharacter child\nParent three',
+    });
+    setParagraphBullet(text, 0, { autoNum: 'arabicPeriod' });
+    setParagraphBullet(text, 1, { autoNum: 'arabicPeriod' });
+    setParagraphLevel(text, 1, 1);
+    setParagraphBullet(text, 2, { autoNum: 'arabicPeriod' });
+    setParagraphBullet(text, 3, { char: '◆' });
+    setParagraphLevel(text, 3, 1);
+    setParagraphBullet(text, 4, { autoNum: 'arabicPeriod' });
+
+    const rendered = textContentOf(renderSlideToSvg(pres, slide, { textLayout: 'svg' }));
+    expect(rendered).toMatch(
+      /1\.Parent one1\.Numbered child2\.Parent two◆Character child3\.Parent three/u,
+    );
+  });
+
+  it('renders parenthesized schemes and keeps locale-specific schemes perceptible', async () => {
+    const { pres, slide } = await blankSlide();
+    const text = addSlideTextBox(slide, {
+      x: inches(1),
+      y: inches(1),
+      w: inches(5),
+      h: inches(3),
+      text: 'Roman first\nRoman second\nLocale first\nLocale second',
+    });
+    setParagraphBullet(text, 0, { autoNum: 'romanLcParenR', startAt: 5 });
+    setParagraphBullet(text, 1, { autoNum: 'romanLcParenR', startAt: 5 });
+    setParagraphBullet(text, 2, { autoNum: 'ea1ChsPeriod' });
+    setParagraphBullet(text, 3, { autoNum: 'ea1ChsPeriod' });
+
+    const rendered = textContentOf(renderSlideToSvg(pres, slide, { textLayout: 'svg' }));
+    expect(rendered).toContain('v)');
+    expect(rendered).toContain('vi)');
+    // Locale-specific glyph generation is deliberately degraded to a stable
+    // decimal marker, but the marker remains visible in PNG/SVG output.
+    expect(rendered).toContain('1.');
+    expect(rendered).toContain('2.');
   });
 });

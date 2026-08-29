@@ -21,6 +21,7 @@ import {
   setTableCellAlignment,
   setTableCellTextDirection,
   setTableCellTextFormat,
+  setTableCellParagraphs,
 } from '../src/api/index.ts';
 import { renderSlideToSvg } from '../packages/preview/src/index.ts';
 import { attrsOf, countTags, textContentOf } from './lib/svg-query.ts';
@@ -102,6 +103,50 @@ describe('table cell text rendering', () => {
     const svg = renderSlideToSvg(pres, slide, { textLayout: 'svg' });
     // One <text> element is emitted per laid-out line; wrapping yields >= 2.
     expect(countTags(svg, 'text')).toBeGreaterThanOrEqual(2);
+  });
+
+  it('svg mode: table-cell native numbering renders with deterministic locale degradation', async () => {
+    const { pres, slide } = await blankSlide();
+    const table = addSlideTable(slide, {
+      x: inches(1),
+      y: inches(1),
+      w: inches(6),
+      h: inches(2),
+      rows: [['Numbered']],
+    });
+    setTableCellParagraphs(getTableCell(table, 0, 0), [
+      { runs: [{ text: 'Parenthesized' }], bullet: { autoNum: 'arabicParenBoth', startAt: 3 } },
+      { runs: [{ text: 'Locale fallback' }], bullet: { autoNum: 'hindiNumPeriod' } },
+    ]);
+
+    const rendered = textContentOf(renderSlideToSvg(pres, slide, { textLayout: 'svg' }));
+    expect(rendered).toContain('(3)');
+    expect(rendered).toContain('1.');
+  });
+
+  it('table-cell marker follows the first run color when bullet color is omitted', async () => {
+    const { pres, slide } = await blankSlide();
+    const table = addSlideTable(slide, {
+      x: inches(1),
+      y: inches(1),
+      w: inches(6),
+      h: inches(2),
+      rows: [['Numbered']],
+    });
+    setTableCellParagraphs(getTableCell(table, 0, 0), [
+      {
+        runs: [{ text: 'Visible on dark backgrounds', format: { color: '#FFFFFF' } }],
+        bullet: { autoNum: 'arabicPeriod', startAt: 5, sizePct: 0.8, font: 'Aptos' },
+      },
+    ]);
+
+    const svgText = renderSlideToSvg(pres, slide, { textLayout: 'svg' });
+    expect(svgText).toMatch(/<text[^>]*fill="#FFFFFF"[^>]*>5\.<\/text>/u);
+
+    const foreignObject = renderSlideToSvg(pres, slide, { textLayout: 'foreignObject' });
+    expect(foreignObject).toMatch(/<span style="[^"]*color:#FFFFFF[^"]*">5\.<\/span>/u);
+    expect(foreignObject).toContain('font-size:19.20px');
+    expect(foreignObject).toContain('font-family:Aptos');
   });
 
   it('foreignObject mode: cell text is emitted inside a <foreignObject>', async () => {

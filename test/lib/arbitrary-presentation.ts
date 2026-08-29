@@ -32,6 +32,7 @@ import {
   findSlideLayoutByType,
   type PatternPreset,
   type PresentationData,
+  type TextAutoNumberScheme,
   setShapeBullets,
   setShapeFill,
   setShapeFlip,
@@ -75,7 +76,7 @@ export type BulletSpec =
   | 'number'
   | 'none'
   | { readonly char: string }
-  | { readonly autoNum: string };
+  | { readonly autoNum: TextAutoNumberScheme };
 
 export interface RunFormatSpec {
   readonly bold: boolean;

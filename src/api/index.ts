@@ -244,6 +244,7 @@ export {
   getExtendedProperties,
   getParagraphAlignment,
   getParagraphBullet,
+  getParagraphBulletAutoNumberSchemeRaw,
   getParagraphBulletPropertiesEffective,
   getParagraphBulletStyle,
   getParagraphBulletImageBytes,
@@ -466,6 +467,7 @@ export {
   getTableCellFill,
   getTableCellMargins,
   getTableCellParagraphs,
+  getTableCellParagraphBulletImageBytes,
   getTableCellRunUnderlineFillImageBytes,
   getTableCellRunFillImageBytes,
   getTableCellPosition,
@@ -473,6 +475,7 @@ export {
   getTableCellTable,
   getTableCellText,
   getTableCellTextDirection,
+  isTableCellParagraphBulletPicture,
   hasShapeImage,
   getTableCells,
   getTableColumnWidths,
@@ -636,6 +639,7 @@ export {
   setTableCellMargins,
   setTableCellText,
   setTableCellParagraphs,
+  setTableCellParagraphBulletImage,
   setTableCellRunUnderlineFillImage,
   setTableCellRunFillImage,
   setTableCellTextDirection,
@@ -656,8 +660,11 @@ export {
   validatePresentation,
 } from './fn.ts';
 
+export { TEXT_AUTO_NUMBER_SCHEMES } from '../internal/drawingml/index.ts';
+
 export type {
   BulletStyle,
+  TextAutoNumberScheme,
   ParagraphAlignment,
   TextFormat,
   TextGradient,

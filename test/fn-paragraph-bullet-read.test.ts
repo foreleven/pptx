@@ -22,6 +22,7 @@ import {
   savePresentation,
   setParagraphBullet,
   setParagraphBulletImage,
+  TEXT_AUTO_NUMBER_SCHEMES,
 } from '../src/api/index.ts';
 
 const PNG = new Uint8Array([
@@ -88,6 +89,43 @@ describe('fn API: getParagraphBullet', () => {
     expect(getParagraphBullet(rebuiltText, 5)).toEqual({ autoNum: 'arabicPeriod', startAt: 5 });
     expect(getParagraphBulletPropertiesEffective(rebuilt, rebuiltText, 3).font).toBe('Arial');
     expect(getParagraphBulletPropertiesEffective(rebuilt, rebuiltText, 4).font).toBe('Aptos');
+  });
+
+  it('round-trips every strict automatic-number scheme and rejects unknown authoring tokens', async () => {
+    const pres = createPresentation();
+    const slide = addBlankSlide(pres);
+    const tb = addSlideTextBox(slide, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(5),
+      h: inches(7),
+      text: TEXT_AUTO_NUMBER_SCHEMES.map((scheme) => scheme).join('\n'),
+    });
+    for (const [index, scheme] of TEXT_AUTO_NUMBER_SCHEMES.entries()) {
+      setParagraphBullet(tb, index, { autoNum: scheme, startAt: index + 1 });
+    }
+
+    expect(TEXT_AUTO_NUMBER_SCHEMES.map((_, index) => getParagraphBullet(tb, index))).toEqual(
+      TEXT_AUTO_NUMBER_SCHEMES.map((scheme, index) => ({
+        autoNum: scheme,
+        ...(index === 0 ? {} : { startAt: index + 1 }),
+      })),
+    );
+
+    const rebuilt = await loadPresentation(await savePresentation(pres));
+    const rebuiltText = findShapeByText(getSlides(rebuilt)[0]!, TEXT_AUTO_NUMBER_SCHEMES[0])!;
+    expect(
+      TEXT_AUTO_NUMBER_SCHEMES.map((_, index) => getParagraphBullet(rebuiltText, index)),
+    ).toEqual(
+      TEXT_AUTO_NUMBER_SCHEMES.map((scheme, index) => ({
+        autoNum: scheme,
+        ...(index === 0 ? {} : { startAt: index + 1 }),
+      })),
+    );
+
+    expect(() => setParagraphBullet(tb, 0, { autoNum: 'notARealScheme' } as never)).toThrow(
+      /automatic-number scheme/u,
+    );
   });
 
   it('writes picture bullets, shares identical media, and collects stale relationships', async () => {

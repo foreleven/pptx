@@ -18,7 +18,7 @@ import {
   text,
   walkElements,
 } from '../xml/index.ts';
-import { fontSizeHundredthPt } from '../bounds.ts';
+import { fontSizeHundredthPt, oneOf } from '../bounds.ts';
 import { buildColorElement } from './color.ts';
 
 const NAME_BU_CHAR = qname('a', 'buChar', NS.dml);
@@ -194,18 +194,71 @@ interface BulletMarkerStyle {
   font?: string;
 }
 
+/** Every ECMA-376 `ST_TextAutonumberScheme` token. */
+export const TEXT_AUTO_NUMBER_SCHEMES = [
+  'alphaLcParenBoth',
+  'alphaUcParenBoth',
+  'alphaLcParenR',
+  'alphaUcParenR',
+  'alphaLcPeriod',
+  'alphaUcPeriod',
+  'arabicParenBoth',
+  'arabicParenR',
+  'arabicPeriod',
+  'arabicPlain',
+  'romanLcParenBoth',
+  'romanUcParenBoth',
+  'romanLcParenR',
+  'romanUcParenR',
+  'romanLcPeriod',
+  'romanUcPeriod',
+  'circleNumDbPlain',
+  'circleNumWdBlackPlain',
+  'circleNumWdWhitePlain',
+  'arabicDbPeriod',
+  'arabicDbPlain',
+  'ea1ChsPeriod',
+  'ea1ChsPlain',
+  'ea1ChtPeriod',
+  'ea1ChtPlain',
+  'ea1JpnChsDbPeriod',
+  'ea1JpnKorPlain',
+  'ea1JpnKorPeriod',
+  'arabic1Minus',
+  'arabic2Minus',
+  'hebrew2Minus',
+  'thaiAlphaPeriod',
+  'thaiAlphaParenR',
+  'thaiAlphaParenBoth',
+  'thaiNumPeriod',
+  'thaiNumParenR',
+  'thaiNumParenBoth',
+  'hindiAlphaPeriod',
+  'hindiNumPeriod',
+  'hindiNumParenR',
+  'hindiAlpha1Period',
+] as const;
+
+export type TextAutoNumberScheme = (typeof TEXT_AUTO_NUMBER_SCHEMES)[number];
+
+const TEXT_AUTO_NUMBER_SCHEME_SET: ReadonlySet<string> = new Set(TEXT_AUTO_NUMBER_SCHEMES);
+
+/** Returns whether `value` is a strict ECMA-376 `ST_TextAutonumberScheme` token. */
+export const isTextAutoNumberScheme = (value: string): value is TextAutoNumberScheme =>
+  TEXT_AUTO_NUMBER_SCHEME_SET.has(value);
+
 export type BulletStyle =
   | 'bullet'
   | 'number'
   | 'none'
   | ({ char: string } & BulletMarkerStyle)
-  | ({ autoNum: string; startAt?: number } & BulletMarkerStyle);
+  | ({ autoNum: TextAutoNumberScheme; startAt?: number } & BulletMarkerStyle);
 
 const normalizeBulletStyle = (
   s: BulletStyle,
 ):
   | { kind: 'char'; char: string }
-  | { kind: 'autoNum'; type: string; startAt: number }
+  | { kind: 'autoNum'; type: TextAutoNumberScheme; startAt: number }
   | { kind: 'none' } => {
   if (s === 'bullet') return { kind: 'char', char: '•' };
   if (s === 'number') return { kind: 'autoNum', type: 'arabicPeriod', startAt: 1 };
@@ -217,7 +270,11 @@ const normalizeBulletStyle = (
       `automatic-number startAt must be an integer from 1 to 32767; got ${startAt}`,
     );
   }
-  return { kind: 'autoNum', type: s.autoNum, startAt };
+  return {
+    kind: 'autoNum',
+    type: oneOf(s.autoNum, TEXT_AUTO_NUMBER_SCHEMES, 'automatic-number scheme'),
+    startAt,
+  };
 };
 
 const buildBulletElement = (style: BulletStyle): XmlElement => {

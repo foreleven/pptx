@@ -9,6 +9,7 @@ import {
   applyBulletToParagraph,
   applyRunFormat,
   applyRunState,
+  isTextAutoNumberScheme,
 } from '../../internal/drawingml/index.ts';
 import {
   basename,
@@ -1894,10 +1895,29 @@ export const getParagraphBullet = (
       const t = getAttrValue(c, qname('', 'type', ''));
       const startAt = Number(getAttrValue(c, qname('', 'startAt', '')) ?? '1');
       if (t === 'arabicPeriod' && startAt === 1) return 'number';
-      if (t !== null) return { autoNum: t, ...(startAt === 1 ? {} : { startAt }) };
+      if (t !== null && isTextAutoNumberScheme(t)) {
+        return { autoNum: t, ...(startAt === 1 ? {} : { startAt }) };
+      }
+      return null;
     }
   }
   return null;
+};
+
+/**
+ * Returns the literal direct `<a:buAutoNum type>` token, including tokens
+ * outside the strict ECMA-376 catalog. Importers can use this alongside
+ * `getParagraphBullet` to diagnose malformed producer output without making
+ * the typed bullet API accept invalid authoring values.
+ */
+export const getParagraphBulletAutoNumberSchemeRaw = (
+  shape: SlideShapeData,
+  paragraphIndex: number,
+): string | null => {
+  const paragraph = requireParagraph(shape, paragraphIndex);
+  const pPr = firstChildElement(paragraph, NAME_A_PPR);
+  const autoNumber = pPr && firstChildElement(pPr, qname('a', 'buAutoNum', NS.dml));
+  return autoNumber ? getAttrValue(autoNumber, qname('', 'type', '')) : null;
 };
 
 /**

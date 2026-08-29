@@ -9,7 +9,9 @@ import {
   getSlideShapes,
   getSlideXmlString,
   getSlides,
+  getMediaParts,
   getTableCell,
+  getTableCellParagraphBulletImageBytes,
   getTableCellPosition,
   getTableCellParagraphs,
   getTableCellRunFillImageBytes,
@@ -17,6 +19,7 @@ import {
   getTableCellText,
   getTableCells,
   inches,
+  isTableCellParagraphBulletPicture,
   isTableShape,
   loadPresentation,
   savePresentation,
@@ -25,8 +28,10 @@ import {
   setTableCellText,
   setTableCellTextFormat,
   setTableCellParagraphs,
+  setTableCellParagraphBulletImage,
   setTableCellRunFillImage,
   setTableCellRunUnderlineFillImage,
+  TEXT_AUTO_NUMBER_SCHEMES,
 } from '../src/api/index.ts';
 
 const TINY_PNG = Uint8Array.from(
@@ -166,6 +171,101 @@ describe('fn API: table cell access', () => {
       format: { font: 'Aptos', size: 18, color: '#F26B5B', bold: true },
       state: { dirty: false },
     });
+  });
+
+  it('round-trips every automatic-number scheme in table cells', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const table = addDemoTable(slide);
+    const cell = getTableCell(table, 0, 0);
+    setTableCellParagraphs(
+      cell,
+      TEXT_AUTO_NUMBER_SCHEMES.map((scheme, index) => ({
+        runs: [{ text: scheme }],
+        bullet: { autoNum: scheme, startAt: index + 1 },
+      })),
+    );
+
+    expect(getTableCellParagraphs(cell).map((paragraph) => paragraph.bullet)).toEqual(
+      TEXT_AUTO_NUMBER_SCHEMES.map((scheme, index) => ({
+        autoNum: scheme,
+        ...(index === 0 ? {} : { startAt: index + 1 }),
+      })),
+    );
+
+    const reloaded = await loadPresentation(await savePresentation(pres));
+    const reloadedTable = getSlideShapes(getSlides(reloaded)[0]!).find(isTableShape)!;
+    expect(
+      getTableCellParagraphs(getTableCell(reloadedTable, 0, 0)).map(
+        (paragraph) => paragraph.bullet,
+      ),
+    ).toEqual(
+      TEXT_AUTO_NUMBER_SCHEMES.map((scheme, index) => ({
+        autoNum: scheme,
+        ...(index === 0 ? {} : { startAt: index + 1 }),
+      })),
+    );
+  });
+
+  it('reads table-cell bullet identity, level, marker style, and editable picture bytes', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const table = addDemoTable(slide);
+    const cell = getTableCell(table, 0, 0);
+    setTableCellParagraphs(cell, [
+      { runs: [{ text: 'None' }], bullet: 'none' },
+      {
+        runs: [{ text: 'Character' }],
+        bullet: { char: '◆', color: '#3659E380', sizePct: 0.8, font: 'Aptos' },
+        level: 2,
+      },
+      {
+        runs: [{ text: 'Automatic' }],
+        bullet: { autoNum: 'arabicParenBoth', sizePts: 12 },
+      },
+      { runs: [{ text: 'Picture' }], bullet: 'bullet' },
+    ]);
+    setTableCellParagraphBulletImage(cell, 3, TINY_PNG);
+
+    expect(getTableCellParagraphs(cell)).toMatchObject([
+      { bullet: 'none', picture: false, level: 0 },
+      {
+        bullet: { char: '◆' },
+        picture: false,
+        level: 2,
+        color: '#3659E380',
+        colorExactSrgb: true,
+        sizePct: 0.8,
+        sizePts: null,
+        sizeValid: true,
+        font: 'Aptos',
+      },
+      {
+        bullet: { autoNum: 'arabicParenBoth' },
+        picture: false,
+        sizePct: null,
+        sizePts: 12,
+      },
+      { bullet: null, picture: true },
+    ]);
+    expect(isTableCellParagraphBulletPicture(cell, 3)).toBe(true);
+    expect(getTableCellParagraphBulletImageBytes(cell, 3)).toEqual(TINY_PNG);
+    expect(getMediaParts(pres)).toHaveLength(1);
+
+    const reloaded = await loadPresentation(await savePresentation(pres));
+    const reloadedTable = getSlideShapes(getSlides(reloaded)[0]!).find(isTableShape)!;
+    const reloadedCell = getTableCell(reloadedTable, 0, 0);
+    expect(getTableCellParagraphBulletImageBytes(reloadedCell, 3)).toEqual(TINY_PNG);
+    expect(getTableCellParagraphs(reloadedCell)[1]).toMatchObject({
+      bullet: { char: '◆' },
+      level: 2,
+      color: '#3659E380',
+      sizePct: 0.8,
+      font: 'Aptos',
+    });
+
+    setTableCellParagraphs(reloadedCell, [{ runs: [{ text: 'Replaced' }], bullet: 'bullet' }]);
+    expect(getMediaParts(reloaded)).toEqual([]);
   });
 
   it('embeds and resolves a table-cell picture underline fill relationship', async () => {

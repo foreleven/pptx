@@ -26,6 +26,7 @@ import {
   type TextFormat,
   applyHyperlinkToAllRuns,
   applyRunFormat as applyRunFormatInternal,
+  isTextAutoNumberScheme,
 } from '../../internal/drawingml/index.ts';
 import { emptyRels, nextRelId, partName, resolveTarget } from '../../internal/opc/index.ts';
 import { REL_TYPES, readShapeTreeFromCsldRoot } from '../../internal/presentationml/index.ts';
@@ -510,7 +511,7 @@ const parseBulletIdentity = (pPr: XmlElement): ParsedBulletIdentity | undefined 
     }
     if (child.name.localName === 'buAutoNum') {
       const type = getAttrValue(child, qname('', 'type', ''));
-      if (type !== null) {
+      if (type !== null && isTextAutoNumberScheme(type)) {
         const startAt = Number(getAttrValue(child, qname('', 'startAt', '')) ?? '1');
         return {
           bullet:
@@ -520,6 +521,7 @@ const parseBulletIdentity = (pPr: XmlElement): ParsedBulletIdentity | undefined 
           picture: false,
         };
       }
+      return { bullet: null, picture: false };
     }
     if (child.name.localName === 'buBlip') return { bullet: null, picture: true };
   }
@@ -810,6 +812,30 @@ const parseBulletLayer = (
     }
   }
   return result;
+};
+
+/**
+ * Reads the bullet properties authored directly on one `<a:pPr>` layer.
+ * This is shared with table-cell text, whose paragraphs use the same
+ * DrawingML grammar but do not participate in the shape placeholder cascade.
+ *
+ * @internal
+ */
+export const readParagraphBulletPropertiesDirect = (
+  pPr: XmlElement,
+  theme: ReturnType<typeof getPresentationTheme>,
+): ParagraphBulletPropertiesEffective => {
+  const parsed = parseBulletLayer(pPr, theme);
+  return {
+    bullet: parsed.identity?.bullet ?? null,
+    picture: parsed.identity?.picture ?? false,
+    color: parsed.color?.value ?? null,
+    colorExactSrgb: parsed.color?.exactSrgb ?? null,
+    sizePct: parsed.size?.sizePct ?? null,
+    sizePts: parsed.size?.sizePts ?? null,
+    sizeValid: parsed.sizeValid ?? true,
+    font: parsed.font ?? null,
+  };
 };
 
 /** CSS marker colors can preserve only literal sRGB plus zero or one exactly byte-addressable alpha. */
