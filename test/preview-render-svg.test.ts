@@ -8,6 +8,7 @@
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { PATTERN_PRESETS } from '../src/internal/drawingml/fill.ts';
 import {
   addSlide,
   addSlideChart,
@@ -18,6 +19,7 @@ import {
   addSlideTextBox,
   findSlideLayout,
   findSlidePlaceholder,
+  getTableCell,
   getSlides,
   groupShapes,
   inches,
@@ -32,10 +34,14 @@ import {
   setShapeImageFill,
   setShapePatternFill,
   setShapeRotation,
+  setShapeParagraphElements,
+  setShapeRunFillImage,
   setShapeRunFormat,
   setShapeStroke,
   setShapeStrokeArrow,
   setShapeText,
+  setTableCellParagraphs,
+  setTableCellRunFillImage,
 } from '../src/api/index.ts';
 import { readZip, writeZip } from '../src/internal/opc/index.ts';
 import { buildSvgEffectPlan, renderSlideToSvg } from '../packages/preview/src/index.ts';
@@ -294,6 +300,103 @@ describe('renderSlideToSvg', () => {
     expect(svg).toContain('marker-start="url(#text-underline-head-triangle-');
     expect(svg).toContain('marker-end="url(#text-underline-tail-oval-');
     expect(svg).toContain('paint-order="stroke fill"');
+  });
+
+  it('renders the complete ST_PresetPatternVal catalog with representative preset semantics', async () => {
+    const { pres, slide } = await blankSlide();
+    const box = addSlideTextBox(slide, {
+      x: inches(0.25),
+      y: inches(0.25),
+      w: inches(9.5),
+      h: inches(5),
+      text: PATTERN_PRESETS.join(' '),
+    });
+    setShapeParagraphElements(
+      box,
+      0,
+      PATTERN_PRESETS.map((preset) => ({
+        kind: 'r' as const,
+        text: `${preset} `,
+        format: { patternFill: { preset, foreground: '#3659E3', background: '#FFFFFF' } },
+      })),
+    );
+    const svg = renderSlideToSvg(pres, slide, { textLayout: 'svg' });
+    const definitions = [
+      ...svg.matchAll(/<pattern id="text-glyph-paint-[^"]+"[^]*?<\/pattern>/gu),
+    ].map((match) => match[0].replace(/id="text-glyph-paint-[^"]+"/u, 'id="catalog"'));
+    expect(definitions).toHaveLength(54);
+    expect(new Set(definitions).size).toBeGreaterThan(20);
+    expect(svg).toContain('stroke-dasharray="3 2"');
+    expect(svg).toContain('<circle');
+    expect(svg).toContain('Q2 0 4 4');
+    expect(svg).toContain('L2 3 4 5');
+  });
+
+  it('keeps direct pattern and picture text fills perceptible in SVG and foreignObject modes', async () => {
+    const { pres, slide } = await blankSlide();
+    const box = addSlideTextBox(slide, {
+      x: inches(1),
+      y: inches(1),
+      w: inches(6),
+      h: inches(1),
+      text: 'PatternPicture',
+    });
+    setShapeParagraphElements(box, 0, [
+      {
+        kind: 'r',
+        text: 'Pattern',
+        format: {
+          patternFill: { preset: 'pct50', foreground: '#3659E3', background: '#FFFFFF' },
+        },
+      },
+      { kind: 'r', text: 'Picture' },
+    ]);
+    setShapeRunFillImage(box, 0, 1, buildPng(2, 2, [242, 107, 91]));
+
+    const svgText = renderSlideToSvg(pres, slide, { textLayout: 'svg' });
+    expect(svgText).toContain('<pattern id="text-glyph-paint-');
+    expect(svgText).toContain('fill="#7F7F7F"');
+    expect(svgText).toContain('<image width="1" height="1" href="data:image/png;base64,');
+    expect(svgText).toContain('fill="url(#text-glyph-paint-');
+
+    const foreignObject = renderSlideToSvg(pres, slide);
+    expect(foreignObject).toContain('background-image:repeating-linear-gradient(135deg,#3659E3');
+    expect(foreignObject).toContain('background-color:#7F7F7F');
+    expect(foreignObject).toContain('background-image:url(data:image/png;base64,');
+    expect(foreignObject).toContain('background-clip:text');
+  });
+
+  it('keeps direct pattern and picture table-cell text fills perceptible', async () => {
+    const { pres, slide } = await blankSlide();
+    const table = addSlideTable(slide, {
+      x: inches(1),
+      y: inches(1),
+      w: inches(6),
+      h: inches(1),
+      rows: [['Pattern Picture']],
+    });
+    const cell = getTableCell(table, 0, 0);
+    setTableCellParagraphs(cell, [
+      {
+        runs: [
+          {
+            text: 'Pattern',
+            format: {
+              patternFill: { preset: 'pct50', foreground: '#3659E3', background: '#FFFFFF' },
+            },
+          },
+          { text: ' Picture' },
+        ],
+      },
+    ]);
+    setTableCellRunFillImage(cell, 0, 1, buildPng(2, 2, [242, 107, 91]));
+
+    const svgText = renderSlideToSvg(pres, slide, { textLayout: 'svg' });
+    expect(svgText).toContain('<pattern id="text-glyph-paint-');
+    expect(svgText).toContain('<image width="1" height="1" href="data:image/png;base64,');
+    const foreignObject = renderSlideToSvg(pres, slide);
+    expect(foreignObject).toContain('background-image:repeating-linear-gradient(135deg,#3659E3');
+    expect(foreignObject).toContain('background-image:url(data:image/png;base64,');
   });
 
   it('foreignObject text degrades gradient decorations to their midpoint color', async () => {

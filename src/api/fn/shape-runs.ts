@@ -48,7 +48,12 @@ import {
   hyperlinkRelationshipIds,
   removeUnreferencedSlideRelationships,
 } from './hyperlink-relationships.ts';
-import { getRunUnderlineFillImageBytes, setRunUnderlineFillImage } from './run-underline-image.ts';
+import {
+  getRunDirectFillImageBytes,
+  getRunUnderlineFillImageBytes,
+  setRunDirectFillImage,
+  setRunUnderlineFillImage,
+} from './run-underline-image.ts';
 import {
   emuCoordinate32,
   emuPositiveCoordinate32,
@@ -381,6 +386,7 @@ export const setShapeEndParagraphProperties = (
  */
 export const readParagraphElements = (
   paragraph: XmlElement,
+  ctx?: Parameters<typeof parseRPrLikeElement>[1],
 ): ReadonlyArray<ShapeParagraphElement> => {
   const out: ShapeParagraphElement[] = [];
   const readT = (parent: XmlElement): string => {
@@ -395,7 +401,7 @@ export const readParagraphElements = (
   const readFmt = (parent: XmlElement): TextFormat | null => {
     const rPr = firstChildElement(parent, NAME_A_RPR);
     if (!rPr) return null;
-    return parseRPrLikeElement(rPr) as TextFormat;
+    return parseRPrLikeElement(rPr, ctx) as TextFormat;
   };
   for (const child of paragraph.children) {
     if (child.kind !== 'element' || child.name.namespaceURI !== NS.dml) continue;
@@ -1958,6 +1964,34 @@ export const getShapeRunUnderlineFillImageBytes = (
   runIndex: number,
 ): Uint8Array | null =>
   getRunUnderlineFillImageBytes(shape[SHAPE_SLIDE], requireRun(shape, paragraphIndex, runIndex));
+
+/** Returns the embedded bytes backing one run's direct picture text fill. */
+export const getShapeRunFillImageBytes = (
+  shape: SlideShapeData,
+  paragraphIndex: number,
+  runIndex: number,
+): Uint8Array | null =>
+  getRunDirectFillImageBytes(shape[SHAPE_SLIDE], requireRun(shape, paragraphIndex, runIndex));
+
+/** Embeds image bytes and assigns them as one run's canonical editable `<a:blipFill>`. */
+export const setShapeRunFillImage = (
+  shape: SlideShapeData,
+  paragraphIndex: number,
+  runIndex: number,
+  bytes: Uint8Array,
+  options: { readonly format?: ImageFormat } = {},
+): void => {
+  const slide = shape[SHAPE_SLIDE];
+  const run = requireRun(shape, paragraphIndex, runIndex);
+  const oldRelationshipId = setRunDirectFillImage(slide, run, bytes, {
+    ...options,
+    operation: 'setShapeRunFillImage',
+  });
+  commitAndRefresh(shape);
+  if (oldRelationshipId !== null) {
+    removeUnreferencedSlideRelationships(slide, new Set([oldRelationshipId]));
+  }
+};
 
 /** Embeds image bytes and assigns them as one run's editable `<a:uFill><a:blipFill>`. */
 export const setShapeRunUnderlineFillImage = (

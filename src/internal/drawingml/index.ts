@@ -15,6 +15,8 @@ export {
 export type {
   TextFormat,
   TextGradient,
+  TextPatternFill,
+  TextPictureFill,
   TextLineProperties,
   TextOutline,
   TextShadow,

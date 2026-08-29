@@ -19,6 +19,7 @@ import {
   setShapeFill,
   setShapeImageBiLevel,
   setShapeImageFill,
+  setShapeRunFillImage,
   setShapeRunFormat,
   setShapeStroke,
 } from '../src/api/index.ts';
@@ -91,6 +92,40 @@ describe('renderSlideToRgba (Node)', () => {
       }
     }
     expect(nonWhite).toBeGreaterThan(0);
+  });
+
+  it('rasterizes the deterministic fallback beneath a resolved transparent picture text fill', async () => {
+    const pres = await loadPresentation(await readFile(fixturePath));
+    const layout = findSlideLayout(pres, 'Blank');
+    if (!layout) throw new Error('Blank layout not found');
+    const slide = addSlide(pres, { layout });
+    const text = addSlideTextBox(slide, {
+      x: inches(1),
+      y: inches(1),
+      w: inches(7),
+      h: inches(1.5),
+      text: 'PICTURE FALLBACK',
+    });
+    setShapeRunFormat(text, 0, 0, { size: 54, font: 'Arial', bold: true });
+    setShapeRunFillImage(text, 0, 0, buildPng(2, 2, [242, 107, 91, 0]));
+
+    const { image } = renderSlideToRgba(pres, slide, { width: 640 });
+    let fallbackPixels = 0;
+    for (let index = 0; index < image.data.length; index += 4) {
+      const red = image.data[index]!;
+      const green = image.data[index + 1]!;
+      const blue = image.data[index + 2]!;
+      const alpha = image.data[index + 3]!;
+      if (
+        alpha > 240 &&
+        Math.abs(red - 127) <= 2 &&
+        Math.abs(green - 127) <= 2 &&
+        Math.abs(blue - 127) <= 2
+      ) {
+        fallbackPixels += 1;
+      }
+    }
+    expect(fallbackPixels).toBeGreaterThan(50);
   });
 
   it('paints an image-filled roundRect inside its geometry', async () => {

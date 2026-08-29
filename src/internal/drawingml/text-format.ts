@@ -211,6 +211,10 @@ export interface TextFormat {
   effects?: readonly Effect[] | null;
   /** One editable linear text gradient, or `null` to clear the direct run fill. */
   gradient?: TextGradient | null;
+  /** One editable preset pattern text fill, or `null` to clear the direct run fill. */
+  patternFill?: TextPatternFill | null;
+  /** One editable embedded picture text fill, or `null` to clear the direct run fill. */
+  pictureFill?: TextPictureFill | null;
 }
 
 /** Structural line semantics shared by text outlines and explicit underline lines. */
@@ -275,6 +279,16 @@ export type TextShadow =
 /** Common editable gradient subset plus an importer-only diagnostic carrier. */
 export type TextGradient = GradientFillOptions | { readonly unsupported: string };
 
+/** Editable direct preset-pattern text fill plus an importer diagnostic when normalized. */
+export type TextPatternFill =
+  | (PatternFillOptions & { readonly unsupported?: string })
+  | { readonly unsupported: string };
+
+/** Editable direct picture text fill resolved against the owning slide. */
+export type TextPictureFill =
+  | { readonly relationshipId: string; readonly unsupported?: string }
+  | { readonly unsupported: string };
+
 /** Direct, non-inherited CT_TextCharacterProperties state. */
 export interface TextRunState {
   readonly normalizeHeight?: boolean;
@@ -295,7 +309,7 @@ const setOrRemoveAttr = (
   return filtered;
 };
 
-const setSolidFill = (rPr: XmlElement, value: string | null): void => {
+const removeRunFill = (rPr: XmlElement): void => {
   // A run may carry exactly one EG_FillProperties choice.
   rPr.children = rPr.children.filter(
     (c) =>
@@ -307,26 +321,18 @@ const setSolidFill = (rPr: XmlElement, value: string | null): void => {
         )
       ),
   );
+};
+
+const setSolidFill = (rPr: XmlElement, value: string | null): void => {
+  removeRunFill(rPr);
   if (value === null) return;
   const fill = elem(NAME_SOLID_FILL, { children: [buildColorElement(value)] });
   insertChildByRank(rPr, fill, rprChildRank);
 };
 
 const setTextGradient = (rPr: XmlElement, value: TextGradient | null): void => {
-  const removeRunFill = (): void => {
-    rPr.children = rPr.children.filter(
-      (child) =>
-        !(
-          child.kind === 'element' &&
-          child.name.namespaceURI === NS.dml &&
-          ['noFill', 'solidFill', 'gradFill', 'blipFill', 'pattFill', 'grpFill'].includes(
-            child.name.localName,
-          )
-        ),
-    );
-  };
   if (value === null) {
-    removeRunFill();
+    removeRunFill(rPr);
     return;
   }
   if (!('stops' in value)) {
@@ -342,8 +348,43 @@ const setTextGradient = (rPr: XmlElement, value: TextGradient | null): void => {
     stops: value.stops,
     ...(value.angleDeg === undefined ? {} : { angleDeg: value.angleDeg }),
   });
-  removeRunFill();
+  removeRunFill(rPr);
   insertChildByRank(rPr, gradient, rprChildRank);
+};
+
+const setTextPatternFill = (rPr: XmlElement, value: TextPatternFill | null): void => {
+  if (value === null) {
+    removeRunFill(rPr);
+    return;
+  }
+  if (!('preset' in value)) {
+    throw new TypeError('TextFormat.patternFill unsupported diagnostic state is read-only.');
+  }
+  const fill = buildPatternFill(value);
+  removeRunFill(rPr);
+  insertChildByRank(rPr, fill, rprChildRank);
+};
+
+const setTextPictureFill = (rPr: XmlElement, value: TextPictureFill | null): void => {
+  if (value === null) {
+    removeRunFill(rPr);
+    return;
+  }
+  if (!('relationshipId' in value)) {
+    throw new TypeError('TextFormat.pictureFill unsupported diagnostic state is read-only.');
+  }
+  const fill = elem(qname('a', 'blipFill', NS.dml), {
+    children: [
+      elem(qname('a', 'blip', NS.dml), {
+        attrs: [attr(qname('r', 'embed', NS.officeDocRels), value.relationshipId)],
+      }),
+      elem(qname('a', 'stretch', NS.dml), {
+        children: [elem(qname('a', 'fillRect', NS.dml))],
+      }),
+    ],
+  });
+  removeRunFill(rPr);
+  insertChildByRank(rPr, fill, rprChildRank);
 };
 
 /** Replace one script-specific typeface child without disturbing sibling script faces. */
@@ -568,6 +609,17 @@ const ensureRunOutline = (rPr: XmlElement): XmlElement => {
 
 /** Mutates `rPr` in place per `format`. */
 export const applyRunFormat = (rPr: XmlElement, format: TextFormat): void => {
+  const directPaints = [
+    format.color,
+    format.gradient,
+    format.patternFill,
+    format.pictureFill,
+  ].filter((value) => value !== undefined && value !== null);
+  if (directPaints.length > 1) {
+    throw new TypeError(
+      'TextFormat accepts at most one direct text fill: color, gradient, patternFill, or pictureFill.',
+    );
+  }
   if (format.textShadow !== undefined && format.effects !== undefined) {
     throw new TypeError(
       'TextFormat.textShadow and TextFormat.effects cannot be authored together.',
@@ -637,6 +689,8 @@ export const applyRunFormat = (rPr: XmlElement, format: TextFormat): void => {
   }
   if (format.color !== undefined) setSolidFill(rPr, format.color);
   if (format.gradient !== undefined) setTextGradient(rPr, format.gradient);
+  if (format.patternFill !== undefined) setTextPatternFill(rPr, format.patternFill);
+  if (format.pictureFill !== undefined) setTextPictureFill(rPr, format.pictureFill);
   if (format.highlight !== undefined) setHighlight(rPr, format.highlight);
   if (format.underlineLine !== undefined) setUnderlineLine(rPr, format.underlineLine);
   if (format.underlineFill !== undefined) setUnderlineFill(rPr, format.underlineFill);

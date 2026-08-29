@@ -79,6 +79,7 @@ import {
   getShapeRotation,
   getShapeRunFormat,
   getShapeRunFormatEffective,
+  getShapeRunFillImageBytes,
   getShapeStrokeEffective,
   getShapeStrokeArrow,
   getShapeStrokeCap,
@@ -116,6 +117,7 @@ import {
   getTableCellBorders,
   getTableCellFill,
   getTableCellParagraphs,
+  getTableCellRunFillImageBytes,
   getTableCellSpan,
   getTableCellTextDirection,
   getTableCells,
@@ -131,6 +133,7 @@ import {
   isTableShape,
   type PresentationData,
   type PresentationTheme,
+  type PatternPreset,
   type ChartKind,
   type ChartSeries,
   type ChartSpec,
@@ -143,6 +146,7 @@ import {
   type SlideData,
   type SlideShapeData,
   type TableCellParagraph,
+  type TableCellData,
   type TextFormat,
 } from '@office-kit/pptx';
 import {
@@ -156,6 +160,7 @@ import {
   type PieceInput,
   type TextDecorationLineInput,
   type TextGradientInput,
+  type TextGlyphPaintInput,
   type RenderSlideOptions,
   type TextBodyInput,
   type TextLayoutMode,
@@ -164,6 +169,7 @@ import {
   type VerticalLayout,
 } from './text-layout.ts';
 import { buildSvgEffectPlan, type SvgEffect, type SvgEffectPlan } from './effects.ts';
+import { svgPresetPatternDefinition } from './pattern-fill.ts';
 
 export type { RenderSlideOptions, TextMeasurer, FontSpec, MeasureResult } from './text-layout.ts';
 
@@ -630,152 +636,16 @@ const gradientDef = (
   return { defs, fillAttr: `url(#${id})` };
 };
 
-// SVG `<pattern>` definitions for the ECMA-376 ST_PresetPatternVal
-// presets (§20.1.10.49), tuned against LibreOffice's own substitution for
-// these fills (not GDI's original hatch-brush metrics — LibreOffice draws
-// none of them as literal bitmaps). Two calibrated base pitches (SVG
-// user-space px at 96 DPI) cover the whole family: orthogonal
-// (horizontal/vertical) hatches read far finer than diagonal ones at the
-// same nominal weight, and "lg"-prefixed grids use a materially larger
-// cell than "sm"/plain ones. Unknown presets fall through to a 50%-style
-// diagonal crosshatch.
-const ORTHO_TILE = 4;
-const ORTHO_WIDE_TILE = 16;
-const DIAG_TILE = 16;
-const MOTIF_TILE = 8; // wave / weave / sphere / diamond motifs are sized to an 8-unit cell
-const PATTERN_TILE_SIZE: Record<string, number> = {
-  horz: ORTHO_TILE,
-  ltHorz: ORTHO_TILE,
-  narHorz: ORTHO_TILE,
-  dashHorz: ORTHO_TILE,
-  horzBrick: ORTHO_TILE,
-  dkHorz: ORTHO_TILE,
-  vert: ORTHO_TILE,
-  ltVert: ORTHO_TILE,
-  narVert: ORTHO_TILE,
-  dashVert: ORTHO_TILE,
-  dkVert: ORTHO_TILE,
-  ltHorzCross: ORTHO_TILE,
-  cross: ORTHO_TILE,
-  dotGrid: ORTHO_TILE,
-  smGrid: ORTHO_TILE,
-  dkHorzCross: ORTHO_WIDE_TILE,
-  lgGrid: ORTHO_WIDE_TILE,
-  plaid: ORTHO_WIDE_TILE,
-  wave: MOTIF_TILE,
-  zigZag: MOTIF_TILE,
-  weave: MOTIF_TILE,
-  divot: MOTIF_TILE,
-  sphere: MOTIF_TILE,
-  solidDmnd: MOTIF_TILE,
-  openDmnd: MOTIF_TILE,
-};
 const patternDef = (pat: {
   preset: string;
   foreground: string;
   background: string;
 }): { defs: string; fillAttr: string } => {
   const id = mintId();
-  const fg = pat.foreground;
-  const bg = pat.background;
-  const preset = pat.preset;
-  let body = '';
-  // pct{N} — LibreOffice substitutes a diagonal hatch for these (not a literal
-  // N%-coverage bitmap): a sparse single-direction hatch below ~30% density, a full
-  // crosshatch at and above it, with the pitch shrinking as density rises. The
-  // pitch formula is calibrated so pct5 (at the floor) comes out to
-  // `DIAG_TILE * 2`; PCT_DENSITY_FLOOR must stay the single reference density
-  // for both the clamp and the ratio below it or that calibration drifts.
-  const PCT_DENSITY_FLOOR = 0.05;
-  const PCT_TILE_MIN = 6;
-  const pctMatch = /^pct(\d+)$/.exec(preset);
-  const pctDensity = pctMatch
-    ? Math.min(100, Math.max(0, Number.parseInt(pctMatch[1]!, 10))) / 100
-    : null;
-  const W =
-    pctDensity !== null
-      ? Math.max(
-          PCT_TILE_MIN,
-          DIAG_TILE * 2 * Math.sqrt(PCT_DENSITY_FLOOR / Math.max(pctDensity, PCT_DENSITY_FLOOR)),
-        )
-      : (PATTERN_TILE_SIZE[preset] ?? DIAG_TILE);
-  const H = W;
-  const stripe = (orientation: 'h' | 'v' | 'd' | 'a', width = 1): string => {
-    if (orientation === 'h')
-      return `<path d="M0 ${H / 2}H${W}" stroke="${fg}" stroke-width="${width}"/>`;
-    if (orientation === 'v')
-      return `<path d="M${W / 2} 0V${H}" stroke="${fg}" stroke-width="${width}"/>`;
-    if (orientation === 'd')
-      return `<path d="M0 0L${W} ${H}" stroke="${fg}" stroke-width="${width}"/>`;
-    return `<path d="M${W} 0L0 ${H}" stroke="${fg}" stroke-width="${width}"/>`;
+  return {
+    defs: `<defs>${svgPresetPatternDefinition({ id, ...pat, preset: pat.preset as PatternPreset })}</defs>`,
+    fillAttr: `url(#${id})`,
   };
-  if (pctDensity !== null) {
-    body = pctDensity >= 0.3 ? stripe('d', 0.8) + stripe('a', 0.8) : stripe('d', 0.8);
-  } else if (
-    preset === 'horz' ||
-    preset === 'ltHorz' ||
-    preset === 'narHorz' ||
-    preset === 'dashHorz' ||
-    preset === 'horzBrick'
-  ) {
-    // ST_PresetPatternVal horizontal family (§20.1.10.49) — horizontal lines.
-    // (The old branch keyed on GDI HatchStyle names like 'ltHorizontal', which
-    // no valid OOXML emits, so 'horz'/'ltHorz' fell through to the 50% checker.)
-    body = stripe('h', 0.8);
-  } else if (preset === 'dkHorz') {
-    body = stripe('h', 2);
-  } else if (
-    preset === 'vert' ||
-    preset === 'ltVert' ||
-    preset === 'narVert' ||
-    preset === 'dashVert'
-  ) {
-    body = stripe('v', 0.8);
-  } else if (preset === 'dkVert') {
-    body = stripe('v', 2);
-  } else if (preset === 'ltUpDiag' || preset === 'wdUpDiag') {
-    body = stripe('d', 0.8);
-  } else if (preset === 'dkUpDiag') {
-    body = stripe('d', 2);
-  } else if (preset === 'ltDnDiag' || preset === 'wdDnDiag') {
-    body = stripe('a', 0.8);
-  } else if (preset === 'dkDnDiag') {
-    body = stripe('a', 2);
-  } else if (
-    preset === 'ltHorzCross' ||
-    preset === 'smGrid' ||
-    preset === 'cross' ||
-    preset === 'dotGrid'
-  ) {
-    // dotGrid is a dotted grid in the spec; LibreOffice renders it as a thin
-    // line grid, so a light cross-grid is the closest match to the ground truth.
-    body = stripe('h', 0.8) + stripe('v', 0.8);
-  } else if (preset === 'dkHorzCross' || preset === 'lgGrid' || preset === 'plaid') {
-    body = stripe('h', 2) + stripe('v', 2);
-  } else if (
-    preset === 'diagCross' ||
-    preset === 'trellis' ||
-    preset === 'shingle' ||
-    preset === 'dashUpDiag' ||
-    preset === 'dashDnDiag'
-  ) {
-    body = stripe('d', 0.8) + stripe('a', 0.8);
-  } else if (preset === 'dkUpDiagStripe' || preset === 'dkDnDiagStripe') {
-    body = stripe(preset === 'dkUpDiagStripe' ? 'd' : 'a', 2);
-  } else if (preset === 'wave' || preset === 'zigZag') {
-    body = `<path d="M0 4Q2 2 4 4T8 4" stroke="${fg}" stroke-width="0.8" fill="none"/>`;
-  } else if (preset === 'weave' || preset === 'divot') {
-    body = `<path d="M0 0L4 4 0 8M4 0L8 4 4 8" stroke="${fg}" stroke-width="0.8" fill="none"/>`;
-  } else if (preset === 'sphere') {
-    body = `<circle cx="4" cy="4" r="3" fill="${fg}" fill-opacity="0.7"/>`;
-  } else if (preset === 'solidDmnd' || preset === 'openDmnd') {
-    body = `<path d="M4 1L7 4 4 7 1 4Z" fill="${preset === 'solidDmnd' ? fg : 'none'}" stroke="${fg}" stroke-width="0.6"/>`;
-  } else {
-    // Unrecognized preset — fall back to a pct50-style diagonal crosshatch.
-    body = stripe('d', 0.8) + stripe('a', 0.8);
-  }
-  const defs = `<defs><pattern id="${id}" patternUnits="userSpaceOnUse" width="${W}" height="${H}"><rect width="${W}" height="${H}" fill="${bg}"/>${body}</pattern></defs>`;
-  return { defs, fillAttr: `url(#${id})` };
 };
 
 interface PaintResult {
@@ -2226,6 +2096,7 @@ const renderRun = (
   theme: PresentationTheme | null,
   effectivePt: number,
   /* unused but kept for forward compatibility */ _wasDefault = false,
+  fillImageHref?: string,
 ): string => {
   if (text === '') return '';
   void _wasDefault;
@@ -2377,6 +2248,23 @@ const renderRun = (
     styles.push('background-clip:text');
     styles.push('-webkit-background-clip:text');
     styles.push('color:transparent');
+  } else if (format?.patternFill && 'preset' in format.patternFill) {
+    const fg = resolveColor(format.patternFill.foreground, theme, '#000000');
+    const bg = resolveColor(format.patternFill.background, theme, '#FFFFFF');
+    styles.push(`background-color:${bg}`);
+    styles.push(
+      `background-image:repeating-linear-gradient(135deg,${fg} 0,${fg} 1px,${bg} 1px,${bg} 4px)`,
+    );
+    styles.push('background-clip:text');
+    styles.push('-webkit-background-clip:text');
+    styles.push('color:transparent');
+  } else if (format?.pictureFill && 'relationshipId' in format.pictureFill) {
+    styles.push('background-color:#7F7F7F');
+    if (fillImageHref) styles.push(`background-image:url(${fillImageHref})`);
+    styles.push('background-size:cover');
+    styles.push('background-clip:text');
+    styles.push('-webkit-background-clip:text');
+    styles.push('color:transparent');
   }
   // Explicit `\n` in the run text comes from <a:br> line breaks; project
   // each to an HTML <br/> so the foreignObject's CSS layout honours it.
@@ -2413,6 +2301,7 @@ type RunData = {
   text: string;
   fmt: TextFormat | null;
   sizePt: number;
+  fillImageHref?: string;
   href?: string;
   hrefTip?: string;
 };
@@ -2711,6 +2600,17 @@ export const buildSvgTextInput = (a: SvgTextArgs): TextBodyInput => {
         : textEffectShadows(fmt?.effects, scale, fillHex);
       const gradient =
         fmt?.gradient && 'stops' in fmt.gradient ? textGradientInput(fmt.gradient) : null;
+      const glyphPaint: TextGlyphPaintInput | null =
+        fmt?.patternFill && 'preset' in fmt.patternFill
+          ? {
+              kind: 'pattern',
+              preset: fmt.patternFill.preset,
+              foreground: fmt.patternFill.foreground,
+              background: fmt.patternFill.background,
+            }
+          : fmt?.pictureFill && 'relationshipId' in fmt.pictureFill
+            ? { kind: 'picture', href: run.fillImageHref ?? null, fallback: '#7F7F7F' }
+            : null;
       const underlineLine = decorationLineInput(fmt, 'underline', fillHex, sizePx, scale);
       const outlineLine = decorationLineInput(fmt, 'outline', fillHex, sizePx, scale);
       const base: Omit<PieceInput, 'text' | 'isBreak'> = {
@@ -2721,6 +2621,7 @@ export const buildSvgTextInput = (a: SvgTextArgs): TextBodyInput => {
         letterSpacingPx,
         fillHex,
         gradient,
+        glyphPaint,
         shadows,
         underline: underlineStyleOf(fmt),
         underlineLine,
@@ -2816,6 +2717,7 @@ const breakPiece = (): PieceInput => ({
   letterSpacingPx: 0,
   fillHex: '#000000',
   gradient: null,
+  glyphPaint: null,
   shadows: [],
   underline: 'none',
   underlineLine: null,
@@ -3131,6 +3033,7 @@ export const resolveTextBodyModel = (
       let fmt: TextFormat | null = el.format;
       let href: string | undefined;
       let hrefTip: string | undefined;
+      let fillImageHref: string | undefined;
       if (el.kind === 'r') {
         // The cascade only makes sense for actual <a:r> runs; field
         // text is opaque cached content and shouldn't pretend to be a
@@ -3158,6 +3061,12 @@ export const resolveTextBodyModel = (
         } catch {
           href = undefined;
         }
+        if (fmt?.pictureFill && 'relationshipId' in fmt.pictureFill) {
+          try {
+            const bytes = getShapeRunFillImageBytes(shape, p, rIdx);
+            if (bytes) fillImageHref = bytesToDataUrl(bytes);
+          } catch {}
+        }
         rIdx++;
       }
       const sizePt = fmt?.size ?? defaultPt;
@@ -3166,6 +3075,7 @@ export const resolveTextBodyModel = (
         text: txt,
         fmt,
         sizePt,
+        ...(fillImageHref !== undefined ? { fillImageHref } : {}),
         ...(href !== undefined ? { href } : {}),
         ...(hrefTip !== undefined ? { hrefTip } : {}),
       });
@@ -3377,6 +3287,7 @@ const renderTextBody = (
         theme,
         run.sizePt * autoFitScale,
         run.fmt?.size === undefined,
+        run.fillImageHref,
       );
       if (!safeHref) return span;
       const isInPage = safeHref.startsWith('#');
@@ -5860,18 +5771,33 @@ const renderChart = (
 // fall to PowerPoint's authored default cell size (18 pt — what it writes for a
 // freshly inserted table) in the theme's minor font and the cell's text color.
 const cellParaData = (
+  cell: TableCellData,
   paragraphs: ReadonlyArray<TableCellParagraph>,
 ): { paraData: ParaData[]; hasText: boolean } => {
   let hasText = false;
-  const paraData = paragraphs.map((para): ParaData => {
+  const paraData = paragraphs.map((para, paragraphIndex): ParaData => {
     const runs: RunData[] = [];
+    let nativeRunIndex = 0;
     for (const el of para.elements) {
       if (el.kind === 'br') {
         runs.push({ text: '\n', fmt: null, sizePt: DEFAULT_BODY_PT });
         continue;
       }
       if (el.text.trim()) hasText = true;
-      runs.push({ text: el.text, fmt: el.format, sizePt: el.format?.size ?? DEFAULT_BODY_PT });
+      let fillImageHref: string | undefined;
+      if (el.kind === 'r' && el.format?.pictureFill && 'relationshipId' in el.format.pictureFill) {
+        try {
+          const bytes = getTableCellRunFillImageBytes(cell, paragraphIndex, nativeRunIndex);
+          if (bytes) fillImageHref = bytesToDataUrl(bytes);
+        } catch {}
+      }
+      runs.push({
+        text: el.text,
+        fmt: el.format,
+        sizePt: el.format?.size ?? DEFAULT_BODY_PT,
+        ...(fillImageHref === undefined ? {} : { fillImageHref }),
+      });
+      if (el.kind === 'r') nativeRunIndex += 1;
     }
     return {
       align: para.align ?? 'left',
@@ -5893,6 +5819,7 @@ const cellParaData = (
 };
 
 const renderTableCellText = (
+  cell: TableCellData,
   paragraphs: ReadonlyArray<TableCellParagraph>,
   cx: number,
   cy: number,
@@ -5913,7 +5840,7 @@ const renderTableCellText = (
   },
   textDirection: ReturnType<typeof getTableCellTextDirection>,
 ): string => {
-  const { paraData, hasText } = cellParaData(paragraphs);
+  const { paraData, hasText } = cellParaData(cell, paragraphs);
   if (!hasText) return '';
   // PowerPoint stores margins in EMU; fall back to ~4px when unset.
   const defaultPadPx = 4;
@@ -5963,7 +5890,16 @@ const renderTableCellText = (
   const body = paraData
     .map((para) => {
       const runHtml = para.runs
-        .map((run) => renderRun(run.text, run.fmt, theme, run.sizePt, run.fmt?.size === undefined))
+        .map((run) =>
+          renderRun(
+            run.text,
+            run.fmt,
+            theme,
+            run.sizePt,
+            run.fmt?.size === undefined,
+            run.fillImageHref,
+          ),
+        )
         .join('');
       const textAlign = ALIGNMENT_TO_CSS[para.align] ?? 'left';
       return `<p style="margin:0;padding:0;text-align:${textAlign};line-height:1.2">${runHtml || '&#8203;'}</p>`;
@@ -6178,6 +6114,7 @@ const renderTable = (
       const cellMargins = getTableCellMargins(typedCell);
       out.push(
         renderTableCellText(
+          typedCell,
           cellParagraphs,
           cx,
           cy,

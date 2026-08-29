@@ -56,7 +56,7 @@ const chunk = (typeStr: string, data: Uint8Array): Uint8Array => {
 export const buildPng = (
   width: number,
   height: number,
-  rgb: readonly [number, number, number],
+  color: readonly [number, number, number] | readonly [number, number, number, number],
 ): Uint8Array => {
   const SIG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
@@ -65,17 +65,16 @@ export const buildPng = (
   dv.setUint32(0, width);
   dv.setUint32(4, height);
   ihdr[8] = 8; // bit depth
-  ihdr[9] = 2; // color type: RGB
+  const channels = color.length;
+  ihdr[9] = channels === 4 ? 6 : 2; // color type: RGBA or RGB
 
-  const rowSize = 1 + width * 3;
+  const rowSize = 1 + width * channels;
   const raw = new Uint8Array(rowSize * height);
   for (let y = 0; y < height; y++) {
     raw[y * rowSize] = 0; // filter: None
     for (let x = 0; x < width; x++) {
-      const idx = y * rowSize + 1 + x * 3;
-      raw[idx] = rgb[0];
-      raw[idx + 1] = rgb[1];
-      raw[idx + 2] = rgb[2];
+      const idx = y * rowSize + 1 + x * channels;
+      for (let channel = 0; channel < channels; channel += 1) raw[idx + channel] = color[channel]!;
     }
   }
 

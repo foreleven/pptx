@@ -463,12 +463,7 @@ const parseTextGradient = (rPr: XmlElement): NonNullable<TextFormat['gradient']>
       RUN_FILL_CHOICES.has(child.name.localName),
   );
   const gradient = fills.find((fill) => fill.name.localName === 'gradFill');
-  if (!gradient) {
-    const unsupportedFill = fills.find((fill) => fill.name.localName !== 'solidFill');
-    return unsupportedFill
-      ? { unsupported: `text fill ${unsupportedFill.name.localName}` }
-      : undefined;
-  }
+  if (!gradient) return undefined;
 
   const unsupported: string[] = [];
   if (fills.length !== 1) unsupported.push('multiple text fill choices');
@@ -620,6 +615,108 @@ const parseTextGradient = (rPr: XmlElement): NonNullable<TextFormat['gradient']>
 
   if (unsupported.length > 0) return { unsupported: unsupported.join(', ') };
   return { stops, angleDeg };
+};
+
+const parseTextPatternFill = (
+  rPr: XmlElement,
+  ctx?: { readonly theme: PresentationTheme | null },
+): NonNullable<TextFormat['patternFill']> | undefined => {
+  const fills = rPr.children.filter(
+    (child): child is XmlElement =>
+      child.kind === 'element' &&
+      child.name.namespaceURI === NS.dml &&
+      RUN_FILL_CHOICES.has(child.name.localName),
+  );
+  if (!fills.some((fill) => fill.name.localName === 'pattFill')) return undefined;
+  const parsed = parseTextLinePaint(rPr, 'text fill', ctx);
+  if (parsed.kind !== 'pattern') {
+    return {
+      unsupported:
+        parsed.kind === 'unsupported'
+          ? parsed.reason
+          : `text fill ${parsed.kind} instead of pattern`,
+    };
+  }
+  const unsupported = [
+    ...(fills.length === 1 ? [] : ['multiple text fill choices']),
+    ...parsed.unsupported,
+  ];
+  return {
+    preset: parsed.preset,
+    foreground: parsed.foreground,
+    background: parsed.background,
+    ...(unsupported.length === 0 ? {} : { unsupported: unsupported.join(', ') }),
+  };
+};
+
+const parseTextPictureFill = (
+  rPr: XmlElement,
+): NonNullable<TextFormat['pictureFill']> | undefined => {
+  const fills = rPr.children.filter(
+    (child): child is XmlElement =>
+      child.kind === 'element' &&
+      child.name.namespaceURI === NS.dml &&
+      RUN_FILL_CHOICES.has(child.name.localName),
+  );
+  const picture = fills.find((fill) => fill.name.localName === 'blipFill');
+  if (!picture) return undefined;
+  const unsupported = [
+    ...(fills.length === 1 ? [] : ['multiple text fill choices']),
+    ...unexpectedAttributes(picture, new Set(), 'text picture fill'),
+  ];
+  const children = picture.children.filter(
+    (child): child is XmlElement => child.kind === 'element',
+  );
+  const blips = children.filter(
+    (child) => child.name.namespaceURI === NS.dml && child.name.localName === 'blip',
+  );
+  const stretches = children.filter(
+    (child) => child.name.namespaceURI === NS.dml && child.name.localName === 'stretch',
+  );
+  if (blips.length !== 1) unsupported.push(`text picture fill blip count ${blips.length}`);
+  if (stretches.length !== 1)
+    unsupported.push(`text picture fill stretch count ${stretches.length}`);
+  for (const child of children) {
+    if (
+      child.name.namespaceURI !== NS.dml ||
+      (child.name.localName !== 'blip' && child.name.localName !== 'stretch')
+    ) {
+      unsupported.push(`text picture fill child ${child.name.localName}`);
+    }
+  }
+  const blip = blips[0];
+  const relationshipId = blip ? getAttrValue(blip, qname('r', 'embed', NS.officeDocRels)) : null;
+  if (blip) {
+    const link = getAttrValue(blip, qname('r', 'link', NS.officeDocRels));
+    if (link !== null) unsupported.push('text picture fill external link');
+    if (blip.children.some((child) => child.kind === 'element')) {
+      unsupported.push('text picture fill blip effects');
+    }
+  }
+  const stretch = stretches[0];
+  if (stretch) {
+    unsupported.push(...unexpectedAttributes(stretch, new Set(), 'text picture fill stretch'));
+    const stretchChildren = stretch.children.filter(
+      (child): child is XmlElement => child.kind === 'element',
+    );
+    if (
+      stretchChildren.length !== 1 ||
+      stretchChildren[0]?.name.namespaceURI !== NS.dml ||
+      stretchChildren[0].name.localName !== 'fillRect'
+    ) {
+      unsupported.push('text picture fill non-canonical stretch');
+    } else {
+      unsupported.push(
+        ...unexpectedAttributes(stretchChildren[0], new Set(), 'text picture fill fillRect'),
+      );
+    }
+  }
+  return relationshipId === null
+    ? { unsupported: unsupported.join(', ') || 'text picture fill missing embedded relationship' }
+    : {
+        relationshipId,
+        ...(unsupported.length === 0 ? {} : { unsupported: unsupported.join(', ') }),
+      };
 };
 
 const parseTextShadow = (rPr: XmlElement): NonNullable<TextFormat['textShadow']> | undefined => {
@@ -1451,6 +1548,10 @@ export const parseRPrLikeElement = (
   }
   const gradient = parseTextGradient(rPr);
   if (gradient !== undefined) out.gradient = gradient;
+  const patternFill = parseTextPatternFill(rPr, ctx);
+  if (patternFill !== undefined) out.patternFill = patternFill;
+  const pictureFill = parseTextPictureFill(rPr);
+  if (pictureFill !== undefined) out.pictureFill = pictureFill;
   const latin = firstChildElement(rPr, qname('a', 'latin', NS.dml));
   if (latin !== null) {
     const t = getAttrValue(latin, qname('', 'typeface', ''));

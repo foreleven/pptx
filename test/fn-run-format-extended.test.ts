@@ -11,19 +11,23 @@ import {
   _internalPackageOf,
   addSlideTextBox,
   findShapeByText,
+  getShapeRunFillImageBytes,
   getShapeRunFormat,
   getShapeRunUnderlineFillImageBytes,
   getShapeRunState,
   getSlidePartName,
+  getSlideXmlString,
   getSlides,
   inches,
   loadPresentation,
   savePresentation,
   setShapeParagraphElements,
+  setShapeRunFillImage,
   setShapeRunFormat,
   setShapeRunUnderlineFillImage,
 } from '../src/api/index.ts';
 import { applyLineStyle } from '../src/internal/drawingml/index.ts';
+import { PATTERN_PRESETS } from '../src/internal/drawingml/fill.ts';
 import { NS, attr, elem, getAttrValue, qname } from '../src/internal/xml/index.ts';
 import { buildPng } from './lib/build-png.ts';
 
@@ -349,6 +353,155 @@ describe('fn API: extended run-format properties', () => {
       }),
     );
     expect(getShapeRunUnderlineFillImageBytes(shape, 0, 0)).toEqual(image);
+  });
+
+  it('round-trips an editable direct pattern text fill', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const tb = addSlideTextBox(slide, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(4),
+      h: inches(2),
+      text: 'pattern fill',
+    });
+
+    setShapeRunFormat(tb, 0, 0, {
+      patternFill: {
+        preset: 'pct50',
+        foreground: '#3659E3',
+        background: '#FFFFFF',
+      },
+    });
+
+    const reloaded = await loadPresentation(await savePresentation(pres));
+    const shape = findShapeByText(getSlides(reloaded)[0]!, 'pattern fill')!;
+    expect(getShapeRunFormat(shape, 0, 0)?.patternFill).toEqual({
+      preset: 'pct50',
+      foreground: '#3659E3',
+      background: '#FFFFFF',
+    });
+  });
+
+  it('round-trips every ST_PresetPatternVal as an editable direct text fill', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const tb = addSlideTextBox(slide, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(8),
+      h: inches(4),
+      text: PATTERN_PRESETS.join(' '),
+    });
+    setShapeParagraphElements(
+      tb,
+      0,
+      PATTERN_PRESETS.map((preset) => ({
+        kind: 'r' as const,
+        text: `${preset} `,
+        format: { patternFill: { preset, foreground: '#3659E3', background: '#FFFFFF' } },
+      })),
+    );
+
+    const reloaded = await loadPresentation(await savePresentation(pres));
+    const shape = findShapeByText(getSlides(reloaded)[0]!, PATTERN_PRESETS[0])!;
+    expect(PATTERN_PRESETS).toHaveLength(54);
+    for (const [index, preset] of PATTERN_PRESETS.entries()) {
+      expect(getShapeRunFormat(shape, 0, index)?.patternFill, preset).toEqual({
+        preset,
+        foreground: '#3659E3',
+        background: '#FFFFFF',
+      });
+    }
+  });
+
+  it('rejects conflicting direct text fills before mutating the run', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const tb = addSlideTextBox(slide, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(4),
+      h: inches(2),
+      text: 'exclusive fill',
+    });
+    setShapeRunFormat(tb, 0, 0, { color: '#17233C' });
+
+    expect(() =>
+      setShapeRunFormat(tb, 0, 0, {
+        color: '#17233C',
+        patternFill: { preset: 'pct50', foreground: '#3659E3', background: '#FFFFFF' },
+      }),
+    ).toThrow(/at most one direct text fill/u);
+    expect(getShapeRunFormat(tb, 0, 0)?.color).toBe('#17233C');
+  });
+
+  it('embeds and resolves a direct picture text fill relationship', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const tb = addSlideTextBox(slide, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(4),
+      h: inches(2),
+      text: 'picture fill',
+    });
+    const image = buildPng(2, 2, [54, 89, 227]);
+
+    setShapeRunFillImage(tb, 0, 0, image);
+
+    const bytes = await savePresentation(pres);
+    const reloaded = await loadPresentation(bytes);
+    const shape = findShapeByText(getSlides(reloaded)[0]!, 'picture fill')!;
+    expect(getShapeRunFormat(shape, 0, 0)?.pictureFill).toEqual({
+      relationshipId: expect.stringMatching(/^rId\d+$/u),
+    });
+    expect(getShapeRunFillImageBytes(shape, 0, 0)).toEqual(image);
+    const xml = getSlideXmlString(getSlides(reloaded)[0]!);
+    expect(xml).toContain('<a:blipFill>');
+    expect(xml).toContain('<a:stretch><a:fillRect/></a:stretch>');
+    expect(xml).not.toContain('<a:tile');
+  });
+
+  it('keeps an imported picture relationship editable while diagnosing crop and tile normalization', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const tb = addSlideTextBox(slide, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(4),
+      h: inches(2),
+      text: 'complex picture fill',
+    });
+    const image = buildPng(2, 2, [242, 107, 91]);
+    setShapeRunFillImage(tb, 0, 0, image);
+
+    const pkg = _internalPackageOf(pres);
+    const slidePartName = getSlidePartName(slide) as Parameters<typeof pkg.getPart>[0];
+    const slidePart = pkg.getPart(slidePartName)!;
+    const xml = new TextDecoder().decode(slidePart.data);
+    const complex = xml.replace(
+      '<a:stretch><a:fillRect/></a:stretch>',
+      '<a:srcRect l="1000"/><a:tile tx="12700"/><a:stretch><a:fillRect l="3000"/></a:stretch>',
+    );
+    expect(complex).not.toBe(xml);
+    slidePart.data = new TextEncoder().encode(complex);
+
+    const imported = await loadPresentation(await savePresentation(pres));
+    const shape = findShapeByText(getSlides(imported)[0]!, 'complex picture fill')!;
+    expect(getShapeRunFormat(shape, 0, 0)?.pictureFill).toMatchObject({
+      relationshipId: expect.stringMatching(/^rId\d+$/u),
+      unsupported: expect.stringContaining('text picture fill child srcRect'),
+    });
+    expect(getShapeRunFormat(shape, 0, 0)?.pictureFill).toMatchObject({
+      unsupported: expect.stringContaining('text picture fill fillRect attribute l'),
+    });
+    expect(getShapeRunFillImageBytes(shape, 0, 0)).toEqual(image);
+
+    setShapeRunFillImage(shape, 0, 0, image);
+    expect(getShapeRunFormat(shape, 0, 0)?.pictureFill).toEqual({
+      relationshipId: expect.stringMatching(/^rId\d+$/u),
+    });
   });
 
   it('round-trips gradient and pattern text outlines with custom dash and arrows', async () => {

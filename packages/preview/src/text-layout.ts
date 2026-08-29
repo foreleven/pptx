@@ -11,6 +11,9 @@
 // a `TextMeasurer`; in the browser that can wrap `ctx.measureText`, in Node it
 // wraps fontkit (see site/fidelity/measure.ts). All geometry is in CSS px.
 
+import type { PatternPreset } from '@office-kit/pptx';
+import { svgPresetPatternDefinition } from './pattern-fill.ts';
+
 // ---------------------------------------------------------------------------
 // Public injection contract.
 
@@ -148,6 +151,7 @@ export interface PieceInput {
   readonly letterSpacingPx: number;
   readonly fillHex: string;
   readonly gradient: TextGradientInput | null;
+  readonly glyphPaint?: TextGlyphPaintInput | null;
   readonly shadows: readonly TextShadowInput[];
   /** `'wavy'` covers every `ST_TextUnderlineType` wavy variant (`wavy`,
    *  `wavyDbl`, `wavyHeavy`) — SVG/resvg has no `text-decoration-style`
@@ -166,10 +170,14 @@ export type TextDecorationPaintInput =
   | { readonly kind: 'gradient'; readonly gradient: TextGradientInput }
   | {
       readonly kind: 'pattern';
-      readonly preset: string;
+      readonly preset: PatternPreset;
       readonly foreground: string;
       readonly background: string;
     };
+
+export type TextGlyphPaintInput =
+  | Extract<TextDecorationPaintInput, { readonly kind: 'pattern' }>
+  | { readonly kind: 'picture'; readonly href: string | null; readonly fallback: string };
 
 export interface TextDecorationLineInput {
   readonly paint: TextDecorationPaintInput;
@@ -684,7 +692,7 @@ const emitWarpedPlacements = (
       return `<text x="${fmt(stretchedGlyph.centerX - glyph.width / 2)}" y="${fmt(baselineY)}" xml:space="preserve" transform="${transform}">${tspan({ text: glyph.text, piece: glyph.piece, width: glyph.width })}</text>`;
     })
     .join('');
-  return `${emitGradientDefs(groups)}<g data-text-warp-preview="${warp.preset}" aria-label="${escapeXml(label)}">${body}</g>`;
+  return `${emitGradientDefs(groups)}${emitGlyphPaintDefs(groups)}<g data-text-warp-preview="${warp.preset}" aria-label="${escapeXml(label)}">${body}</g>`;
 };
 
 /** Map the representative preset and its safe constant guides to SVG transforms. */
@@ -897,6 +905,7 @@ const emitLine = (line: Line, baselineY: number, dx: number): string => {
   if (content.length === 0) return '';
   const groups = groupTokens(content);
   const gradientDefs = emitGradientDefs(groups);
+  const glyphPaintDefs = emitGlyphPaintDefs(groups);
   const tspans = groups.map((g) => tspan(g)).join('');
   if (tspans === '') return '';
   const x0 = line.anchorX + dx + GRID_NUDGE_X;
@@ -904,6 +913,7 @@ const emitLine = (line: Line, baselineY: number, dx: number): string => {
   const text = `<text x="${fmt(x0)}" y="${fmt(baselineY)}" text-anchor="${line.textAnchor}" xml:space="preserve">${tspans}</text>`;
   return (
     gradientDefs +
+    glyphPaintDefs +
     emitDecorationDefs(groups) +
     shadow +
     text +
@@ -939,6 +949,37 @@ const emitGradientDefs = (groups: readonly Group[]): string => {
       )
       .join('');
     return `<linearGradient id="${id}" x1="${fmt(50 - dx)}%" y1="${fmt(50 - dy)}%" x2="${fmt(50 + dx)}%" y2="${fmt(50 + dy)}%">${stops}</linearGradient>`;
+  });
+  return `<defs>${definitions.join('')}</defs>`;
+};
+
+const glyphPaintId = (paint: TextGlyphPaintInput): string => {
+  const signature = JSON.stringify(paint);
+  let hash = 2_166_136_261;
+  for (let index = 0; index < signature.length; index += 1) {
+    hash ^= signature.charCodeAt(index);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return `text-glyph-paint-${(hash >>> 0).toString(16)}`;
+};
+
+/** Emit glyph-local pattern/picture paints with a visible fallback under unresolved images. */
+const emitGlyphPaintDefs = (groups: readonly Group[]): string => {
+  const paints = new Map<string, TextGlyphPaintInput>();
+  for (const group of groups) {
+    if (group.piece.glyphPaint)
+      paints.set(glyphPaintId(group.piece.glyphPaint), group.piece.glyphPaint);
+  }
+  if (paints.size === 0) return '';
+  const definitions = [...paints.entries()].map(([id, paint]) => {
+    if (paint.kind === 'picture') {
+      const image =
+        paint.href === null
+          ? ''
+          : `<image width="1" height="1" href="${escapeXml(paint.href)}" preserveAspectRatio="xMidYMid slice"/>`;
+      return `<pattern id="${id}" width="1" height="1" patternContentUnits="objectBoundingBox"><rect width="1" height="1" fill="${paint.fallback}"/>${image}</pattern>`;
+    }
+    return svgPresetPatternDefinition({ id, ...paint });
   });
   return `<defs>${definitions.join('')}</defs>`;
 };
@@ -1250,6 +1291,7 @@ const samePiece = (a: PieceInput, b: PieceInput): boolean =>
   a.letterSpacingPx === b.letterSpacingPx &&
   a.fillHex === b.fillHex &&
   JSON.stringify(a.gradient) === JSON.stringify(b.gradient) &&
+  JSON.stringify(a.glyphPaint) === JSON.stringify(b.glyphPaint) &&
   JSON.stringify(a.shadows) === JSON.stringify(b.shadows) &&
   JSON.stringify(a.underlineLine) === JSON.stringify(b.underlineLine) &&
   JSON.stringify(a.outlineLine) === JSON.stringify(b.outlineLine) &&
@@ -1264,7 +1306,7 @@ const tspan = (g: Group): string => {
   const attrs: string[] = [
     `font-family="${escapeXml(p.family)}"`,
     `font-size="${fmt(sizePx)}"`,
-    `fill="${p.gradient ? `url(#${gradientId(p.gradient)})` : p.fillHex}"`,
+    `fill="${p.glyphPaint ? `url(#${glyphPaintId(p.glyphPaint)})` : p.gradient ? `url(#${gradientId(p.gradient)})` : p.fillHex}"`,
   ];
   const outlineLine = p.outlineLine ?? null;
   if (outlineLine !== null) {

@@ -65,7 +65,12 @@ import { ALIGN_TOKEN_MAP } from './shape-paragraph.ts';
 import { getPresentationTheme } from './package.ts';
 import { resolveDrawingColor } from './shapes.ts';
 import { getSlides } from './slide-query.ts';
-import { getRunUnderlineFillImageBytes, setRunUnderlineFillImage } from './run-underline-image.ts';
+import {
+  getRunDirectFillImageBytes,
+  getRunUnderlineFillImageBytes,
+  setRunDirectFillImage,
+  setRunUnderlineFillImage,
+} from './run-underline-image.ts';
 import { removeUnreferencedSlideRelationships } from './hyperlink-relationships.ts';
 
 // ---------------------------------------------------------------------------
@@ -1288,9 +1293,14 @@ export interface TableCellParagraph {
  * folded in here: explicit run properties win, and absent ones are left
  * `undefined` for the caller to resolve.
  */
-export const getTableCellParagraphs = (cell: TableCellData): ReadonlyArray<TableCellParagraph> => {
+export const getTableCellParagraphs = (
+  cell: TableCellData,
+  presentation?: PresentationData,
+): ReadonlyArray<TableCellParagraph> => {
   const txBody = firstChildElement(cell[CELL_ELEMENT], NAME_A_TX_BODY_TBL);
   if (!txBody) return [];
+  const ctx =
+    presentation === undefined ? undefined : { theme: getPresentationTheme(presentation) };
   const out: TableCellParagraph[] = [];
   for (const p of txBody.children) {
     if (p.kind !== 'element' || p.name.namespaceURI !== NS.dml || p.name.localName !== 'p')
@@ -1312,12 +1322,12 @@ export const getTableCellParagraphs = (cell: TableCellData): ReadonlyArray<Table
     out.push({
       align,
       rtl,
-      elements: readParagraphElements(p),
+      elements: readParagraphElements(p, ctx),
       endParagraph:
         endProperties === null
           ? null
           : {
-              format: parseRPrLikeElement(endProperties) as TextFormat,
+              format: parseRPrLikeElement(endProperties, ctx) as TextFormat,
               state: parseTextRunState(endProperties),
             },
     });
@@ -1389,6 +1399,38 @@ export const getTableCellRunUnderlineFillImageBytes = (
     cell[CELL_TABLE][SHAPE_SLIDE],
     requireTableCellRun(cell, paragraphIndex, runIndex),
   );
+
+/** Returns the embedded bytes backing one table-cell run's direct picture text fill. */
+export const getTableCellRunFillImageBytes = (
+  cell: TableCellData,
+  paragraphIndex: number,
+  runIndex: number,
+): Uint8Array | null =>
+  getRunDirectFillImageBytes(
+    cell[CELL_TABLE][SHAPE_SLIDE],
+    requireTableCellRun(cell, paragraphIndex, runIndex),
+  );
+
+/** Embeds image bytes and assigns them as one table-cell run's canonical direct picture fill. */
+export const setTableCellRunFillImage = (
+  cell: TableCellData,
+  paragraphIndex: number,
+  runIndex: number,
+  bytes: Uint8Array,
+  options: { readonly format?: ImageFormat } = {},
+): void => {
+  const slide = cell[CELL_TABLE][SHAPE_SLIDE];
+  const oldRelationshipId = setRunDirectFillImage(
+    slide,
+    requireTableCellRun(cell, paragraphIndex, runIndex),
+    bytes,
+    { ...options, operation: 'setTableCellRunFillImage' },
+  );
+  commitTableCell(cell);
+  if (oldRelationshipId !== null) {
+    removeUnreferencedSlideRelationships(slide, new Set([oldRelationshipId]));
+  }
+};
 
 /** Embeds image bytes and assigns them as one table-cell run's picture underline fill. */
 export const setTableCellRunUnderlineFillImage = (

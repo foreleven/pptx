@@ -12,6 +12,7 @@ import {
   getTableCell,
   getTableCellPosition,
   getTableCellParagraphs,
+  getTableCellRunFillImageBytes,
   getTableCellRunUnderlineFillImageBytes,
   getTableCellText,
   getTableCells,
@@ -24,6 +25,7 @@ import {
   setTableCellText,
   setTableCellTextFormat,
   setTableCellParagraphs,
+  setTableCellRunFillImage,
   setTableCellRunUnderlineFillImage,
 } from '../src/api/index.ts';
 
@@ -185,6 +187,49 @@ describe('fn API: table cell access', () => {
       format: { underlineFill: { kind: 'picture' } },
     });
     expect(getTableCellRunUnderlineFillImageBytes(reloadedCell, 0, 0)).toEqual(TINY_PNG);
+  });
+
+  it('round-trips direct pattern and picture fills on table-cell runs', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const table = addDemoTable(slide);
+    const cell = getTableCell(table, 0, 0);
+    setTableCellParagraphs(cell, [
+      {
+        runs: [
+          {
+            text: 'Pattern',
+            format: {
+              patternFill: {
+                preset: 'pct50',
+                foreground: '#3659E3',
+                background: '#FFFFFF',
+              },
+            },
+          },
+          { text: ' Picture' },
+        ],
+      },
+    ]);
+    setTableCellRunFillImage(cell, 0, 1, TINY_PNG);
+
+    const reloaded = await loadPresentation(await savePresentation(pres));
+    const reloadedTable = getSlideShapes(getSlides(reloaded)[0]!).find(isTableShape)!;
+    const reloadedCell = getTableCell(reloadedTable, 0, 0);
+    expect(getTableCellParagraphs(reloadedCell)[0]?.elements).toMatchObject([
+      {
+        kind: 'r',
+        format: {
+          patternFill: {
+            preset: 'pct50',
+            foreground: '#3659E3',
+            background: '#FFFFFF',
+          },
+        },
+      },
+      { kind: 'r', format: { pictureFill: { relationshipId: expect.any(String) } } },
+    ]);
+    expect(getTableCellRunFillImageBytes(reloadedCell, 0, 1)).toEqual(TINY_PNG);
   });
 
   it('clearTableCellFill removes a previously-set fill', async () => {
