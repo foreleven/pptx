@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
 import {
+  addSlideTable,
   addSlideTextBox,
   getShapeEndParagraphProperties,
   getShapeParagraphElements,
@@ -15,6 +16,8 @@ import {
   getShapeXmlString,
   getSlideShapes,
   getSlides,
+  getTableCell,
+  getTableCellTextExtensionPayloads,
   inches,
   loadPresentation,
   savePresentation,
@@ -22,6 +25,7 @@ import {
   setShapeEndParagraphProperties,
   setShapeParagraphElements,
   setShapeTextExtensionPayloads,
+  setTableCellTextExtensionPayloads,
 } from '../src/api/index.ts';
 
 const fixture = (name: string): string =>
@@ -412,6 +416,90 @@ describe('fn API: getShapeParagraphElements', () => {
     expect(rebuilt).toContain('<futureFieldParagraph:payload/>');
   });
 
+  it('preserves direct text-node child order for shapes and table cells', async () => {
+    const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
+    const slide = getSlides(pres)[0]!;
+    const shape = addSlideTextBox(slide, {
+      x: inches(0),
+      y: inches(0),
+      w: inches(3),
+      h: inches(1),
+      text: 'Shape',
+    });
+    const table = addSlideTable(slide, {
+      x: inches(0),
+      y: inches(1.2),
+      w: inches(3),
+      h: inches(1),
+      rows: [['Cell']],
+    });
+    const cell = getTableCell(table, 0, 0);
+    const directPayloads = [
+      {
+        target: { kind: 'textBody' as const },
+        content: {
+          namespaces: [{ prefix: 'future', uri: 'urn:office-kit:direct-text' }],
+          children: [
+            {
+              kind: 'element' as const,
+              name: {
+                prefix: 'future',
+                localName: 'textBodyMarker',
+                namespaceUri: 'urn:office-kit:direct-text',
+              },
+            },
+          ],
+          childPositions: [1],
+        },
+      },
+      {
+        target: { kind: 'paragraph' as const, paragraphIndex: 0 },
+        content: {
+          namespaces: [{ prefix: 'future', uri: 'urn:office-kit:direct-text' }],
+          children: [
+            {
+              kind: 'element' as const,
+              name: {
+                prefix: 'future',
+                localName: 'paragraphMarker',
+                namespaceUri: 'urn:office-kit:direct-text',
+              },
+            },
+          ],
+          childPositions: [1],
+        },
+      },
+      {
+        target: { kind: 'run' as const, paragraphIndex: 0, elementIndex: 0 },
+        content: {
+          namespaces: [{ prefix: 'future', uri: 'urn:office-kit:direct-text' }],
+          children: [
+            {
+              kind: 'element' as const,
+              name: {
+                prefix: 'future',
+                localName: 'runMarker',
+                namespaceUri: 'urn:office-kit:direct-text',
+              },
+            },
+          ],
+          childPositions: [1],
+        },
+      },
+    ];
+
+    setShapeTextExtensionPayloads(shape, directPayloads);
+    setTableCellTextExtensionPayloads(cell, directPayloads);
+    expect(getShapeTextExtensionPayloads(shape)).toEqual(directPayloads);
+    expect(getTableCellTextExtensionPayloads(cell)).toEqual(directPayloads);
+
+    const xml = strFromU8(unzipSync(await savePresentation(pres))['ppt/slides/slide1.xml']!);
+    expect(xml).toMatch(/<p:txBody[^>]*><a:bodyPr[^>]*\/><future:textBodyMarker\/><a:lstStyle/u);
+    expect(xml).toMatch(/<a:txBody[^>]*><a:bodyPr[^>]*\/><future:textBodyMarker\/><a:lstStyle/u);
+    expect(xml).toMatch(/<a:p[^>]*><a:r[^>]*>.*<\/a:r><future:paragraphMarker\/>/u);
+    expect(xml).toMatch(/<a:r[^>]*><a:rPr[^>]*\/><future:runMarker\/><a:t>/u);
+  });
+
   it('validates every scoped text extension before mutating the shape', async () => {
     const pres = await loadPresentation(await readFile(fixture('two-slides.pptx')));
     const slide = getSlides(pres)[0]!;
@@ -487,6 +575,37 @@ describe('fn API: getShapeParagraphElements', () => {
         },
       ]),
     ).toThrow('without a matching namespace declaration');
+
+    expect(() =>
+      setShapeTextExtensionPayloads(tb, [
+        {
+          target: { kind: 'textBody' },
+          content: { childPositions: [0] },
+        },
+      ]),
+    ).toThrow('childPositions must match the number of extension children');
+
+    expect(() =>
+      setShapeTextExtensionPayloads(tb, [
+        {
+          target: { kind: 'textBody' },
+          content: {
+            namespaces: [{ prefix: 'future', uri: 'urn:office-kit:position' }],
+            children: [
+              {
+                kind: 'element',
+                name: {
+                  prefix: 'future',
+                  localName: 'payload',
+                  namespaceUri: 'urn:office-kit:position',
+                },
+              },
+            ],
+            childPositions: [99],
+          },
+        },
+      ]),
+    ).toThrow("childPositions[0] is out of range for the target's known children");
   });
 
   it('preserves nested underline and outline extension lists at their exact run targets', async () => {

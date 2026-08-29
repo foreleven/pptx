@@ -1,4 +1,9 @@
-import { type SlideShapeData } from '../_internal-symbols.ts';
+import {
+  CELL_ELEMENT,
+  CELL_TABLE,
+  type SlideShapeData,
+  type TableCellData,
+} from '../_internal-symbols.ts';
 import { commitAndRefresh, requireTxBody } from './_helpers.ts';
 import {
   NS,
@@ -17,6 +22,7 @@ import {
 } from '../../internal/xml/index.ts';
 
 const NAME_A_BODY_PR = qname('a', 'bodyPr', NS.dml);
+const NAME_A_TX_BODY = qname('a', 'txBody', NS.dml);
 const NAME_A_P = qname('a', 'p', NS.dml);
 const NAME_A_PPR = qname('a', 'pPr', NS.dml);
 const NAME_A_R = qname('a', 'r', NS.dml);
@@ -64,12 +70,21 @@ export interface ShapeTextExtensionContent {
   readonly namespaces?: readonly ShapeTextExtensionNamespace[];
   readonly attributes?: readonly ShapeTextExtensionAttribute[];
   readonly children?: readonly ShapeTextExtensionNode[];
+  /** Zero-based XML child slots retained relative to known children; omitted legacy payloads append. */
+  readonly childPositions?: readonly number[];
 }
 
 /** Exact known text node that owns one extension payload. */
 export type ShapeTextExtensionTarget =
+  | { readonly kind: 'textBody' }
   | { readonly kind: 'bodyProperties' }
+  | { readonly kind: 'paragraph'; readonly paragraphIndex: number }
   | { readonly kind: 'paragraphProperties'; readonly paragraphIndex: number }
+  | {
+      readonly kind: 'run';
+      readonly paragraphIndex: number;
+      readonly elementIndex: number;
+    }
   | {
       readonly kind: 'runProperties';
       readonly paragraphIndex: number;
@@ -198,9 +213,17 @@ const publicNode = (node: XmlNode): ShapeTextExtensionNode => {
   }
 };
 
-const extensionContent = (element: XmlElement): ShapeTextExtensionContent | null => {
+const extensionContent = (
+  element: XmlElement,
+  retainChildPositions = false,
+): ShapeTextExtensionContent | null => {
   const attributes = extensionAttributes(element);
-  const children = element.children.filter(isExtensionChild);
+  const childEntries = element.children
+    .map((child, position) => ({ child, position }))
+    .filter((entry): entry is { child: XmlElement; position: number } =>
+      isExtensionChild(entry.child),
+    );
+  const children = childEntries.map((entry) => entry.child);
   const namespaces = extensionNamespaces(element, attributes, children);
   if (namespaces.length === 0 && attributes.length === 0 && children.length === 0) return null;
   return {
@@ -213,7 +236,14 @@ const extensionContent = (element: XmlElement): ShapeTextExtensionContent | null
             value: attribute.value,
           })),
         }),
-    ...(children.length === 0 ? {} : { children: children.map((child) => publicNode(child)) }),
+    ...(children.length === 0
+      ? {}
+      : {
+          children: children.map((child) => publicNode(child)),
+          ...(retainChildPositions
+            ? { childPositions: childEntries.map((entry) => entry.position) }
+            : {}),
+        }),
   };
 };
 
@@ -223,7 +253,10 @@ const appendPayload = (
   element: XmlElement | null,
 ): void => {
   if (element === null) return;
-  const content = extensionContent(element);
+  const content = extensionContent(
+    element,
+    target.kind === 'textBody' || target.kind === 'paragraph' || target.kind === 'run',
+  );
   if (content !== null) payloads.push({ target, content });
 };
 
@@ -232,13 +265,12 @@ const appendPayload = (
  * DrawingML text nodes. The carrier is deliberately index-addressed and excludes ordinary
  * DrawingML attributes/children so it cannot become a parallel raw-XML authoring API.
  */
-export const getShapeTextExtensionPayloads = (
-  shape: SlideShapeData,
-): readonly ShapeTextExtensionPayload[] => {
-  const textBody = requireTxBody(shape);
+const textExtensionPayloads = (textBody: XmlElement): readonly ShapeTextExtensionPayload[] => {
   const payloads: ShapeTextExtensionPayload[] = [];
+  appendPayload(payloads, { kind: 'textBody' }, textBody);
   appendPayload(payloads, { kind: 'bodyProperties' }, firstChildElement(textBody, NAME_A_BODY_PR));
   paragraphsOf(textBody).forEach((paragraph, paragraphIndex) => {
+    appendPayload(payloads, { kind: 'paragraph', paragraphIndex }, paragraph);
     appendPayload(
       payloads,
       { kind: 'paragraphProperties', paragraphIndex },
@@ -246,6 +278,7 @@ export const getShapeTextExtensionPayloads = (
     );
     inlineElementsOf(paragraph).forEach((inline, elementIndex) => {
       if (inline.name.localName === NAME_A_R.localName) {
+        appendPayload(payloads, { kind: 'run', paragraphIndex, elementIndex }, inline);
         const runProperties = firstChildElement(inline, NAME_A_RPR);
         appendPayload(
           payloads,
@@ -278,6 +311,18 @@ export const getShapeTextExtensionPayloads = (
     });
   });
   return payloads;
+};
+
+export const getShapeTextExtensionPayloads = (
+  shape: SlideShapeData,
+): readonly ShapeTextExtensionPayload[] => textExtensionPayloads(requireTxBody(shape));
+
+/** Reads the same restricted text-extension carrier from one table cell. */
+export const getTableCellTextExtensionPayloads = (
+  cell: TableCellData,
+): readonly ShapeTextExtensionPayload[] => {
+  const textBody = firstChildElement(cell[CELL_ELEMENT], NAME_A_TX_BODY);
+  return textBody === null ? [] : textExtensionPayloads(textBody);
 };
 
 const integerIndex = (value: number, label: string): void => {
@@ -408,6 +453,7 @@ const privateContent = (
   readonly prefixDecls: Map<string, string>;
   readonly privateAttributes: XmlAttr[];
   readonly privateChildren: XmlNode[];
+  readonly privateChildPositions: readonly number[] | null;
 } => {
   const prefixDecls = namespaceMap(content.namespaces, `${label}.namespaces`);
   const scope = new Map([...ROOT_TEXT_NAMESPACE_SCOPE, ...prefixDecls]);
@@ -429,11 +475,30 @@ const privateContent = (
       );
     }
   }
+  const privateChildPositions = content.childPositions ?? null;
+  if (privateChildPositions !== null) {
+    if (
+      !Array.isArray(privateChildPositions) ||
+      privateChildPositions.length !== privateChildren.length
+    ) {
+      throw new TypeError(`${label}.childPositions must match the number of extension children.`);
+    }
+    let previous = -1;
+    for (const [index, position] of privateChildPositions.entries()) {
+      if (!Number.isInteger(position) || position < 0 || position <= previous) {
+        throw new RangeError(
+          `${label}.childPositions[${index}] must be a strictly increasing non-negative integer.`,
+        );
+      }
+      previous = position;
+    }
+  }
   return {
     ...content,
     prefixDecls,
     privateAttributes,
     privateChildren,
+    privateChildPositions,
   };
 };
 
@@ -459,13 +524,21 @@ const ensureFirstChild = (parent: XmlElement, name: QName): XmlElement => {
 };
 
 const resolveTarget = (textBody: XmlElement, target: ShapeTextExtensionTarget): XmlElement => {
+  if (target.kind === 'textBody') return textBody;
   if (target.kind === 'bodyProperties') return ensureFirstChild(textBody, NAME_A_BODY_PR);
   const paragraph = requireParagraph(textBody, target.paragraphIndex);
+  if (target.kind === 'paragraph') return paragraph;
   if (target.kind === 'paragraphProperties') return ensureFirstChild(paragraph, NAME_A_PPR);
   integerIndex(target.elementIndex, 'text extension elementIndex');
   const inline = inlineElementsOf(paragraph)[target.elementIndex];
   if (!inline)
     throw new RangeError(`text extension elementIndex ${target.elementIndex} is out of range.`);
+  if (target.kind === 'run') {
+    if (inline.name.localName !== NAME_A_R.localName) {
+      throw new TypeError(`text extension target run points to ${inline.name.localName}.`);
+    }
+    return inline;
+  }
   if (target.kind === 'runProperties') return ensureFirstChild(inline, NAME_A_RPR);
   if (target.kind === 'runUnderlineLineProperties' || target.kind === 'runOutlineProperties') {
     const runProperties = ensureFirstChild(inline, NAME_A_RPR);
@@ -484,6 +557,7 @@ const resolveTarget = (textBody: XmlElement, target: ShapeTextExtensionTarget): 
 const replaceExtensionContent = (
   element: XmlElement,
   content: ReturnType<typeof privateContent>,
+  replacementChildren: readonly XmlNode[],
 ): void => {
   const current = extensionContent(element);
   for (const namespace of current?.namespaces ?? []) element.prefixDecls.delete(namespace.prefix);
@@ -492,10 +566,71 @@ const replaceExtensionContent = (
     ...element.attrs.filter((attribute) => attribute.name.namespaceURI === ''),
     ...content.privateAttributes,
   ];
-  element.children = [
-    ...element.children.filter((child) => !isExtensionChild(child)),
-    ...content.privateChildren,
-  ];
+  element.children = [...replacementChildren];
+};
+
+const replacementChildren = (
+  element: XmlElement,
+  content: ReturnType<typeof privateContent>,
+  label: string,
+): readonly XmlNode[] => {
+  const knownChildren: XmlNode[] = element.children.filter((child) => !isExtensionChild(child));
+  if (content.privateChildPositions === null) {
+    return [...knownChildren, ...content.privateChildren];
+  }
+  const result = [...knownChildren];
+  content.privateChildren.forEach((child, index) => {
+    const position = content.privateChildPositions?.[index];
+    if (position === undefined || position > result.length) {
+      throw new RangeError(
+        `${label}.childPositions[${index}] is out of range for the target's known children.`,
+      );
+    }
+    result.splice(position, 0, child);
+  });
+  return result;
+};
+
+const cloneXmlNode = (node: XmlNode): XmlNode => {
+  if (node.kind === 'element') {
+    return elem(node.name, {
+      prefixDecls: new Map(node.prefixDecls),
+      attrs: node.attrs.map((attribute) => attr(attribute.name, attribute.value)),
+      children: node.children.map(cloneXmlNode),
+    });
+  }
+  if (node.kind === 'text') return text(node.data);
+  if (node.kind === 'cdata') return cdata(node.data);
+  if (node.kind === 'comment') return comment(node.data);
+  return pi(node.target, node.data);
+};
+
+const setTextExtensionPayloads = (
+  textBody: XmlElement,
+  payloads: readonly ShapeTextExtensionPayload[],
+): void => {
+  const draft = cloneXmlNode(textBody);
+  if (draft.kind !== 'element') throw new Error('text body clone must remain an XML element');
+  const keys = new Set<string>();
+  const prepared = payloads.map((payload, index) => {
+    const key = targetKey(payload.target);
+    if (keys.has(key)) throw new TypeError(`duplicate text extension target ${key}.`);
+    keys.add(key);
+    const target = resolveTarget(draft, payload.target);
+    const label = `text extension payloads[${index}].content`;
+    const content = privateContent(payload.content, label);
+    return {
+      target,
+      content,
+      replacementChildren: replacementChildren(target, content, label),
+    };
+  });
+  for (const entry of prepared) {
+    replaceExtensionContent(entry.target, entry.content, entry.replacementChildren);
+  }
+  textBody.prefixDecls = draft.prefixDecls;
+  textBody.attrs = draft.attrs;
+  textBody.children = draft.children;
 };
 
 /**
@@ -506,17 +641,17 @@ export const setShapeTextExtensionPayloads = (
   shape: SlideShapeData,
   payloads: readonly ShapeTextExtensionPayload[],
 ): void => {
-  const textBody = requireTxBody(shape);
-  const keys = new Set<string>();
-  const prepared = payloads.map((payload, index) => {
-    const key = targetKey(payload.target);
-    if (keys.has(key)) throw new TypeError(`duplicate text extension target ${key}.`);
-    keys.add(key);
-    return {
-      target: resolveTarget(textBody, payload.target),
-      content: privateContent(payload.content, `text extension payloads[${index}].content`),
-    };
-  });
-  for (const entry of prepared) replaceExtensionContent(entry.target, entry.content);
+  setTextExtensionPayloads(requireTxBody(shape), payloads);
   commitAndRefresh(shape);
+};
+
+/** Replaces restricted extension payloads at exact nodes inside one table-cell text body. */
+export const setTableCellTextExtensionPayloads = (
+  cell: TableCellData,
+  payloads: readonly ShapeTextExtensionPayload[],
+): void => {
+  const textBody = firstChildElement(cell[CELL_ELEMENT], NAME_A_TX_BODY);
+  if (textBody === null) throw new Error('table cell has no <a:txBody>');
+  setTextExtensionPayloads(textBody, payloads);
+  commitAndRefresh(cell[CELL_TABLE]);
 };
